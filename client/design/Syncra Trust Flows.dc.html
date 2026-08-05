@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg0:oklch(0.175 0.008 255); --bg1:oklch(0.212 0.008 255);
+  --surf:oklch(0.248 0.009 255); --surf2:oklch(0.288 0.010 255);
+  --bd:oklch(0.322 0.010 255); --bd2:oklch(0.410 0.012 255);
+  --tx:oklch(0.955 0.004 255); --tx2:oklch(0.735 0.008 255); --tx3:oklch(0.575 0.009 255);
+  --acc:oklch(0.800 0.130 168); --accq:oklch(0.800 0.130 168 / 0.14); --accb:oklch(0.800 0.130 168 / 0.40); --accfg:oklch(0.200 0.030 168);
+  --ok:oklch(0.780 0.130 158); --warn:oklch(0.855 0.135 98); --dang:oklch(0.690 0.160 26);
+  --warnq:oklch(0.855 0.135 98 / 0.13); --dangq:oklch(0.690 0.160 26 / 0.14);
+  --diffcols:1fr 1fr;
+}
+:root{
+  --page:oklch(0.135 0.008 255); --pageL:oklch(0.905 0.004 255);
+  --chrome:oklch(0.155 0.008 255); --kb:oklch(0.395 0.008 255);
+  --qrbg:oklch(0.985 0.003 255); --qrfg:oklch(0.175 0.008 255);
+  --icL:0.330 0.055; --icB:0.430 0.070; --icI:0.860 0.090;
+  --sh:0 1px 2px rgba(0,0,0,.34), 0 10px 28px -16px rgba(0,0,0,.72);
+  --shWin:var(--shWin);
+  --shWin2:var(--shWin2);
+  --scrim:var(--scrim);
+}
+[data-theme="light"]{
+  --bg0:oklch(0.972 0.003 255); --bg1:oklch(0.952 0.004 255);
+  --surf:oklch(1 0 0); --surf2:oklch(0.935 0.005 255);
+  --bd:oklch(0.900 0.005 255); --bd2:oklch(0.832 0.006 255);
+  --tx:oklch(0.245 0.010 255); --tx2:oklch(0.445 0.010 255); --tx3:oklch(0.505 0.012 255);
+  --ok:oklch(0.520 0.115 158); --warn:oklch(0.535 0.120 70); --dang:oklch(0.530 0.180 26);
+  --warnq:oklch(0.535 0.120 70 / 0.11); --dangq:oklch(0.530 0.180 26 / 0.09);
+  --page:oklch(0.905 0.004 255);
+  --chrome:oklch(0.912 0.004 255); --kb:oklch(1 0 0);
+  --icL:0.930 0.038; --icB:0.868 0.055; --icI:0.470 0.115;
+  --sh:0 1px 2px oklch(0.30 0.02 255 / 0.07), 0 8px 22px -14px oklch(0.30 0.02 255 / 0.30);
+  --shWin:0 30px 70px -34px oklch(0.30 0.02 255 / 0.34);
+  --shWin2:0 20px 50px -28px oklch(0.30 0.02 255 / 0.30);
+  --scrim:oklch(0.45 0.010 255 / 0.36);
+}
+body:has([data-theme="light"]){background:var(--pageL);}
+html,body{margin:0;padding:0;background:var(--page);}
+*{box-sizing:border-box;}
+a{color:var(--acc);text-decoration:none;} a:hover{color:var(--tx);text-decoration:underline;}
+::selection{background:var(--accq);color:var(--tx);}
+input{font-family:'IBM Plex Sans',sans-serif;}
+@keyframes sy-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.82)}}
+@keyframes sy-scan{0%{top:6%}50%{top:88%}100%{top:6%}}
+@keyframes sy-breathe{0%,100%{opacity:.35}50%{opacity:.9}}
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="background:var(--page);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-weight:450;-webkit-font-smoothing:antialiased;min-height:100vh;padding:56px 40px 110px;">
+
+  <div style="position:fixed;top:14px;right:14px;z-index:90;display:flex;align-items:center;gap:10px;padding:6px 8px 6px 13px;border-radius:12px;border:1px solid var(--bd);background:var(--surf);box-shadow:var(--sh);">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--tx3);">Тема</div>
+    <button onClick="{{ toggleTheme }}" style="height:28px;padding:0 13px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf2);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:12.5px;font-weight:500;cursor:pointer;" style-hover="border-color:var(--acc)">{{ themeBtn }}</button>
+  </div>
+
+  <div style="width:1440px;margin:0 auto;display:flex;flex-direction:column;gap:64px;">
+
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:760px;">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx3);">Syncra · десктоп · §3.6 · 3.7 · 3.8 · 3.9</div>
+      <h1 style="margin:0;font-size:32px;line-height:1.15;font-weight:600;letter-spacing:-0.02em;">Доверие: сопряжение, конфликт, замок, первый запуск</h1>
+      <p style="margin:0;font-size:14.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Четыре момента, где у продукта нет сервера, который всё решит за пользователя. Каждый экран интерактивен: переключайте состояния, отзывайте устройства, выбирайте версию, набирайте PIN.</p>
+    </div>
+
+    <div id="pairing" data-screen-label="§3.6 Сопряжение" style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:40px;">
+        <div style="display:flex;flex-direction:column;gap:8px;max-width:620px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--acc);">§3.6 · Pairing</div>
+          <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Знакомство устройств</h2>
+          <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Аккаунта нет, входить некуда. Второе устройство добавляется тем, что два экрана смотрят друг на друга: одно показывает код, другое его читает.</p>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onClick="{{ pairQR }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;" style-hover="background:var(--surf2)">Показываю QR</button>
+          <button onClick="{{ pairScan }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;" style-hover="background:var(--surf2)">Сканирую</button>
+          <button onClick="{{ pairDone }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;" style-hover="background:var(--surf2)">Успех</button>
+        </div>
+      </div>
+
+      <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);box-shadow:var(--shWin2);overflow:hidden;">
+        <div style="height:36px;background:var(--bg0);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:9px;padding:0 14px;">
+          <div style="width:15px;height:15px;border-radius:5px;border:1.5px solid var(--acc);display:grid;place-items:center;"><div style="width:5px;height:5px;border-radius:2px;background:var(--acc);"></div></div>
+          <div style="font-size:12px;color:var(--tx2);">Syncra — Устройства</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:432px 1fr;min-height:474px;">
+
+          <div style="border-right:1px solid var(--bd);background:var(--bg0);display:grid;place-items:center;padding:36px;">
+            <sc-if value="{{ isQR }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:18px;">
+                <div style="padding:18px;border-radius:14px;background:var(--qrbg);box-shadow:var(--shWin2);">
+                  <div style="display:grid;grid-template-columns:repeat(21,11px);grid-template-rows:repeat(21,11px);">
+                    <sc-for list="{{ qr }}" as="c" hint-placeholder-count="441">
+                      <div style="width:11px;height:11px;background:{{ c.b }};"></div>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:9px;">
+                  <div style="width:7px;height:7px;border-radius:50%;background:var(--acc);animation:sy-pulse 1.6s ease-in-out infinite;"></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--tx2);">код живёт 02:41</div>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ isScan }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:18px;">
+                <div style="position:relative;width:267px;height:267px;border-radius:14px;background:var(--surf);border:1px solid var(--bd);overflow:hidden;">
+                  <div style="position:absolute;inset:0;display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.1em;color:var(--tx3);text-transform:uppercase;">камера</div>
+                  <div style="position:absolute;top:16px;left:16px;width:34px;height:34px;border-top:2px solid var(--acc);border-left:2px solid var(--acc);border-top-left-radius:8px;"></div>
+                  <div style="position:absolute;top:16px;right:16px;width:34px;height:34px;border-top:2px solid var(--acc);border-right:2px solid var(--acc);border-top-right-radius:8px;"></div>
+                  <div style="position:absolute;bottom:16px;left:16px;width:34px;height:34px;border-bottom:2px solid var(--acc);border-left:2px solid var(--acc);border-bottom-left-radius:8px;"></div>
+                  <div style="position:absolute;bottom:16px;right:16px;width:34px;height:34px;border-bottom:2px solid var(--acc);border-right:2px solid var(--acc);border-bottom-right-radius:8px;"></div>
+                  <div style="position:absolute;left:8%;right:8%;height:2px;background:var(--acc);box-shadow:0 0 18px 2px var(--accb);animation:sy-scan 2.6s ease-in-out infinite;"></div>
+                </div>
+                <div style="display:flex;align-items:center;gap:9px;">
+                  <div style="width:7px;height:7px;border-radius:50%;background:var(--acc);animation:sy-pulse 1.2s ease-in-out infinite;"></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--tx2);">ищу код в кадре</div>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ isDone }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:22px;">
+                <div style="display:flex;align-items:center;gap:14px;">
+                  <div style="width:88px;height:88px;border-radius:20px;border:1px solid var(--bd2);background:var(--surf);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;">
+                    <div style="width:34px;height:24px;border:1.5px solid var(--tx2);border-radius:4px;"></div>
+                    <div style="font-size:11px;color:var(--tx2);">MacBook</div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <div style="width:8px;height:2px;background:var(--accb);"></div>
+                    <div style="width:34px;height:34px;border-radius:50%;background:var(--acc);display:grid;place-items:center;">
+                      <div style="width:15px;height:8px;border-left:2.5px solid var(--accfg);border-bottom:2.5px solid var(--accfg);transform:rotate(-45deg) translate(1px,-2px);"></div>
+                    </div>
+                    <div style="width:8px;height:2px;background:var(--accb);"></div>
+                  </div>
+                  <div style="width:88px;height:88px;border-radius:20px;border:1px solid var(--accb);background:var(--accq);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;">
+                    <div style="width:18px;height:30px;border:1.5px solid var(--acc);border-radius:5px;"></div>
+                    <div style="font-size:11px;color:var(--acc);">iPhone 14</div>
+                  </div>
+                </div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--tx2);text-align:center;">ключи сверены · 00:03</div>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="padding:32px 36px;display:flex;flex-direction:column;gap:22px;">
+            <sc-if value="{{ isQR }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:20px;">
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                  <div style="font-size:20px;font-weight:600;letter-spacing:-0.01em;">Откройте Syncra на втором устройстве и наведите камеру</div>
+                  <div style="font-size:13.5px;line-height:1.6;color:var(--tx2);max-width:520px;text-wrap:pretty;">В коде — одноразовый ключ этого сеанса. Он не отправляется в интернет: устройства договариваются напрямую, в пределах вашей сети.</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <sc-for list="{{ steps }}" as="s" hint-placeholder-count="3">
+                    <div style="display:flex;align-items:flex-start;gap:12px;">
+                      <div style="width:22px;height:22px;border-radius:7px;border:1px solid var(--bd2);background:var(--surf);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);flex:none;">{{ s.n }}</div>
+                      <div style="font-size:13.5px;line-height:1.5;color:var(--tx2);padding-top:2px;">{{ s.t }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+                  <div style="display:flex;flex-direction:column;gap:3px;">
+                    <div style="font-size:13px;font-weight:500;">Камеры нет?</div>
+                    <div style="font-size:12.5px;color:var(--tx2);">Введите шестизначный код вручную — он под QR на втором экране.</div>
+                  </div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:17px;letter-spacing:0.18em;color:var(--acc);flex:none;">4TQ·9MB</div>
+                </div>
+                <div style="margin-top:auto;display:flex;gap:8px;">
+                  <button onClick="{{ pairScan }}" style="height:36px;padding:0 16px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;" style-hover="background:var(--surf2)">Сканировать здесь</button>
+                  <button style="height:36px;padding:0 14px;border-radius:8px;border:1px solid transparent;background:transparent;color:var(--tx3);font-family:'IBM Plex Sans',sans-serif;font-size:13px;cursor:pointer;" style-hover="color:var(--tx2)">Обновить код</button>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isScan }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:20px;">
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                  <div style="font-size:20px;font-weight:600;letter-spacing:-0.01em;">Наведите на QR, который показывает первое устройство</div>
+                  <div style="font-size:13.5px;line-height:1.6;color:var(--tx2);max-width:520px;text-wrap:pretty;">Как только код попадёт в рамку, устройства сверят отпечатки ключей и покажут одинаковые слова — сверьте их глазами.</div>
+                </div>
+                <div style="border:1px solid var(--accb);border-radius:10px;background:var(--accq);padding:16px;display:flex;flex-direction:column;gap:12px;">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--acc);">Отпечаток сеанса · должен совпасть на обоих экранах</div>
+                  <div style="display:flex;gap:8px;">
+                    <sc-for list="{{ words }}" as="w" hint-placeholder-count="4">
+                      <div style="flex:1;height:40px;border-radius:8px;border:1px solid var(--accb);background:var(--bg0);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:13.5px;color:var(--tx);">{{ w.t }}</div>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <div style="display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--tx2);">
+                    <div style="width:7px;height:7px;border-radius:50%;background:var(--acc);"></div>
+                    Устройство найдено в локальной сети
+                  </div>
+                  <div style="display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--tx2);">
+                    <div style="width:7px;height:7px;border-radius:50%;background:var(--acc);animation:sy-pulse 1.2s ease-in-out infinite;"></div>
+                    Читаю код и сверяю отпечаток
+                  </div>
+                  <div style="display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--tx3);">
+                    <div style="width:7px;height:7px;border-radius:50%;border:1.5px solid var(--bd2);"></div>
+                    Перенос копии хранилища
+                  </div>
+                </div>
+                <div style="margin-top:auto;display:flex;gap:8px;">
+                  <button onClick="{{ pairDone }}" style="height:36px;padding:0 16px;border-radius:8px;border:1px solid transparent;background:var(--acc);color:var(--accfg);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;" style-hover="filter:brightness(1.08)">Слова совпадают</button>
+                  <button onClick="{{ pairQR }}" style="height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;cursor:pointer;" style-hover="background:var(--surf2)">Отмена</button>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isDone }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:20px;">
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                  <div style="font-size:20px;font-weight:600;letter-spacing:-0.01em;">iPhone 14 теперь ваш второй ключ</div>
+                  <div style="font-size:13.5px;line-height:1.6;color:var(--tx2);max-width:520px;text-wrap:pretty;">Копия хранилища перенесена напрямую, минуя интернет. Дальше устройства будут догонять друг друга сами, когда окажутся в одной сети.</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                  <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);padding:14px 16px;display:flex;flex-direction:column;gap:4px;">
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Перенесено</div>
+                    <div style="font-size:15px;font-weight:600;">312 записей</div>
+                    <div style="font-size:12.5px;color:var(--tx2);">за 3 секунды по локальной сети</div>
+                  </div>
+                  <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);padding:14px 16px;display:flex;flex-direction:column;gap:4px;">
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Ушло в интернет</div>
+                    <div style="font-size:15px;font-weight:600;">0 байт</div>
+                    <div style="font-size:12.5px;color:var(--tx2);">сервера у Syncra нет</div>
+                  </div>
+                </div>
+                <div style="margin-top:auto;display:flex;gap:8px;">
+                  <button onClick="{{ pairQR }}" style="height:36px;padding:0 16px;border-radius:8px;border:1px solid transparent;background:var(--acc);color:var(--accfg);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;" style-hover="filter:brightness(1.08)">Готово</button>
+                  <button onClick="{{ pairQR }}" style="height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;cursor:pointer;" style-hover="background:var(--surf2)">Добавить ещё устройство</button>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--bd);padding:26px 36px 30px;display:flex;flex-direction:column;gap:14px;">
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;">
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <div style="font-size:16px;font-weight:600;">Доверенные устройства</div>
+              <div style="font-size:12.5px;color:var(--tx2);">Список полный: хранилище живёт только здесь и больше нигде.</div>
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--tx3);">{{ devLine }}</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <sc-for list="{{ devices }}" as="d" hint-placeholder-count="3">
+              <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);overflow:hidden;">
+                <div style="padding:14px 16px;display:flex;align-items:center;gap:14px;">
+                  <div style="width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:none;border:1px solid var(--bd2);background:var(--bg1);font-family:'IBM Plex Mono',monospace;font-size:12px;color:{{ d.ink }};">{{ d.kind }}</div>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                      <div style="font-size:14.5px;font-weight:500;color:{{ d.nameColor }};">{{ d.name }}</div>
+                      <sc-if value="{{ d.isThis }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--acc);border:1px solid var(--accb);background:var(--accq);border-radius:5px;padding:2px 7px;">это устройство</div>
+                      </sc-if>
+                      <sc-if value="{{ d.revoked }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dang);border:1px solid var(--dang);border-radius:5px;padding:2px 7px;">доступ отозван</div>
+                      </sc-if>
+                    </div>
+                    <div style="font-size:12.5px;color:var(--tx2);">{{ d.sub }}</div>
+                  </div>
+                  <sc-if value="{{ d.stale }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;align-items:center;gap:7px;flex:none;">
+                      <div style="width:6px;height:6px;border-radius:50%;background:var(--warn);"></div>
+                      <div style="font-size:11.5px;color:var(--warn);">давно не появлялся</div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ d.canRevoke }}" hint-placeholder-val="{{ true }}">
+                    <button onClick="{{ d.ask }}" style="height:32px;padding:0 12px;border-radius:7px;border:1px solid var(--bd2);background:var(--bg1);color:var(--tx2);font-family:'IBM Plex Sans',sans-serif;font-size:12.5px;cursor:pointer;flex:none;" style-hover="border-color:var(--dang);color:var(--dang)">Отозвать</button>
+                  </sc-if>
+                  <sc-if value="{{ d.revoked }}" hint-placeholder-val="{{ false }}">
+                    <button onClick="{{ d.restore }}" style="height:32px;padding:0 12px;border-radius:7px;border:1px solid var(--bd2);background:var(--bg1);color:var(--tx2);font-family:'IBM Plex Sans',sans-serif;font-size:12.5px;cursor:pointer;flex:none;" style-hover="color:var(--tx)">Сопрячь заново</button>
+                  </sc-if>
+                </div>
+                <sc-if value="{{ d.asking }}" hint-placeholder-val="{{ false }}">
+                  <div style="border-top:1px solid var(--bd);background:var(--dangq);padding:16px;display:flex;align-items:center;gap:20px;">
+                    <div style="flex:1;display:flex;flex-direction:column;gap:5px;">
+                      <div style="font-size:13.5px;font-weight:600;">{{ d.askTitle }}</div>
+                      <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);max-width:760px;text-wrap:pretty;">Устройство перестанет получать обновления и не сможет сопрячься по старому ключу. Записи, которые оно уже скачало, остаются в его копии — если ноутбук потерян, смените мастер-пароль и пароли важных сервисов.</div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex:none;">
+                      <button onClick="{{ d.cancel }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;cursor:pointer;" style-hover="background:var(--surf2)">Оставить</button>
+                      <button onClick="{{ d.revoke }}" style="height:34px;padding:0 16px;border-radius:8px;border:1px solid var(--dang);background:var(--dang);color:oklch(0.985 0 0);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;">Отозвать доступ</button>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div data-screen-label="§3.7 Конфликт" style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:40px;">
+        <div style="display:flex;flex-direction:column;gap:8px;max-width:620px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--acc);">§3.7 · Конфликт версий</div>
+          <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Две версии, одна на выбор</h2>
+          <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Запись правили офлайн на двух устройствах. Показываем обе целиком, помечаем расхождения и просим выбрать одну — собирать гибрид из кусочков пользователь не должен.</p>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onClick="{{ toggleDiffReveal }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;" style-hover="background:var(--surf2)">{{ revealLabel }}</button>
+        </div>
+      </div>
+
+      <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg0);padding:40px;display:grid;place-items:center;">
+        <div style="width:1120px;border:1px solid var(--bd2);border-radius:12px;background:var(--bg1);box-shadow:var(--shWin);overflow:hidden;">
+          <div style="padding:22px 26px 18px;border-bottom:1px solid var(--bd);display:flex;align-items:flex-start;gap:16px;">
+            <div style="width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;flex:none;background:oklch(var(--icL) 172);color:oklch(var(--icI) 172);">GH</div>
+            <div style="flex:1;display:flex;flex-direction:column;gap:5px;">
+              <div style="font-size:19px;font-weight:600;letter-spacing:-0.01em;">github.com изменили в двух местах</div>
+              <div style="font-size:13px;color:var(--tx2);">Пока устройства не виделись, запись правили и здесь, и на iPhone. Различаются три поля из семи.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 10px;border-radius:13px;border:1px solid var(--bd);background:var(--surf);flex:none;">
+              <div style="width:6px;height:6px;border-radius:50%;background:var(--dang);"></div>
+              <div style="font-size:11.5px;color:var(--tx2);">1 конфликт из 312 записей</div>
+            </div>
+          </div>
+
+          <div style="padding:20px 26px 22px;display:grid;grid-template-columns:var(--diffcols);gap:16px;">
+            <sc-for list="{{ versions }}" as="v" hint-placeholder-count="2">
+              <div onClick="{{ v.pick }}" style="border:1px solid {{ v.bd }};border-radius:11px;background:{{ v.bg }};overflow:hidden;cursor:pointer;">
+                <div style="padding:14px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px;">
+                  <div style="width:16px;height:16px;border-radius:50%;border:1.5px solid {{ v.dot }};display:grid;place-items:center;flex:none;">
+                    <sc-if value="{{ v.picked }}" hint-placeholder-val="{{ true }}">
+                      <div style="width:7px;height:7px;border-radius:50%;background:var(--acc);"></div>
+                    </sc-if>
+                  </div>
+                  <div style="flex:1;display:flex;flex-direction:column;gap:2px;">
+                    <div style="font-size:14.5px;font-weight:600;">{{ v.device }}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--tx2);">{{ v.when }}</div>
+                  </div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:{{ v.tagInk }};border:1px solid {{ v.tagBd }};border-radius:5px;padding:3px 8px;flex:none;">{{ v.tag }}</div>
+                </div>
+                <div style="padding:6px 16px 14px;display:flex;flex-direction:column;">
+                  <sc-for list="{{ v.fields }}" as="f" hint-placeholder-count="7">
+                    <div style="padding:11px 0;border-bottom:1px solid var(--bd);display:flex;flex-direction:column;gap:5px;">
+                      <div style="display:flex;align-items:center;gap:9px;">
+                        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">{{ f.label }}</div>
+                        <sc-if value="{{ f.changed }}" hint-placeholder-val="{{ false }}">
+                          <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--warn);border:1px solid var(--warn);border-radius:4px;padding:1px 6px;">различие</div>
+                        </sc-if>
+                      </div>
+                      <div style="font-size:13.5px;line-height:1.5;color:{{ f.ink }};font-family:{{ f.font }};background:{{ f.bg }};border-radius:6px;padding:{{ f.pad }};text-wrap:pretty;">{{ f.value }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="border-top:1px solid var(--bd);padding:18px 26px;display:flex;align-items:center;justify-content:space-between;gap:24px;">
+            <div style="font-size:12.5px;color:var(--tx2);line-height:1.5;max-width:560px;text-wrap:pretty;">Вторая версия не исчезнет: она ляжет в историю записи и будет доступна 30 дней. Ничего не теряется — вы выбираете, что показывать при автозаполнении.</div>
+            <div style="display:flex;gap:8px;flex:none;">
+              <button style="height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;cursor:pointer;" style-hover="background:var(--surf2)">Решить позже</button>
+              <button style="height:36px;padding:0 18px;border-radius:8px;border:1px solid transparent;background:var(--acc);color:var(--accfg);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;" style-hover="filter:brightness(1.08)">{{ keepLabel }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div data-screen-label="§3.8 Разблокировка" style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:40px;">
+        <div style="display:flex;flex-direction:column;gap:8px;max-width:620px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--acc);">§3.8 · Unlock</div>
+          <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Замок на каждый день и замок настоящий</h2>
+          <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">PIN — это удобство поверх мастер-пароля, а не замена. После перезагрузки и раз в неделю Syncra спрашивает пароль целиком. Наберите 2411, чтобы открыть.</p>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onClick="{{ showPin }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;" style-hover="background:var(--surf2)">PIN</button>
+          <button onClick="{{ showMaster }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;" style-hover="background:var(--surf2)">Мастер-пароль</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+        <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;box-shadow:var(--shWin2);">
+          <div style="height:36px;background:var(--bg0);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:9px;padding:0 14px;">
+            <div style="width:15px;height:15px;border-radius:5px;border:1.5px solid var(--tx3);display:grid;place-items:center;"><div style="width:5px;height:5px;border-radius:2px;background:var(--tx3);"></div></div>
+            <div style="font-size:12px;color:var(--tx3);">Syncra — заблокировано</div>
+          </div>
+          <div style="min-height:520px;display:grid;place-items:center;padding:36px;">
+
+            <sc-if value="{{ lockPin }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:24px;width:300px;">
+                <div style="width:56px;height:56px;border-radius:16px;border:1.5px solid var(--acc);display:grid;place-items:center;">
+                  <div style="width:8px;height:8px;border-radius:3px;background:var(--acc);animation:sy-breathe 3s ease-in-out infinite;"></div>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+                  <div style="font-size:18px;font-weight:600;">С возвращением, Анна</div>
+                  <div style="font-size:13px;color:var(--tx2);text-align:center;">Введите PIN, чтобы открыть хранилище</div>
+                </div>
+                <div style="display:flex;gap:12px;">
+                  <sc-for list="{{ pinCells }}" as="p" hint-placeholder-count="4">
+                    <div style="width:16px;height:16px;border-radius:50%;border:1.5px solid {{ p.bd }};background:{{ p.bg }};"></div>
+                  </sc-for>
+                </div>
+                <sc-if value="{{ pinError }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:12.5px;color:var(--dang);">Неверный PIN · осталось {{ tries }} попытки</div>
+                </sc-if>
+                <div style="display:grid;grid-template-columns:repeat(3,64px);gap:10px;">
+                  <sc-for list="{{ keys }}" as="k" hint-placeholder-count="12">
+                    <button onClick="{{ k.press }}" style="height:52px;border-radius:12px;border:1px solid var(--bd);background:var(--surf);color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:17px;cursor:pointer;" style-hover="background:var(--surf2);border-color:var(--bd2)">{{ k.label }}</button>
+                  </sc-for>
+                </div>
+                <button onClick="{{ showMaster }}" style="height:32px;padding:0 12px;border-radius:8px;border:1px solid transparent;background:transparent;color:var(--acc);font-family:'IBM Plex Sans',sans-serif;font-size:12.5px;cursor:pointer;" style-hover="color:var(--tx)">Забыли PIN? Войти мастер-паролем</button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ lockMaster }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:20px;width:380px;">
+                <div style="display:flex;flex-direction:column;gap:7px;">
+                  <div style="font-size:18px;font-weight:600;">Мастер-пароль</div>
+                  <div style="font-size:13px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Первый вход после перезагрузки — только паролем. PIN снова заработает после разблокировки.</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Пароль от хранилища</div>
+                  <div style="height:44px;border-radius:9px;border:1px solid var(--acc);background:var(--surf);display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;box-shadow:0 0 0 3px var(--accq);">
+                    <div style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:16px;letter-spacing:0.2em;color:var(--tx2);">••••••••••••</div>
+                    <div style="height:32px;padding:0 11px;border-radius:7px;border:1px solid var(--bd2);background:var(--surf2);color:var(--tx);font-size:12.5px;display:grid;place-items:center;cursor:pointer;">Показать</div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:9px;">
+                    <div style="width:6px;height:6px;border-radius:50%;background:var(--warn);"></div>
+                    <div style="font-size:12px;color:var(--warn);">Включён Caps Lock</div>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="width:34px;height:20px;border-radius:10px;background:var(--acc);display:flex;align-items:center;padding:2px;justify-content:flex-end;cursor:pointer;">
+                    <div style="width:16px;height:16px;border-radius:50%;background:var(--accfg);"></div>
+                  </div>
+                  <div style="font-size:13px;color:var(--tx2);">Разрешить PIN на этом устройстве</div>
+                </div>
+                <button onClick="{{ unlockNow }}" style="height:42px;border-radius:9px;border:1px solid transparent;background:var(--acc);color:var(--accfg);font-family:'IBM Plex Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;" style-hover="filter:brightness(1.08)">Открыть хранилище</button>
+                <div style="border-top:1px solid var(--bd);padding-top:14px;font-size:12px;line-height:1.55;color:var(--tx3);text-wrap:pretty;">Пароль нигде не хранится и не восстанавливается: он и есть ключ. Если он забыт, помогут только резервный код и копия на другом устройстве.</div>
+                <button onClick="{{ showPin }}" style="height:32px;border-radius:8px;border:1px solid transparent;background:transparent;color:var(--acc);font-family:'IBM Plex Sans',sans-serif;font-size:12.5px;cursor:pointer;" style-hover="color:var(--tx)">Назад к PIN</button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ lockOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:18px;">
+                <div style="width:64px;height:64px;border-radius:50%;background:var(--acc);display:grid;place-items:center;">
+                  <div style="width:24px;height:13px;border-left:3px solid var(--accfg);border-bottom:3px solid var(--accfg);transform:rotate(-45deg) translate(2px,-3px);"></div>
+                </div>
+                <div style="font-size:18px;font-weight:600;">Хранилище открыто</div>
+                <div style="font-size:13px;color:var(--tx2);text-align:center;max-width:280px;line-height:1.55;text-wrap:pretty;">Заблокируется само через 15 минут без действий, буфер очистится через 20 секунд после копирования.</div>
+                <button onClick="{{ showPin }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;cursor:pointer;" style-hover="background:var(--surf2)">Заблокировать снова</button>
+              </div>
+            </sc-if>
+
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);padding:22px;display:flex;flex-direction:column;gap:14px;">
+            <div style="font-size:16px;font-weight:600;">Иерархия ключей</div>
+            <sc-for list="{{ keyTiers }}" as="t" hint-placeholder-count="3">
+              <div style="display:flex;gap:14px;align-items:flex-start;border-top:1px solid var(--bd);padding-top:14px;">
+                <div style="width:60px;flex:none;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:{{ t.ink }};padding-top:2px;">{{ t.tag }}</div>
+                <div style="flex:1;display:flex;flex-direction:column;gap:4px;">
+                  <div style="font-size:13.5px;font-weight:500;">{{ t.title }}</div>
+                  <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">{{ t.body }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);padding:22px;display:flex;flex-direction:column;gap:12px;">
+            <div style="font-size:16px;font-weight:600;">Когда спрашиваем пароль целиком</div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ mpwCases }}" as="c" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--tx2);">
+                  <div style="width:5px;height:5px;border-radius:2px;background:var(--acc);flex:none;"></div>
+                  {{ c.t }}
+                </div>
+              </sc-for>
+            </div>
+            <div style="border-top:1px solid var(--bd);padding-top:12px;font-size:12.5px;line-height:1.55;color:var(--tx3);text-wrap:pretty;">Пять неверных PIN подряд — не блокировка навсегда, а переход к мастер-паролю. Пугать пользователя нечем: данные и так зашифрованы.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div data-screen-label="§3.9 Онбординг" style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:40px;">
+        <div style="display:flex;flex-direction:column;gap:8px;max-width:620px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--acc);">§3.9 · Первый запуск</div>
+          <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Четыре шага без единого сервера</h2>
+          <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Регистрации нет — и это надо проговорить прямо, иначе человек будет искать поле «email». Каждый шаг отвечает на вопрос «а где тогда мои данные?».</p>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <sc-for list="{{ stepTabs }}" as="s" hint-placeholder-count="4">
+            <button onClick="{{ s.go }}" style="height:34px;padding:0 14px;border-radius:8px;border:1px solid {{ s.bd }};background:{{ s.bg }};color:{{ s.ink }};font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;">{{ s.label }}</button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;box-shadow:var(--shWin2);">
+        <div style="height:36px;background:var(--bg0);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:9px;padding:0 14px;">
+          <div style="width:15px;height:15px;border-radius:5px;border:1.5px solid var(--acc);display:grid;place-items:center;"><div style="width:5px;height:5px;border-radius:2px;background:var(--acc);"></div></div>
+          <div style="font-size:12px;color:var(--tx2);">Syncra — знакомство</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:300px 1fr;min-height:560px;">
+          <div style="border-right:1px solid var(--bd);background:var(--bg0);padding:28px 24px;display:flex;flex-direction:column;gap:6px;">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--tx3);padding-bottom:12px;">Шаги</div>
+            <sc-for list="{{ stepList }}" as="s" hint-placeholder-count="4">
+              <div onClick="{{ s.go }}" style="border-radius:9px;padding:12px 12px;display:flex;gap:12px;align-items:flex-start;cursor:pointer;background:{{ s.bg }};border:1px solid {{ s.bd }};">
+                <div style="width:22px;height:22px;border-radius:7px;display:grid;place-items:center;flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;border:1px solid {{ s.numBd }};color:{{ s.numInk }};background:{{ s.numBg }};">{{ s.n }}</div>
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <div style="font-size:13.5px;font-weight:500;color:{{ s.ink }};">{{ s.title }}</div>
+                  <div style="font-size:11.5px;color:var(--tx3);">{{ s.hint }}</div>
+                </div>
+              </div>
+            </sc-for>
+            <div style="margin-top:auto;border-top:1px solid var(--bd);padding-top:16px;display:flex;flex-direction:column;gap:6px;">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Уже пользуетесь Syncra?</div>
+              <a href="#pairing" onClick="{{ goPairing }}" style="font-size:13px;line-height:1.5;">Перенести хранилище с другого устройства →</a>
+            </div>
+          </div>
+
+          <div style="padding:40px 44px;display:flex;flex-direction:column;">
+
+            <sc-if value="{{ step0 }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:26px;max-width:640px;">
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <h3 style="margin:0;font-size:27px;font-weight:600;letter-spacing:-0.02em;line-height:1.2;">Здесь не нужно заводить аккаунт</h3>
+                  <p style="margin:0;font-size:14.5px;line-height:1.6;color:var(--tx2);text-wrap:pretty;">Syncra не хранит ваши пароли у себя, потому что у Syncra нет «у себя». Хранилище лежит на этом компьютере; на другие устройства оно попадает только тогда, когда вы их познакомите.</p>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:12px;">
+                  <sc-for list="{{ promises }}" as="p" hint-placeholder-count="3">
+                    <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);padding:16px 18px;display:flex;gap:14px;align-items:flex-start;">
+                      <div style="width:8px;height:8px;border-radius:3px;background:var(--acc);margin-top:5px;flex:none;"></div>
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <div style="font-size:14px;font-weight:600;">{{ p.t }}</div>
+                        <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">{{ p.b }}</div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:auto;">
+                  <button onClick="{{ next }}" style="height:42px;padding:0 20px;border-radius:9px;border:1px solid transparent;background:var(--acc);color:var(--accfg);font-family:'IBM Plex Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;" style-hover="filter:brightness(1.08)">Создать хранилище</button>
+                  <a href="#pairing" onClick="{{ goPairing }}" style="height:42px;padding:0 18px;border-radius:9px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-size:14px;display:grid;place-items:center;" style-hover="background:var(--surf2);text-decoration:none;color:var(--tx)">У меня уже есть Syncra</a>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ step1 }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:24px;max-width:640px;">
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <h3 style="margin:0;font-size:27px;font-weight:600;letter-spacing:-0.02em;line-height:1.2;">Мастер-пароль — единственный ключ</h3>
+                  <p style="margin:0;font-size:14.5px;line-height:1.6;color:var(--tx2);text-wrap:pretty;">Им шифруется всё хранилище. Мы не сможем его сбросить: у нас нет вашей копии. Придумайте фразу из нескольких слов — её проще помнить и труднее подобрать.</p>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:9px;">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--acc);">Мастер-пароль</div>
+                  <input type="text" value="{{ mpw }}" onChange="{{ onMpw }}" placeholder="например: рыжий трамвай у моста" style="height:46px;border-radius:9px;border:1px solid var(--acc);background:var(--surf);color:var(--tx);font-size:15px;padding:0 14px;outline:none;box-shadow:0 0 0 3px var(--accq);" />
+                  <div style="display:flex;gap:6px;height:6px;">
+                    <sc-for list="{{ strengthBars }}" as="b" hint-placeholder-count="4">
+                      <div style="flex:1;border-radius:3px;background:{{ b.bg }};"></div>
+                    </sc-for>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div style="font-size:12.5px;color:{{ strengthInk }};">{{ strengthText }}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx3);">{{ mpwLen }} символов</div>
+                  </div>
+                </div>
+                <div style="border:1px solid var(--warn);background:var(--warnq);border-radius:10px;padding:16px 18px;display:flex;gap:14px;align-items:flex-start;">
+                  <div style="width:7px;height:7px;border-radius:50%;background:var(--warn);margin-top:6px;flex:none;"></div>
+                  <div style="display:flex;flex-direction:column;gap:5px;">
+                    <div style="font-size:13.5px;font-weight:600;">Восстановления не будет</div>
+                    <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Это обратная сторона того, что пароли никуда не уходят. Сразу после создания хранилища мы покажем резервный код — распечатайте его или положите в надёжное место.</div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:auto;">
+                  <button onClick="{{ next }}" style="height:42px;padding:0 20px;border-radius:9px;border:1px solid transparent;background:var(--acc);color:var(--accfg);font-family:'IBM Plex Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;" style-hover="filter:brightness(1.08)">Дальше</button>
+                  <button onClick="{{ back }}" style="height:42px;padding:0 18px;border-radius:9px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:14px;cursor:pointer;" style-hover="background:var(--surf2)">Назад</button>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ step2 }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:24px;max-width:640px;">
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <h3 style="margin:0;font-size:27px;font-weight:600;letter-spacing:-0.02em;line-height:1.2;">Быстрый вход — по желанию</h3>
+                  <p style="margin:0;font-size:14.5px;line-height:1.6;color:var(--tx2);text-wrap:pretty;">PIN не заменяет мастер-пароль: он открывает уже расшифрованное хранилище в текущем сеансе. После перезагрузки Syncra всё равно спросит пароль.</p>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <sc-for list="{{ options }}" as="o" hint-placeholder-count="2">
+                    <div onClick="{{ o.toggle }}" style="border:1px solid {{ o.bd }};background:{{ o.bg }};border-radius:10px;padding:16px 18px;display:flex;align-items:center;gap:16px;cursor:pointer;">
+                      <div style="flex:1;display:flex;flex-direction:column;gap:4px;">
+                        <div style="font-size:14px;font-weight:600;">{{ o.t }}</div>
+                        <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">{{ o.b }}</div>
+                      </div>
+                      <div style="width:38px;height:22px;border-radius:11px;background:{{ o.track }};display:flex;align-items:center;padding:2px;justify-content:{{ o.justify }};flex:none;">
+                        <div style="width:18px;height:18px;border-radius:50%;background:{{ o.knob }};"></div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+                <sc-if value="{{ pinChosen }}" hint-placeholder-val="{{ true }}">
+                  <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:20px;">
+                    <div style="font-size:13px;color:var(--tx2);">Придумайте PIN — {{ pinLenText }}</div>
+                    <div style="display:flex;gap:10px;">
+                      <sc-for list="{{ pinPreview }}" as="p" hint-placeholder-count="4">
+                        <div style="width:34px;height:40px;border-radius:8px;border:1px solid var(--bd2);background:var(--bg1);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:17px;color:var(--tx2);">•</div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+                <div style="display:flex;gap:10px;margin-top:auto;">
+                  <button onClick="{{ next }}" style="height:42px;padding:0 20px;border-radius:9px;border:1px solid transparent;background:var(--acc);color:var(--accfg);font-family:'IBM Plex Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;" style-hover="filter:brightness(1.08)">Дальше</button>
+                  <button onClick="{{ next }}" style="height:42px;padding:0 18px;border-radius:9px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:14px;cursor:pointer;" style-hover="background:var(--surf2)">Пропустить</button>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ step3 }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:24px;max-width:680px;">
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <h3 style="margin:0;font-size:27px;font-weight:600;letter-spacing:-0.02em;line-height:1.2;">Хранилище создано. Оно только у вас</h3>
+                  <p style="margin:0;font-size:14.5px;line-height:1.6;color:var(--tx2);text-wrap:pretty;">Одна копия — это одна точка отказа. Второе устройство одновременно и удобство, и резерв: сломается ноутбук — хранилище останется в телефоне.</p>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                  <div style="border:1px solid var(--accb);background:var(--accq);border-radius:11px;padding:20px;display:flex;flex-direction:column;gap:8px;">
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--acc);">Рекомендуем</div>
+                    <div style="font-size:15px;font-weight:600;">Добавить телефон</div>
+                    <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Покажем QR — сопряжение занимает несколько секунд и не требует интернета.</div>
+                    <a href="#pairing" onClick="{{ goPairing }}" style="height:38px;margin-top:6px;border-radius:8px;background:var(--acc);color:var(--accfg);font-size:13.5px;font-weight:600;display:grid;place-items:center;" style-hover="filter:brightness(1.08);text-decoration:none;color:var(--accfg)">Показать QR</a>
+                  </div>
+                  <div style="border:1px solid var(--bd);background:var(--surf);border-radius:11px;padding:20px;display:flex;flex-direction:column;gap:8px;">
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Заодно</div>
+                    <div style="font-size:15px;font-weight:600;">Перенести пароли</div>
+                    <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Импорт из браузера или другого менеджера — файл читается на устройстве и сразу удаляется.</div>
+                    <div style="height:38px;margin-top:6px;border-radius:8px;border:1px solid var(--bd2);background:var(--bg1);color:var(--tx);font-size:13.5px;display:grid;place-items:center;cursor:pointer;">Открыть импорт</div>
+                  </div>
+                </div>
+                <div style="border:1px solid var(--bd);border-radius:10px;background:var(--bg0);padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:20px;">
+                  <div style="display:flex;flex-direction:column;gap:4px;">
+                    <div style="font-size:13.5px;font-weight:600;">Резервный код</div>
+                    <div style="font-size:12.5px;color:var(--tx2);">Единственный способ открыть хранилище, если мастер-пароль забыт.</div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:12px;flex:none;">
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:14px;letter-spacing:0.12em;color:var(--tx2);">•••• •••• ••••</div>
+                    <button style="height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;cursor:pointer;" style-hover="background:var(--surf2)">Показать и распечатать</button>
+                  </div>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:auto;">
+                  <button onClick="{{ restart }}" style="height:42px;padding:0 20px;border-radius:9px;border:1px solid var(--bd2);background:var(--surf);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:14px;cursor:pointer;" style-hover="background:var(--surf2)">Пройти заново</button>
+                </div>
+              </div>
+            </sc-if>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+      <sc-for list="{{ notes }}" as="n" hint-placeholder-count="4">
+        <div style="border:1px solid var(--bd);border-radius:10px;background:var(--bg1);padding:18px;display:flex;flex-direction:column;gap:7px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--acc);">{{ n.tag }}</div>
+          <div style="font-size:14.5px;font-weight:600;">{{ n.t }}</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">{{ n.b }}</div>
+        </div>
+      </sc-for>
+    </div>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;mint&quot;,&quot;cyan&quot;,&quot;amber&quot;,&quot;indigo&quot;],&quot;default&quot;:&quot;mint&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Тема&quot;},&quot;pinLength&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;4&quot;,&quot;6&quot;],&quot;default&quot;:&quot;4&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Разблокировка&quot;},&quot;diffLayout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;рядом&quot;,&quot;друг под другом&quot;],&quot;default&quot;:&quot;рядом&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Конфликт&quot;}}">
+class Component extends DCLogic {
+  state = {
+    pair: 'qr', confirmDev: null, revoked: {},
+    vpick: 'a', reveal: false,
+    lock: 'pin', pin: '', pinErr: false, tries: 4,
+    step: 0, mpw: 'рыжий трамвай', usePin: true, useAuto: false
+  };
+
+  accents = {
+    mint:   { acc: 'oklch(0.800 0.130 168)', fg: 'oklch(0.200 0.030 168)' },
+    cyan:   { acc: 'oklch(0.790 0.110 218)', fg: 'oklch(0.200 0.030 218)' },
+    amber:  { acc: 'oklch(0.755 0.125 62)',  fg: 'oklch(0.205 0.045 62)' },
+    indigo: { acc: 'oklch(0.740 0.130 288)', fg: 'oklch(0.200 0.040 288)' }
+  };
+
+  apply() {
+    const a = this.accents[this.props.accent || 'mint'] || this.accents.mint;
+    const base = a.acc.slice(0, -1);
+    const r = document.documentElement.style;
+    const _h = a.acc.slice(a.acc.lastIndexOf(' ') + 1, -1);
+    const _lt = this.state.theme === 'light';
+    const _b = _lt ? 'oklch(0.520 0.120 ' + _h : base;
+    r.setProperty('--acc', _b + ')');
+    r.setProperty('--accq', _b + (_lt ? ' / 0.10)' : ' / 0.14)'));
+    r.setProperty('--accb', _b + (_lt ? ' / 0.32)' : ' / 0.40)'));
+    r.setProperty('--accfg', _lt ? 'oklch(0.985 0.015 ' + _h + ')' : a.fg);
+    r.setProperty('--diffcols', (this.props.diffLayout || 'рядом') === 'рядом' ? '1fr 1fr' : '1fr');
+  }
+  componentDidMount() { this.apply(); }
+  componentDidUpdate() { this.apply(); }
+
+  get pinLen() { return Number(this.props.pinLength || 4); }
+
+  qrCells() {
+    const n = 21, out = [];
+    let s = 20260801;
+    const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    const dark = 'var(--qrfg)';
+    const inFinder = (r, c) => {
+      const boxes = [[0, 0], [0, 14], [14, 0]];
+      for (const [r0, c0] of boxes) {
+        if (r >= r0 - 1 && r <= r0 + 7 && c >= c0 - 1 && c <= c0 + 7) {
+          const dr = r - r0, dc = c - c0;
+          if (dr < 0 || dr > 6 || dc < 0 || dc > 6) return 'off';
+          const ring = dr === 0 || dr === 6 || dc === 0 || dc === 6;
+          const core = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4;
+          return (ring || core) ? 'on' : 'off';
+        }
+      }
+      return null;
+    };
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        const f = inFinder(r, c);
+        let on;
+        if (f) on = f === 'on';
+        else if (r === 6) on = c % 2 === 0;
+        else if (c === 6) on = r % 2 === 0;
+        else on = rnd() < 0.46;
+        out.push({ b: on ? dark : 'transparent' });
+      }
+    }
+    return out;
+  }
+
+  press = d => {
+    if (d === 'del') { this.setState(s => ({ pin: s.pin.slice(0, -1), pinErr: false })); return; }
+    if (d === 'esc') { this.setState({ pin: '', pinErr: false }); return; }
+    this.setState(s => {
+      const pin = (s.pin + d).slice(0, this.pinLen);
+      if (pin.length < this.pinLen) return { pin, pinErr: false };
+      const ok = pin === '241166'.slice(0, this.pinLen);
+      return ok ? { pin: '', lock: 'open', pinErr: false, tries: 4 }
+                : { pin: '', pinErr: true, tries: Math.max(1, s.tries - 1) };
+    });
+  };
+
+  baseVals() {
+    const st = this.state;
+
+    const devDefs = [
+      { id: 'mb', kind: 'MB', name: 'MacBook Air 13″', sub: 'macOS · сопряжено 12.03.2024 · рядом сейчас', isThis: true, stale: false, hue: 168 },
+      { id: 'ip', kind: 'IP', name: 'iPhone 14', sub: 'iOS · сопряжено 12.03.2024 · был рядом 4 минуты назад', isThis: false, stale: false, hue: 262 },
+      { id: 'tp', kind: 'TP', name: 'ThinkPad X1', sub: 'Linux · сопряжено 08.11.2023 · не появлялся 41 день', isThis: false, stale: true, hue: 78 }
+    ];
+    const devices = devDefs.map(d => {
+      const revoked = !!st.revoked[d.id];
+      return {
+        kind: d.kind, name: d.name, sub: revoked ? 'доступ отозван 01.08.2026 · копия на устройстве больше не обновляется' : d.sub,
+        isThis: d.isThis, revoked,
+        stale: d.stale && !revoked,
+        canRevoke: !d.isThis && !revoked,
+        asking: st.confirmDev === d.id,
+        askTitle: 'Отозвать доступ у «' + d.name + '»?',
+        ink: revoked ? 'var(--tx3)' : 'oklch(var(--icI) ' + d.hue + ')',
+        nameColor: revoked ? 'var(--tx3)' : 'var(--tx)',
+        ask: () => this.setState({ confirmDev: d.id }),
+        cancel: () => this.setState({ confirmDev: null }),
+        revoke: () => this.setState(s => ({ revoked: Object.assign({}, s.revoked, { [d.id]: true }), confirmDev: null })),
+        restore: () => this.setState(s => { const r = Object.assign({}, s.revoked); delete r[d.id]; return { revoked: r, pair: 'qr' }; })
+      };
+    });
+    const active = devDefs.length - Object.keys(st.revoked).length;
+
+    const fieldDefs = [
+      { label: 'Пароль', a: '9dR2 vKq7 Ln4m', b: '7hK4 qWm2 Rt9v', changed: true, mono: true, secret: true },
+      { label: 'Логин', a: 'anna@fastmail.com', b: 'anna@fastmail.com', changed: false, mono: false },
+      { label: 'Адрес сайта', a: 'https://github.com', b: 'https://github.com/login', changed: true, mono: false },
+      { label: 'Заметка', a: 'Резервные коды в бумажном конверте дома.', b: 'Резервные коды в конверте, копия у Кости.', changed: true, mono: false },
+      { label: 'Код TOTP', a: 'подключён · ключ не менялся', b: 'подключён · ключ не менялся', changed: false, mono: false },
+      { label: 'Метка аккаунта', a: 'рабочий', b: 'рабочий', changed: false, mono: false },
+      { label: 'Секция', a: 'Рабочее', b: 'Рабочее', changed: false, mono: false }
+    ];
+    const mkFields = key => fieldDefs.map(f => {
+      const raw = f[key];
+      const hidden = f.secret && !st.reveal;
+      return {
+        label: f.label, changed: f.changed,
+        value: hidden ? '•••• •••• ••••' : raw,
+        ink: f.changed ? 'var(--tx)' : 'var(--tx2)',
+        font: (f.mono || hidden) ? "'IBM Plex Mono', monospace" : "'IBM Plex Sans', sans-serif",
+        bg: f.changed ? 'var(--warnq)' : 'transparent',
+        pad: f.changed ? '6px 9px' : '6px 0'
+      };
+    });
+    const versions = [
+      { key: 'a', device: 'MacBook Air 13″', when: 'изменено сегодня, 12:04', tag: 'позже' },
+      { key: 'b', device: 'iPhone 14', when: 'изменено сегодня, 09:41', tag: 'раньше' }
+    ].map(v => {
+      const picked = st.vpick === v.key;
+      return {
+        device: v.device, when: v.when, tag: v.tag, picked,
+        fields: mkFields(v.key),
+        bd: picked ? 'var(--acc)' : 'var(--bd)',
+        bg: picked ? 'var(--bg0)' : 'var(--bg1)',
+        dot: picked ? 'var(--acc)' : 'var(--bd2)',
+        tagInk: v.tag === 'позже' ? 'var(--acc)' : 'var(--tx3)',
+        tagBd: v.tag === 'позже' ? 'var(--accb)' : 'var(--bd)',
+        pick: () => this.setState({ vpick: v.key })
+      };
+    });
+
+    const pinCells = [];
+    for (let i = 0; i < this.pinLen; i++) {
+      const on = i < st.pin.length;
+      pinCells.push({
+        bd: st.pinErr ? 'var(--dang)' : (on ? 'var(--acc)' : 'var(--bd2)'),
+        bg: on ? 'var(--acc)' : 'transparent'
+      });
+    }
+    const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'esc', '0', 'del'].map(k => ({
+      label: k === 'del' ? '⌫' : (k === 'esc' ? '×' : k),
+      press: () => this.press(k)
+    }));
+
+    const stepMeta = [
+      { title: 'Как это устроено', hint: 'нет сервера и аккаунта' },
+      { title: 'Мастер-пароль', hint: 'единственный ключ' },
+      { title: 'Быстрый вход', hint: 'PIN, по желанию' },
+      { title: 'Готово', hint: 'второе устройство' }
+    ];
+    const stepList = stepMeta.map((s, i) => {
+      const on = st.step === i, done = st.step > i;
+      return {
+        n: i + 1, title: s.title, hint: s.hint,
+        bg: on ? 'var(--accq)' : 'transparent',
+        bd: on ? 'var(--accb)' : 'transparent',
+        ink: on ? 'var(--tx)' : 'var(--tx2)',
+        numBg: done ? 'var(--acc)' : (on ? 'transparent' : 'var(--surf)'),
+        numBd: on || done ? 'var(--accb)' : 'var(--bd2)',
+        numInk: done ? 'var(--accfg)' : (on ? 'var(--acc)' : 'var(--tx3)'),
+        go: () => this.setState({ step: i })
+      };
+    });
+    const stepTabs = stepMeta.map((s, i) => ({
+      label: 'Шаг ' + (i + 1),
+      bd: st.step === i ? 'var(--accb)' : 'var(--bd2)',
+      bg: st.step === i ? 'var(--accq)' : 'var(--surf)',
+      ink: st.step === i ? 'var(--acc)' : 'var(--tx)',
+      go: () => this.setState({ step: i })
+    }));
+
+    const mpw = st.mpw;
+    const score = Math.min(4, Math.floor(mpw.trim().length / 6) + (mpw.trim().split(/\s+/).length > 2 ? 1 : 0));
+    const strengthTexts = ['Слишком коротко — подберут за минуты', 'Слабовато: добавьте ещё слово', 'Уже неплохо', 'Хорошая фраза', 'Отличная фраза — её легко вспомнить и трудно подобрать'];
+    const strengthColors = ['var(--dang)', 'var(--dang)', 'var(--warn)', 'var(--acc)', 'var(--acc)'];
+    const strengthBars = [0, 1, 2, 3].map(i => ({ bg: i < score ? strengthColors[score] : 'var(--surf2)' }));
+
+    const options = [
+      { key: 'usePin', t: 'Открывать по PIN', b: 'Четыре цифры вместо длинной фразы, пока компьютер не выключен.' },
+      { key: 'useAuto', t: 'Блокировать через 5 минут', b: 'По умолчанию — 15 минут. Короче безопаснее, но раздражает чаще.' }
+    ].map(o => {
+      const on = st[o.key];
+      return {
+        t: o.t, b: o.b,
+        bd: on ? 'var(--accb)' : 'var(--bd)',
+        bg: on ? 'var(--accq)' : 'var(--surf)',
+        track: on ? 'var(--acc)' : 'var(--bd2)',
+        knob: on ? 'var(--accfg)' : 'var(--tx3)',
+        justify: on ? 'flex-end' : 'flex-start',
+        toggle: () => this.setState(s => ({ [o.key]: !s[o.key] }))
+      };
+    });
+
+    return {
+      qr: this.qrCells(),
+      isQR: st.pair === 'qr', isScan: st.pair === 'scan', isDone: st.pair === 'done',
+      pairQR: () => this.setState({ pair: 'qr' }),
+      pairScan: () => this.setState({ pair: 'scan' }),
+      pairDone: () => this.setState({ pair: 'done' }),
+      steps: [
+        { n: '1', t: 'На втором устройстве откройте Syncra и выберите «У меня уже есть хранилище».' },
+        { n: '2', t: 'Наведите его камеру на этот код — рамка сама поймает.' },
+        { n: '3', t: 'Сверьте четыре слова на обоих экранах и подтвердите.' }
+      ],
+      words: [{ t: 'кедр' }, { t: 'фарфор' }, { t: 'мостик' }, { t: 'янтарь' }],
+      devices,
+      devLine: active + ' активных · 1 отозвано за всё время',
+      versions,
+      keepLabel: st.vpick === 'a' ? 'Оставить версию с MacBook Air' : 'Оставить версию с iPhone 14',
+      revealLabel: st.reveal ? 'Скрыть пароли в diff' : 'Показать пароли в diff',
+      toggleDiffReveal: () => this.setState(s => ({ reveal: !s.reveal })),
+      lockPin: st.lock === 'pin', lockMaster: st.lock === 'master', lockOpen: st.lock === 'open',
+      showPin: () => this.setState({ lock: 'pin', pin: '', pinErr: false }),
+      showMaster: () => this.setState({ lock: 'master' }),
+      unlockNow: () => this.setState({ lock: 'open' }),
+      pinCells, keys, pinError: st.pinErr, tries: st.tries,
+      keyTiers: [
+        { tag: 'ключ', ink: 'var(--acc)', title: 'Мастер-пароль', body: 'Из него выводится ключ шифрования. Не хранится нигде — ни у нас, ни на диске.' },
+        { tag: 'сеанс', ink: 'var(--tx2)', title: 'PIN', body: 'Держит расшифрованное хранилище в памяти текущего сеанса. Сбрасывается при выключении.' },
+        { tag: 'запас', ink: 'var(--tx3)', title: 'Резервный код', body: 'Бумажный выход, если пароль забыт. Печатается один раз при создании хранилища.' }
+      ],
+      mpwCases: [
+        { t: 'Первый запуск и каждая перезагрузка компьютера' },
+        { t: 'Раз в 7 дней, даже если вы не выходили' },
+        { t: 'Пять неверных PIN подряд' },
+        { t: 'Экспорт данных и смена мастер-пароля' }
+      ],
+      step0: st.step === 0, step1: st.step === 1, step2: st.step === 2, step3: st.step === 3,
+      stepList, stepTabs,
+      next: () => this.setState(s => ({ step: Math.min(3, s.step + 1) })),
+      back: () => this.setState(s => ({ step: Math.max(0, s.step - 1) })),
+      restart: () => this.setState({ step: 0 }),
+      goPairing: () => this.setState({ pair: 'qr' }),
+      promises: [
+        { t: 'Данные лежат на ваших устройствах', b: 'Файл хранилища зашифрован и находится в вашей папке. Скопировать его можно, прочитать без мастер-пароля — нет.' },
+        { t: 'Синхронизация — прямая', b: 'Устройства находят друг друга в общей сети и обмениваются изменениями напрямую. Промежуточного облака нет.' },
+        { t: 'Ничего не грузится из интернета', b: 'Иконки сервисов рисуются из букв домена, аватарок нет: страница, где вы вошли, не узнаёт о Syncra.' }
+      ],
+      mpw, mpwLen: mpw.length,
+      onMpw: ev => this.setState({ mpw: ev.target.value }),
+      strengthBars, strengthText: strengthTexts[score], strengthInk: strengthColors[score],
+      options, pinChosen: st.usePin,
+      pinLenText: this.pinLen + ' цифры',
+      pinPreview: pinCells.map(() => ({})),
+      notes: [
+        { tag: '§3.6', t: 'Сопряжение = обмен взглядами', b: 'QR и четыре слова заменяют «войдите в аккаунт». Успех показывает 0 байт в интернет — обещание продукта проверяемо.' },
+        { tag: '§3.7', t: 'Версия целиком, не по кусочкам', b: 'Различия помечены жёлтым, совпадения приглушены. Выбор — один клик по карточке, вторая версия уходит в историю.' },
+        { tag: '§3.8', t: 'PIN не притворяется защитой', b: 'Иерархия ключей проговорена прямо: пароль шифрует, PIN лишь удерживает открытый сеанс.' },
+        { tag: '§3.9', t: 'Честность вместо запугивания', b: '«Восстановления не будет» сказано жёлтым один раз и сразу дополнено резервным кодом — предупреждение с выходом.' }
+      ]
+    };
+  }
+
+  renderVals() {
+    const t = this.state.theme === 'light' ? 'light' : 'dark';
+    return Object.assign({}, this.baseVals() || {}, {
+      theme: t,
+      themeBtn: t === 'light' ? 'Тёмная' : 'Светлая',
+      toggleTheme: () => this.setState(s => ({ theme: s.theme === 'light' ? 'dark' : 'light' }))
+    });
+  }
+
+}
+
+</script>
+</body>
+</html>

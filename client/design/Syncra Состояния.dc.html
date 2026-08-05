@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg0:oklch(0.175 0.008 255); --bg1:oklch(0.212 0.008 255);
+  --surf:oklch(0.248 0.009 255); --surf2:oklch(0.288 0.010 255);
+  --bd:oklch(0.322 0.010 255); --bd2:oklch(0.410 0.012 255);
+  --tx:oklch(0.955 0.004 255); --tx2:oklch(0.735 0.008 255); --tx3:oklch(0.575 0.009 255);
+  --acc:oklch(0.800 0.130 168); --accq:oklch(0.800 0.130 168 / 0.14); --accb:oklch(0.800 0.130 168 / 0.40); --accfg:oklch(0.200 0.030 168);
+  --ok:oklch(0.780 0.130 158); --warn:oklch(0.855 0.135 98); --dang:oklch(0.690 0.160 26);
+  --warnq:oklch(0.855 0.135 98 / 0.13); --dangq:oklch(0.690 0.160 26 / 0.14);
+  --page:oklch(0.135 0.008 255); --pageL:oklch(0.905 0.004 255);
+  --kb:oklch(0.395 0.008 255);
+  --icL:0.330 0.055; --icB:0.430 0.070; --icI:0.860 0.090;
+  --sh:0 1px 2px rgba(0,0,0,.34), 0 10px 28px -16px rgba(0,0,0,.72);
+  --shWin:0 40px 90px -40px rgba(0,0,0,.9);
+  --shWin2:0 26px 60px -32px rgba(0,0,0,.85);
+  --r:10px;
+}
+[data-theme="light"]{
+  --bg0:oklch(0.972 0.003 255); --bg1:oklch(0.952 0.004 255);
+  --surf:oklch(1 0 0); --surf2:oklch(0.935 0.005 255);
+  --bd:oklch(0.900 0.005 255); --bd2:oklch(0.832 0.006 255);
+  --tx:oklch(0.245 0.010 255); --tx2:oklch(0.445 0.010 255); --tx3:oklch(0.505 0.012 255);
+  --ok:oklch(0.520 0.115 158); --warn:oklch(0.535 0.120 70); --dang:oklch(0.530 0.180 26);
+  --warnq:oklch(0.535 0.120 70 / 0.11); --dangq:oklch(0.530 0.180 26 / 0.09);
+  --page:oklch(0.905 0.004 255);
+  --kb:oklch(1 0 0);
+  --icL:0.930 0.038; --icB:0.868 0.055; --icI:0.470 0.115;
+  --sh:0 1px 2px oklch(0.30 0.02 255 / 0.07), 0 8px 22px -14px oklch(0.30 0.02 255 / 0.30);
+  --shWin:0 30px 70px -34px oklch(0.30 0.02 255 / 0.34);
+  --shWin2:0 20px 50px -28px oklch(0.30 0.02 255 / 0.30);
+}
+html,body{margin:0;padding:0;background:var(--page);}
+body:has([data-theme="light"]){background:var(--pageL);}
+*{box-sizing:border-box;}
+a{color:var(--acc);text-decoration:none;} a:hover{color:var(--tx);text-decoration:underline;}
+::selection{background:var(--accq);color:var(--tx);}
+@keyframes sy-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.8)}}
+@keyframes sy-spin{to{transform:rotate(360deg)}}
+@keyframes sy-shimmer{0%{opacity:.35}50%{opacity:.7}100%{opacity:.35}}
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="background:var(--page);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-weight:450;-webkit-font-smoothing:antialiased;min-height:100vh;padding:56px 40px 120px;">
+
+  <div style="position:fixed;top:14px;right:14px;z-index:90;display:flex;align-items:center;gap:10px;padding:6px 8px 6px 13px;border-radius:12px;border:1px solid var(--bd);background:var(--surf);box-shadow:var(--sh);">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--tx3);">Тема</div>
+    <button onClick="{{ toggleTheme }}" style="height:28px;padding:0 13px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf2);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:12.5px;font-weight:500;cursor:pointer;" style-hover="border-color:var(--acc)">{{ themeBtn }}</button>
+  </div>
+
+  <div style="width:1440px;margin:0 auto;display:flex;flex-direction:column;gap:64px;">
+
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:760px;">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx3);">Syncra · §4.4 · 4.6 · состояния</div>
+      <h1 style="margin:0;font-size:32px;line-height:1.15;font-weight:600;letter-spacing:-0.02em;">Всё, что бывает вместо счастливого пути</h1>
+      <p style="margin:0;font-size:14.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Пустые экраны, синхронизация, ошибки и «рядом никого нет» — собраны в одном месте и проверены в обеих темах. Правило тона: серым говорим о покое, жёлтым — о том, что ждёт человека, красным — только о реальной потере данных.</p>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;align-items:baseline;gap:16px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx3);">01</div>
+        <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Синхронизация — один индикатор, шесть значений</h2>
+        <div style="flex:1;height:1px;background:var(--bd);"></div>
+      </div>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tx2);max-width:720px;text-wrap:pretty;">Индикатор живёт в трёх местах сразу: в шапке окна, в строке списка и в мобильном хранилище. Переключите состояние — три места меняются согласованно.</p>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <sc-for list="{{ syncTabs }}" as="t" hint-placeholder-count="6">
+          <button onClick="{{ t.go }}" style="height:34px;padding:0 15px;border-radius:8px;border:1px solid {{ t.bd }};background:{{ t.bg }};color:{{ t.ink }};font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:9px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:{{ t.dot }};"></span>{{ t.label }}
+          </button>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start;">
+
+        <div data-screen-label="Индикатор в окне" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);box-shadow:var(--shWin2);overflow:hidden;">
+          <div style="height:36px;background:var(--bg0);border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;padding:0 14px;">
+            <div style="display:flex;align-items:center;gap:9px;">
+              <div style="width:15px;height:15px;border-radius:5px;border:1.5px solid var(--acc);display:grid;place-items:center;"><div style="width:5px;height:5px;border-radius:2px;background:var(--acc);"></div></div>
+              <div style="font-size:12px;color:var(--tx2);">Syncra — Хранилище</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 10px;border-radius:7px;border:1px solid {{ sync.bd }};background:{{ sync.bg }};">
+              <div style="width:7px;height:7px;border-radius:50%;background:{{ sync.dot }};animation:{{ sync.anim }};"></div>
+              <div style="font-size:11.5px;font-weight:500;color:{{ sync.ink }};">{{ sync.chip }}</div>
+            </div>
+          </div>
+
+          <div style="padding:20px 22px 22px;display:flex;flex-direction:column;gap:16px;">
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <div style="font-size:16px;font-weight:600;letter-spacing:-0.01em;">{{ sync.title }}</div>
+              <div style="font-size:13px;line-height:1.55;color:var(--tx2);max-width:560px;text-wrap:pretty;">{{ sync.body }}</div>
+            </div>
+
+            <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);overflow:hidden;">
+              <div style="height:56px;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--bd);">
+                <div style="width:32px;height:32px;border-radius:9px;background:oklch(var(--icL) 172);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:oklch(var(--icI) 172);flex:none;">GH</div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;">
+                  <div style="font-size:14.5px;font-weight:500;">github.com</div>
+                  <div style="font-size:12.5px;color:var(--tx2);">anna@fastmail.com</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:7px;">
+                  <div style="width:7px;height:7px;border-radius:50%;background:{{ sync.dot }};animation:{{ sync.anim }};"></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.06em;color:{{ sync.ink }};">{{ sync.row }}</div>
+                </div>
+              </div>
+              <div style="height:56px;display:flex;align-items:center;gap:12px;padding:0 14px;">
+                <div style="width:32px;height:32px;border-radius:9px;background:oklch(var(--icL) 262);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:oklch(var(--icI) 262);flex:none;">G</div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;">
+                  <div style="font-size:14.5px;font-weight:500;">google.com</div>
+                  <div style="font-size:12.5px;color:var(--tx2);">anna.k@gmail.com</div>
+                </div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--tx3);">без изменений</div>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:flex-start;gap:12px;border-left:2px solid {{ sync.dot }};padding-left:14px;">
+              <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Тон · </span>{{ sync.tone }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div data-screen-label="Индикатор на iOS" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);padding:20px;display:flex;flex-direction:column;gap:14px;">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--tx3);">Мобайл · под заголовком «Хранилище»</div>
+            <div style="display:flex;align-items:center;gap:9px;align-self:flex-start;height:30px;padding:0 13px;border-radius:16px;border:1px solid {{ sync.bd }};background:{{ sync.bg }};">
+              <div style="width:7px;height:7px;border-radius:50%;background:{{ sync.dot }};animation:{{ sync.anim }};"></div>
+              <div style="font-size:12.5px;font-weight:500;color:{{ sync.ink }};">{{ sync.pill }}</div>
+            </div>
+            <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">На телефоне у индикатора всегда есть подпись словами: маленькая точка без текста читается как «что-то не так».</div>
+          </div>
+
+          <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);padding:20px;display:flex;flex-direction:column;gap:12px;">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--tx3);">Правило</div>
+            <div style="font-size:13px;line-height:1.6;color:var(--tx2);text-wrap:pretty;">Индикатор никогда не блокирует работу и не показывает модальных окон. Единственное состояние, требующее действия, — конфликт версий: он ждёт в списке столько, сколько нужно.</div>
+            <div style="display:flex;flex-direction:column;gap:9px;padding-top:4px;">
+              <sc-for list="{{ toneLegend }}" as="l" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:11px;">
+                  <div style="width:10px;height:10px;border-radius:50%;background:{{ l.c }};flex:none;"></div>
+                  <div style="font-size:12.5px;color:var(--tx2);">{{ l.t }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;align-items:baseline;gap:16px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx3);">02</div>
+        <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Пустые состояния</h2>
+        <div style="flex:1;height:1px;background:var(--bd);"></div>
+      </div>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tx2);max-width:720px;text-wrap:pretty;">Пустой экран — это не ошибка и не повод для иллюстрации. Он объясняет, почему тут пусто, и предлагает ровно один следующий шаг.</p>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+
+        <div data-screen-label="Пусто · хранилище" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg0);">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Десктоп · список</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx3);">§3.1</div>
+          </div>
+          <div style="flex:1;padding:34px 26px 30px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px;justify-content:center;min-height:260px;">
+            <div style="width:52px;height:52px;border-radius:15px;border:1.5px dashed var(--bd2);display:grid;place-items:center;"><div style="width:14px;height:14px;border-radius:5px;border:1.5px solid var(--tx3);"></div></div>
+            <div style="display:flex;flex-direction:column;gap:7px;">
+              <div style="font-size:16px;font-weight:600;">Пока ни одного пароля</div>
+              <div style="font-size:13px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Хранилище создано и лежит на этом компьютере. Осталось наполнить его — вручную или переносом из другого менеджера.</div>
+            </div>
+            <div style="display:flex;gap:8px;padding-top:4px;">
+              <div style="height:34px;padding:0 15px;border-radius:8px;background:var(--acc);color:var(--accfg);font-size:13px;font-weight:600;display:grid;place-items:center;">Добавить запись</div>
+              <div style="height:34px;padding:0 15px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);font-size:13px;font-weight:500;display:grid;place-items:center;">Импортировать</div>
+            </div>
+          </div>
+        </div>
+
+        <div data-screen-label="Пусто · поиск" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg0);">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Десктоп · поиск</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx3);">§3.1</div>
+          </div>
+          <div style="flex:1;padding:18px 18px 24px;display:flex;flex-direction:column;gap:16px;min-height:260px;">
+            <div style="height:36px;border-radius:9px;border:1px solid var(--accb);background:var(--surf);display:flex;align-items:center;gap:10px;padding:0 12px;box-shadow:0 0 0 3px var(--accq);">
+              <div style="width:11px;height:11px;border-radius:50%;border:1.5px solid var(--tx3);"></div>
+              <div style="font-size:13.5px;">dropbox</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px;">
+              <div style="font-size:15px;font-weight:600;">Ничего не нашлось</div>
+              <div style="font-size:13px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">По запросу «dropbox» нет ни сервиса, ни логина. Поиск смотрит только внутрь этого устройства.</div>
+              <div style="height:32px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);font-size:12.5px;font-weight:500;display:grid;place-items:center;">Создать «dropbox»</div>
+            </div>
+          </div>
+        </div>
+
+        <div data-screen-label="Пусто · секция" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg0);">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Десктоп · секция</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx3);">§3.2</div>
+          </div>
+          <div style="flex:1;padding:18px;display:flex;flex-direction:column;gap:14px;min-height:260px;">
+            <div style="display:flex;flex-direction:column;gap:3px;">
+              <div style="display:flex;align-items:center;gap:9px;height:32px;padding:0 10px;border-radius:8px;background:var(--accq);border-left:3px solid var(--acc);">
+                <div style="width:8px;height:8px;border-radius:2px;background:oklch(0.740 0.120 78);"></div>
+                <div style="font-size:13.5px;font-weight:500;flex:1;">Рабочее</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx3);">0</div>
+              </div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px;border:1px dashed var(--bd2);border-radius:10px;padding:20px;">
+              <div style="font-size:14.5px;font-weight:600;">В «Рабочем» пока пусто</div>
+              <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">Перетащите сюда строку из «Всех записей» или создайте запись прямо в секции.</div>
+            </div>
+          </div>
+        </div>
+
+        <div data-screen-label="Нет других устройств" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg0);">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Десктоп · устройства</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx3);">§3.6 · §4.4</div>
+          </div>
+          <div style="flex:1;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:260px;">
+            <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);padding:14px;display:flex;align-items:center;gap:12px;">
+              <div style="width:34px;height:34px;border-radius:10px;border:1px solid var(--bd2);display:grid;place-items:center;flex:none;"><div style="width:13px;height:10px;border:1.5px solid var(--tx2);border-radius:2px;"></div></div>
+              <div style="flex:1;display:flex;flex-direction:column;gap:2px;">
+                <div style="font-size:13.5px;font-weight:600;">MacBook Анны · это устройство</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx3);">единственное в хранилище</div>
+              </div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px;">
+              <div style="display:flex;align-items:center;gap:9px;height:28px;padding:0 12px;border-radius:15px;border:1px solid var(--bd);background:var(--surf);">
+                <div style="width:7px;height:7px;border-radius:50%;background:var(--tx3);"></div>
+                <div style="font-size:12px;color:var(--tx2);">Рядом нет других устройств</div>
+              </div>
+              <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);max-width:270px;text-wrap:pretty;">Это нормальное состояние, а не сбой: синхронизировать пока не с кем. Пароли уже сохранены здесь.</div>
+              <div style="height:32px;padding:0 14px;border-radius:8px;border:1px solid var(--accb);background:var(--accq);color:var(--acc);font-size:12.5px;font-weight:600;display:grid;place-items:center;">Добавить устройство</div>
+            </div>
+          </div>
+        </div>
+
+        <div data-screen-label="Пусто · дропдаун" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg0);">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Расширение · дропдаун</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx3);">§3.5</div>
+          </div>
+          <div style="flex:1;padding:20px;display:grid;place-items:center;min-height:260px;">
+            <div style="width:100%;border-radius:11px;border:1px solid var(--bd2);background:var(--surf);box-shadow:var(--shWin2);overflow:hidden;">
+              <div style="padding:10px 13px;border-bottom:1px solid var(--bd);background:var(--bg1);display:flex;align-items:center;gap:9px;">
+                <div style="width:16px;height:16px;border-radius:5px;border:1.5px solid var(--acc);display:grid;place-items:center;"><div style="width:5px;height:5px;border-radius:2px;background:var(--acc);"></div></div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);">figma.com</div>
+              </div>
+              <div style="padding:20px 16px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:11px;">
+                <div style="font-size:13.5px;font-weight:600;">Для этого сайта записей нет</div>
+                <div style="font-size:12.5px;line-height:1.5;color:var(--tx2);text-wrap:pretty;">Syncra не подставит чужой пароль наугад — можно сохранить новый прямо сейчас.</div>
+                <div style="display:flex;gap:8px;width:100%;padding-top:2px;">
+                  <div style="flex:1;height:32px;border-radius:8px;background:var(--acc);color:var(--accfg);font-size:12.5px;font-weight:600;display:grid;place-items:center;">Сохранить вход</div>
+                  <div style="height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--bd2);font-size:12.5px;font-weight:500;display:grid;place-items:center;">Генератор</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div data-screen-label="Пусто · AutoFill" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg0);">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">iOS · шторка AutoFill</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx3);">§3.5</div>
+          </div>
+          <div style="flex:1;padding:20px;display:grid;place-items:center;min-height:260px;">
+            <div style="width:100%;border-radius:18px;border:1px solid var(--bd);background:var(--bg0);padding:12px 16px 18px;display:flex;flex-direction:column;gap:13px;box-shadow:var(--shWin2);">
+              <div style="width:42px;height:5px;border-radius:3px;background:var(--bd2);align-self:center;"></div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div style="display:flex;align-items:center;gap:9px;">
+                  <div style="width:18px;height:18px;border-radius:6px;border:1.5px solid var(--acc);display:grid;place-items:center;"><div style="width:6px;height:6px;border-radius:2px;background:var(--acc);"></div></div>
+                  <div style="font-size:14px;font-weight:600;">Syncra</div>
+                </div>
+                <div style="font-size:14px;color:var(--acc);">Закрыть</div>
+              </div>
+              <div style="border:1px dashed var(--bd2);border-radius:13px;padding:16px 14px;display:flex;flex-direction:column;gap:8px;text-align:center;">
+                <div style="font-size:14px;font-weight:600;">Нет записей для booking.com</div>
+                <div style="font-size:12.5px;line-height:1.5;color:var(--tx2);text-wrap:pretty;">Создать запись можно в приложении — шторка ничего не придумывает за вас.</div>
+              </div>
+              <div style="height:44px;border-radius:12px;background:var(--acc);color:var(--accfg);font-size:15px;font-weight:600;display:grid;place-items:center;">Открыть Syncra</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;align-items:baseline;gap:16px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx3);">03</div>
+        <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Ошибки</h2>
+        <div style="flex:1;height:1px;background:var(--bd);"></div>
+      </div>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--tx2);max-width:720px;text-wrap:pretty;">Ошибка называет причину, говорит, что с данными всё в порядке, и даёт действие. Красный — только там, где что-то действительно потеряно или необратимо.</p>
+
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
+        <sc-for list="{{ errors }}" as="e" hint-placeholder-count="4">
+          <div style="border:1px solid {{ e.bd }};border-radius:12px;background:var(--bg1);overflow:hidden;display:flex;flex-direction:column;">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg0);">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">{{ e.ctx }}</div>
+              <div style="display:flex;align-items:center;gap:7px;"><div style="width:7px;height:7px;border-radius:50%;background:{{ e.dot }};"></div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:{{ e.dot }};">{{ e.level }}</div></div>
+            </div>
+            <div style="padding:18px 18px 20px;display:flex;flex-direction:column;gap:14px;flex:1;">
+              <div style="border-radius:10px;border:1px solid {{ e.bd }};background:{{ e.bg }};padding:14px 15px;display:flex;gap:12px;">
+                <div style="width:18px;height:18px;border-radius:50%;border:1.5px solid {{ e.dot }};display:grid;place-items:center;flex:none;margin-top:1px;"><div style="width:2px;height:8px;border-radius:1px;background:{{ e.dot }};"></div></div>
+                <div style="display:flex;flex-direction:column;gap:5px;">
+                  <div style="font-size:14px;font-weight:600;">{{ e.title }}</div>
+                  <div style="font-size:12.5px;line-height:1.55;color:var(--tx2);text-wrap:pretty;">{{ e.body }}</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <div style="height:32px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);font-size:12.5px;font-weight:500;display:grid;place-items:center;">{{ e.act }}</div>
+                <div style="font-size:12.5px;color:var(--tx3);">{{ e.alt }}</div>
+              </div>
+              <div style="margin-top:auto;font-size:12px;line-height:1.5;color:var(--tx3);border-top:1px solid var(--bd);padding-top:11px;text-wrap:pretty;">{{ e.why }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;align-items:baseline;gap:16px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx3);">04</div>
+        <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Ожидание и процесс</h2>
+        <div style="flex:1;height:1px;background:var(--bd);"></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+
+        <div data-screen-label="Загрузка · список" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);padding:18px;display:flex;flex-direction:column;gap:14px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Расшифровка хранилища</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <sc-for list="{{ skeleton }}" as="s" hint-placeholder-count="4">
+              <div style="height:48px;border-radius:9px;border:1px solid var(--bd);background:var(--surf);display:flex;align-items:center;gap:11px;padding:0 12px;animation:sy-shimmer 1.6s ease-in-out infinite;animation-delay:{{ s.d }};">
+                <div style="width:28px;height:28px;border-radius:8px;background:var(--surf2);flex:none;"></div>
+                <div style="flex:1;display:flex;flex-direction:column;gap:5px;">
+                  <div style="height:9px;width:{{ s.w1 }};border-radius:3px;background:var(--surf2);"></div>
+                  <div style="height:8px;width:{{ s.w2 }};border-radius:3px;background:var(--surf2);"></div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="font-size:12.5px;line-height:1.5;color:var(--tx2);text-wrap:pretty;">Скелет живёт долю секунды: ключ уже в памяти, читается локальный файл. Спиннер во весь экран здесь был бы враньём про долгую загрузку.</div>
+        </div>
+
+        <div data-screen-label="Процесс · импорт" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);padding:18px;display:flex;flex-direction:column;gap:14px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Импорт · 148 из 212</div>
+          <div style="border:1px solid var(--bd);border-radius:10px;background:var(--surf);padding:16px;display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">
+              <div style="font-size:14px;font-weight:600;">Переносим записи</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--acc);">70%</div>
+            </div>
+            <div style="height:6px;border-radius:3px;background:var(--surf2);overflow:hidden;"><div style="width:70%;height:100%;background:var(--acc);border-radius:3px;"></div></div>
+            <div style="font-size:12.5px;line-height:1.5;color:var(--tx2);text-wrap:pretty;">Файл читается на этом устройстве и никуда не отправляется. Прервать можно в любой момент — уже перенесённое останется.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="height:32px;padding:0 14px;border-radius:8px;border:1px solid var(--bd2);background:var(--surf);font-size:12.5px;font-weight:500;display:grid;place-items:center;">Остановить</div>
+            <div style="font-size:12.5px;color:var(--tx3);">4 дубликата пропущено</div>
+          </div>
+        </div>
+
+        <div data-screen-label="Процесс · сопряжение" style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);padding:18px;display:flex;flex-direction:column;gap:14px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx3);">Сопряжение · ждём второе устройство</div>
+          <div style="flex:1;border:1px solid var(--bd);border-radius:10px;background:var(--surf);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:22px 16px;">
+            <div style="position:relative;width:56px;height:56px;display:grid;place-items:center;">
+              <div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--bd2);border-top-color:var(--acc);animation:sy-spin 1.1s linear infinite;"></div>
+              <div style="width:10px;height:10px;border-radius:3px;background:var(--acc);animation:sy-pulse 1.6s ease-in-out infinite;"></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;text-align:center;">
+              <div style="font-size:14px;font-weight:600;">Код показан, ждём сканирование</div>
+              <div style="font-size:12.5px;line-height:1.5;color:var(--tx2);text-wrap:pretty;">Код действует 1:41. Если время выйдет — покажем новый, ничего страшного не случится.</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;align-items:baseline;gap:16px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx3);">05</div>
+        <h2 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Где какое состояние живёт</h2>
+        <div style="flex:1;height:1px;background:var(--bd);"></div>
+      </div>
+
+      <div style="border:1px solid var(--bd);border-radius:12px;background:var(--bg1);overflow:hidden;">
+        <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.6fr;gap:16px;padding:13px 20px;border-bottom:1px solid var(--bd);background:var(--bg0);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.11em;text-transform:uppercase;color:var(--tx3);">
+          <div>Состояние</div><div>Десктоп</div><div>iOS</div><div>Расширение</div><div>Тон и поведение</div>
+        </div>
+        <sc-for list="{{ matrix }}" as="m" hint-placeholder-count="8">
+          <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.6fr;gap:16px;padding:13px 20px;border-bottom:1px solid var(--bd);align-items:center;">
+            <div style="display:flex;align-items:center;gap:10px;"><div style="width:8px;height:8px;border-radius:50%;background:{{ m.dot }};flex:none;"></div><div style="font-size:13.5px;font-weight:500;">{{ m.name }}</div></div>
+            <div style="font-size:12.5px;color:{{ m.c1 }};">{{ m.d }}</div>
+            <div style="font-size:12.5px;color:{{ m.c2 }};">{{ m.i }}</div>
+            <div style="font-size:12.5px;color:{{ m.c3 }};">{{ m.x }}</div>
+            <div style="font-size:12.5px;color:var(--tx2);line-height:1.5;text-wrap:pretty;">{{ m.tone }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--bd);padding-top:24px;display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--tx3);">
+      <div>Syncra · состояния · тёмная и светлая темы</div>
+      <div><a href="./Syncra%20Design%20System.dc.html">← дизайн-система</a></div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;mint&quot;,&quot;cyan&quot;,&quot;amber&quot;,&quot;indigo&quot;],&quot;default&quot;:&quot;mint&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Тема&quot;}}">
+class Component extends DCLogic {
+  state = { theme: 'dark', sync: 'ok' };
+
+  accents = {
+    mint:   { acc: 'oklch(0.800 0.130 168)', fg: 'oklch(0.200 0.030 168)' },
+    cyan:   { acc: 'oklch(0.790 0.110 218)', fg: 'oklch(0.200 0.030 218)' },
+    amber:  { acc: 'oklch(0.755 0.125 62)',  fg: 'oklch(0.205 0.045 62)' },
+    indigo: { acc: 'oklch(0.740 0.130 288)', fg: 'oklch(0.200 0.040 288)' }
+  };
+
+  get accentKey() { return this.props.accent || 'mint'; }
+
+  apply() {
+    const a = this.accents[this.accentKey] || this.accents.mint;
+    const h = a.acc.slice(a.acc.lastIndexOf(' ') + 1, -1);
+    const lt = this.state.theme === 'light';
+    const b = lt ? 'oklch(0.520 0.120 ' + h : a.acc.slice(0, -1);
+    const r = document.documentElement.style;
+    r.setProperty('--acc', b + ')');
+    r.setProperty('--accq', b + (lt ? ' / 0.10)' : ' / 0.14)'));
+    r.setProperty('--accb', b + (lt ? ' / 0.32)' : ' / 0.40)'));
+    r.setProperty('--accfg', lt ? 'oklch(0.985 0.015 ' + h + ')' : a.fg);
+  }
+
+  componentDidMount() { this.apply(); }
+  componentDidUpdate() { this.apply(); }
+
+  syncStates = {
+    ok: {
+      label: 'Синхронизировано', chip: 'Синхронизировано', pill: 'Всё синхронизировано', row: 'на 3 устройствах',
+      dot: 'var(--acc)', bg: 'var(--accq)', bd: 'var(--accb)', ink: 'var(--acc)', anim: 'none',
+      title: 'Все устройства согласны друг с другом',
+      body: 'Последний обмен — 2 минуты назад с MacBook Анны и iPhone 14. Индикатор спокойный: он подтверждает, а не требует.',
+      tone: 'акцентный, но негромкий. Это единственное состояние, о котором можно ничего не читать.'
+    },
+    syncing: {
+      label: 'Идёт обмен', chip: 'Обмен с iPhone 14', pill: 'Обмен с iPhone 14…', row: 'передаётся',
+      dot: 'var(--acc)', bg: 'var(--accq)', bd: 'var(--accb)', ink: 'var(--acc)', anim: 'sy-pulse 1.4s ease-in-out infinite',
+      title: 'Устройства обмениваются изменениями',
+      body: 'Пульсирующая точка вместо прогресс-бара: обмен идёт секунды, а точный процент человеку ничего не даёт. Работать можно, не дожидаясь конца.',
+      tone: 'тот же акцент, но с пульсом. Никаких блокировок интерфейса.'
+    },
+    pending: {
+      label: 'Ждёт синхронизации', chip: '2 изменения ждут', pill: '2 изменения ждут', row: 'ждёт синхронизации',
+      dot: 'var(--warn)', bg: 'var(--warnq)', bd: 'var(--warn)', ink: 'var(--warn)', anim: 'none',
+      title: 'Два изменения пока живут только здесь',
+      body: 'Остальные устройства офлайн или вне сети. Изменения сохранены локально и уедут сами, как только кто-то появится рядом.',
+      tone: 'жёлтый — «человеку стоит знать», а не «человек должен что-то сделать».'
+    },
+    alone: {
+      label: 'Нет устройств рядом', chip: 'Рядом никого', pill: 'Рядом нет устройств', row: 'только здесь',
+      dot: 'var(--tx3)', bg: 'transparent', bd: 'var(--bd)', ink: 'var(--tx2)', anim: 'none',
+      title: 'Рядом нет других устройств — и это нормально',
+      body: 'Хранилище работает целиком на этом компьютере. Синхронизация не «сломалась»: ей просто не с кем говорить, пока второе устройство не окажется в той же сети.',
+      tone: 'серый, покой. Это не ошибка — ни жёлтого, ни красного, ни кнопки «Повторить».'
+    },
+    error: {
+      label: 'Не удалось', chip: 'Обмен не удался', pill: 'Обмен не удался', row: 'повторим позже',
+      dot: 'var(--warn)', bg: 'var(--warnq)', bd: 'var(--warn)', ink: 'var(--warn)', anim: 'none',
+      title: 'Соединение с iPhone 14 оборвалось',
+      body: 'Данные целы на обоих устройствах — не доехала только последняя порция изменений. Следующая попытка через минуту, вручную можно раньше.',
+      tone: 'жёлтый, не красный: ничего не потеряно. Красный оставлен для настоящей потери данных.'
+    },
+    conflict: {
+      label: 'Конфликт версий', chip: '1 конфликт', pill: '1 запись ждёт выбора', row: 'конфликт версий',
+      dot: 'var(--dang)', bg: 'var(--dangq)', bd: 'var(--dang)', ink: 'var(--dang)', anim: 'none',
+      title: 'Одну запись изменили в двух местах',
+      body: 'github.com правили и здесь, и на iPhone. Обе версии сохранены целиком — Syncra не выбирает за вас и не склеивает их. Решение ждёт в списке столько, сколько нужно.',
+      tone: 'единственное состояние, требующее человека. Красный — потому что без выбора одна из версий рано или поздно уйдёт.'
+    }
+  };
+
+  errors = [
+    { ctx: 'Десктоп · разблокировка', level: 'внимание', k: 'warn',
+      title: 'PIN не подошёл — осталось 3 попытки',
+      body: 'После пятой неверной попытки PIN отключится, и хранилище откроется только мастер-паролем. Данные при этом останутся на месте.',
+      act: 'Ввести мастер-пароль', alt: 'или попробовать PIN ещё раз',
+      why: 'Считаем попытки вслух, чтобы блокировка не стала неожиданностью.' },
+    { ctx: 'Десктоп · импорт', level: 'внимание', k: 'warn',
+      title: 'Файл не распознан',
+      body: 'Это CSV, но без колонок с логином и паролем. Возможно, экспорт сделан не из менеджера паролей — попробуйте выгрузить заново.',
+      act: 'Выбрать другой файл', alt: 'ничего не импортировано',
+      why: 'Ошибка формата не трогает хранилище: до подтверждения ни одна запись не создаётся.' },
+    { ctx: 'Расширение · сопряжение', level: 'внимание', k: 'warn',
+      title: 'Код сопряжения истёк',
+      body: 'Одноразовый код живёт две минуты. Устройства не связались — просто покажите новый код и повторите.',
+      act: 'Показать новый код', alt: 'вводить ничего не нужно',
+      why: 'Короткая жизнь кода — часть защиты, поэтому истечение объясняем как штатное, а не как поломку.' },
+    { ctx: 'Десктоп · сохранение', level: 'риск', k: 'dang',
+      title: 'Не удалось записать файл хранилища',
+      body: 'Папка недоступна для записи или диск заполнен. Последнее изменение сейчас существует только в памяти приложения — не закрывайте окно.',
+      act: 'Повторить сохранение', alt: 'или выбрать другую папку',
+      why: 'Красный оправдан: это единственный случай, когда данные действительно могут пропасть.' }
+  ];
+
+  matrix = [
+    { name: 'Хранилище пусто', d: 'экран списка', i: 'экран списка', x: 'попап', k: 'calm', tone: 'Объясняем, почему пусто, и даём один шаг.' },
+    { name: 'Поиск без результата', d: 'вместо списка', i: 'вместо списка', x: 'вместо списка', k: 'calm', tone: 'Предлагаем создать запись с этим именем.' },
+    { name: 'Секция пуста', d: 'рабочая область', i: 'под фильтром', x: '—', k: 'calm', tone: 'Пунктирная рамка вместо иллюстрации.' },
+    { name: 'Нет устройств рядом', d: 'шапка + устройства', i: 'пилюля', x: 'подвал попапа', k: 'calm', tone: 'Серый покой. Никаких «Повторить».' },
+    { name: 'Идёт обмен', d: 'шапка', i: 'пилюля', x: 'подвал попапа', k: 'acc', tone: 'Пульс точки, интерфейс не блокируется.' },
+    { name: 'Ждут изменения', d: 'шапка + строка', i: 'пилюля + строка', x: '—', k: 'warn', tone: 'Жёлтый как знание, а не как задача.' },
+    { name: 'Обмен не удался', d: 'шапка', i: 'пилюля', x: 'подвал попапа', k: 'warn', tone: 'Данные целы, повтор автоматический.' },
+    { name: 'Конфликт версий', d: 'строка + диалог', i: 'строка + шторка', x: 'бейдж', k: 'dang', tone: 'Единственный экран, который ждёт решения.' },
+    { name: 'Ошибка записи', d: 'полоса в окне', i: 'баннер', x: '—', k: 'dang', tone: 'Красный: возможна потеря последнего изменения.' }
+  ];
+
+  baseVals() {
+    const cur = this.syncStates[this.state.sync] || this.syncStates.ok;
+    const dots = { calm: 'var(--tx3)', acc: 'var(--acc)', warn: 'var(--warn)', dang: 'var(--dang)' };
+    return {
+      sync: cur,
+      syncTabs: Object.keys(this.syncStates).map(k => {
+        const s = this.syncStates[k], on = this.state.sync === k;
+        return {
+          label: s.label, dot: s.dot,
+          bd: on ? s.bd : 'var(--bd)',
+          bg: on ? s.bg : 'var(--surf)',
+          ink: on ? 'var(--tx)' : 'var(--tx2)',
+          go: () => this.setState({ sync: k })
+        };
+      }),
+      toneLegend: [
+        { c: 'var(--acc)', t: 'Акцент — подтверждение и живой обмен' },
+        { c: 'var(--warn)', t: 'Внимание — ждёт, но само разрешится' },
+        { c: 'var(--dang)', t: 'Риск — нужен человек или что-то потеряно' },
+        { c: 'var(--tx3)', t: 'Покой — рядом никого, и это в порядке вещей' }
+      ],
+      errors: this.errors.map(e => ({
+        ...e,
+        dot: e.k === 'dang' ? 'var(--dang)' : 'var(--warn)',
+        bd: e.k === 'dang' ? 'var(--dang)' : 'var(--warn)',
+        bg: e.k === 'dang' ? 'var(--dangq)' : 'var(--warnq)'
+      })),
+      skeleton: [
+        { d: '0s', w1: '46%', w2: '62%' },
+        { d: '0.15s', w1: '58%', w2: '40%' },
+        { d: '0.3s', w1: '38%', w2: '54%' },
+        { d: '0.45s', w1: '52%', w2: '34%' }
+      ],
+      matrix: this.matrix.map(m => ({
+        ...m,
+        dot: dots[m.k],
+        c1: m.d === '—' ? 'var(--tx3)' : 'var(--tx2)',
+        c2: m.i === '—' ? 'var(--tx3)' : 'var(--tx2)',
+        c3: m.x === '—' ? 'var(--tx3)' : 'var(--tx2)'
+      }))
+    };
+  }
+
+  renderVals() {
+    const t = this.state.theme === 'light' ? 'light' : 'dark';
+    return Object.assign({}, this.baseVals() || {}, {
+      theme: t,
+      themeBtn: t === 'light' ? 'Тёмная' : 'Светлая',
+      toggleTheme: () => this.setState(s => ({ theme: s.theme === 'light' ? 'dark' : 'light' }))
+    });
+  }
+}
+</script>
+</body>
+</html>
