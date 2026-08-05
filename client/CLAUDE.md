@@ -46,7 +46,7 @@ Vue SPA — **единственная «морда» на все платфор
 - `npm run lint` — ESLint
 - `npm run test` — Vitest
 
-_[подставь под свой `package.json`, если имена отличаются]_
+Требуется **Node ≥ 22.18** (см. `engines`): на Node 20 не стартуют vitest-тесты в jsdom.
 
 ## Definition of Done (для любой задачи)
 

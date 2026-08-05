@@ -10,21 +10,36 @@
 
 ---
 
-## F0. Каркас и рельсы `[ ]`
+## F0. Каркас и рельсы `[x]`
 **Цель:** зелёная сборка и структура, в которую агент дополняет код.
 - Vite + Vue 3 + TS (strict), Pinia, Vue Router.
 - ESLint + Prettier + Vitest; `npm run {dev,build,test,typecheck,lint}` работают.
-- Структура: `src/{components,views,stores,composables,core,design}`.
+- Структура: `src/{components,views,stores,composables,core}`.
 - Заглушечный роут рендерится, один тривиальный тест зелёный.
 **Готово, когда:** чистая установка → все команды проходят, дев-сервер поднимается.
 
-## F1. IPC-слой + мок-ядро `[ ]`
+## F1. IPC-слой + мок-ядро `[x]`
 **Цель:** договор с бэком и фейк-ядро, разблокирующие всю дальнейшую UI-работу. **Самая важная задача — делать тщательно.**
 - `src/core/contract.ts`: типы команд/событий (для начала unlock + records CRUD + reveal; дополняется по ходу).
 - `src/core/ipc.ts`: типизированный клиент. В деве резолвится в мок, в проде — в реальный Tauri `invoke`.
 - `src/core/mock/`: in-memory фейк-ядро — держит записи, эмулирует reveal, задержки, ошибки; сид-данные для разработки.
 **Готово, когда:** компонент вызывает `ipc.listRecords()` и получает мок-данные; переключение мок ↔ реальный — одной точкой.
 **IPC:** `unlock`, `listRecords`, `getSecret(record_id)`, `createRecord`, `updateRecord`, `deleteRecord`.
+
+**Зафиксировано в контракте (нужно подтверждение бэкенд-агента):**
+- Имена команд на проводе — **snake_case**: `unlock`, `lock`, `list_records`, `get_secret`,
+  `create_record`, `update_record`, `delete_record` (`COMMAND_NAMES` в `contract.ts`).
+- Каждая команда принимает **один аргумент** `request`: `invoke('list_records', { request })`.
+  Поля запросов/ответов — snake_case, даты — ISO-8601 UTC.
+- Ошибка ядра — `{ code, message }`, коды в `CORE_ERROR_CODES`; UI нормализует всё в `CoreError`.
+  `message` показывается пользователю → не должен содержать секретов и путей.
+- События: `unlocked`, `locked` (`{ locked_at, reason: manual|timeout|system }`). Остальные — по мере задач.
+- Секреты пересекают границу **только** в ответе `get_secret`. `list_records` возвращает
+  `RecordMeta` без секретных полей — проверяется тестом.
+- Переключение реализаций: `VITE_CORE=mock|tauri`, по умолчанию прод → Tauri, дев/тесты → мок
+  (`resolveCoreMode` + `initCoreClient` в `src/core/ipc.ts`, вызывается из `main.ts`).
+- Мастер-пароль дев-мока: `syncra-dev` (`MOCK_MASTER_PASSWORD`).
+- Временно: `HomeView.vue` — проба сквозного пути (сам делает unlock). Заменяется в F3/F4.
 
 ## F2. Дизайн-система и токены `[ ]`
 **Цель:** базовый слой представления из макетов.
