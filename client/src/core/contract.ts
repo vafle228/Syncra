@@ -104,6 +104,8 @@ export const CORE_ERROR_CODES = [
   'INVALID_MASTER_PASSWORD',
   /** Хранилище ещё не инициализировано. */
   'NOT_INITIALIZED',
+  /** `init_vault` по уже созданному хранилищу (F3). */
+  'ALREADY_INITIALIZED',
   /** Запись/сущность не найдена (или является tombstone). */
   'NOT_FOUND',
   /** Запрос не прошёл валидацию ядра. */
@@ -127,6 +129,46 @@ export interface CoreErrorPayload {
 // ---------------------------------------------------------------------------
 // Команды
 // ---------------------------------------------------------------------------
+
+/**
+ * Состояние хранилища (F3). Запрашивается ДО всего остального: по нему UI
+ * решает, показать онбординг, экран входа или сам продукт.
+ * Команда работает и на заблокированном, и на неинициализированном хранилище.
+ */
+export interface VaultStatus {
+  /** Хранилище создано (мастер-пароль задан, ключи сгенерированы ядром). */
+  initialized: boolean
+  unlocked: boolean
+  /** `null`, пока хранилище заблокировано. */
+  unlocked_at: IsoDateTime | null
+}
+
+export type GetVaultStatusRequest = Record<string, never>
+export type GetVaultStatusResponse = VaultStatus
+
+/**
+ * Первичная инициализация (F3, §3.9).
+ *
+ * UI шлёт ТОЛЬКО введённый пользователем мастер-пароль. Генерация ключей,
+ * KDF и создание файла хранилища — целиком в ядре: на фронте крипты нет.
+ * Успешная инициализация сразу оставляет хранилище разблокированным —
+ * заставлять пользователя вводить пароль второй раз подряд бессмысленно.
+ */
+export interface InitVaultRequest {
+  master_password: string
+}
+
+export interface InitVaultResponse {
+  initialized_at: IsoDateTime
+  unlocked_at: IsoDateTime
+}
+
+/**
+ * Минимальная длина мастер-пароля. Политику задаёт ядро — здесь она продублирована,
+ * чтобы UI мог подсветить проблему до отправки команды. Ядро всё равно проверяет
+ * повторно и возвращает `VALIDATION`.
+ */
+export const MASTER_PASSWORD_MIN_LENGTH = 8
 
 export interface UnlockRequest {
   master_password: string
@@ -169,6 +211,8 @@ export interface DeleteRecordRequest {
  * Служит единым источником истины для `ipc.ts` и мок-ядра.
  */
 export interface CommandMap {
+  getVaultStatus: { request: GetVaultStatusRequest; response: GetVaultStatusResponse }
+  initVault: { request: InitVaultRequest; response: InitVaultResponse }
   unlock: { request: UnlockRequest; response: UnlockResponse }
   lock: { request: Record<string, never>; response: null }
   listRecords: { request: ListRecordsRequest; response: ListRecordsResponse }
@@ -183,6 +227,8 @@ export type CommandName = keyof CommandMap
 
 /** Имена команд на проводе (Tauri `invoke`). */
 export const COMMAND_NAMES: Record<CommandName, string> = {
+  getVaultStatus: 'get_vault_status',
+  initVault: 'init_vault',
   unlock: 'unlock',
   lock: 'lock',
   listRecords: 'list_records',

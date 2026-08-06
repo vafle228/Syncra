@@ -8,6 +8,7 @@ import {
   type CommandName,
   type EventMap,
   type EventName,
+  type InitVaultResponse,
   type ListRecordsRequest,
   type RecordDraft,
   type RecordId,
@@ -15,6 +16,7 @@ import {
   type RecordPatch,
   type RecordSecrets,
   type UnlockResponse,
+  type VaultStatus,
 } from './contract'
 import { toCoreError } from './errors'
 
@@ -29,6 +31,18 @@ export type Unsubscribe = () => void
  * Tauri-клиент взаимозаменяемы за этим интерфейсом.
  */
 export interface CoreClient {
+  /**
+   * Создано ли хранилище и открыто ли оно сейчас. Работает на заблокированном
+   * и на неинициализированном хранилище — с этого начинается запуск UI (F3).
+   */
+  getVaultStatus(): Promise<VaultStatus>
+
+  /**
+   * Создать хранилище (§3.9). UI отдаёт только введённый пароль; ключи
+   * генерирует ядро. После успеха хранилище уже разблокировано.
+   */
+  initVault(masterPassword: string): Promise<InitVaultResponse>
+
   /** Разблокировать хранилище мастер-паролем (§7.3). */
   unlock(masterPassword: string): Promise<UnlockResponse>
 
@@ -74,6 +88,8 @@ async function call<C extends CommandName>(
 
 export function createTauriCoreClient(): CoreClient {
   return {
+    getVaultStatus: () => call('getVaultStatus', {}),
+    initVault: (masterPassword) => call('initVault', { master_password: masterPassword }),
     unlock: (masterPassword) => call('unlock', { master_password: masterPassword }),
     lock: async () => {
       await call('lock', {})
@@ -133,7 +149,9 @@ let client: CoreClient | null = null
 export async function initCoreClient(mode: CoreMode = resolveCoreMode()): Promise<CoreClient> {
   if (mode === 'mock') {
     const { createMockCoreClient } = await import('./mock')
-    client = createMockCoreClient()
+    // `VITE_CORE_FRESH=1` — эмуляция первого запуска: хранилища ещё нет,
+    // мок-ядро отдаёт NOT_INITIALIZED и UI уходит в онбординг (F3).
+    client = createMockCoreClient({ initialized: import.meta.env.VITE_CORE_FRESH !== '1' })
   } else {
     client = createTauriCoreClient()
   }

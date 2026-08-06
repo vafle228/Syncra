@@ -1,7 +1,12 @@
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { mount } from '@vue/test-utils'
 
 import App from '../App.vue'
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+})
 
 describe('App', () => {
   it('монтируется и отдаёт выход роутера', () => {

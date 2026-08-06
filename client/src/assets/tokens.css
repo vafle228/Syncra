@@ -1,0 +1,165 @@
+/*
+ * Токены дизайн-системы Syncra (F2).
+ *
+ * Источник — макет `design/Syncra Design System.dc.html`. Значения перенесены
+ * один в один; здесь они только получают говорящие имена и префикс `--sy-`.
+ * Хардкодить цвета, размеры и отступы в компонентах нельзя — только эти токены.
+ *
+ * Темизация: тема выбирается атрибутом `data-theme` на <html>, который ставит
+ * `useTheme()`. Тёмная — основная и работает даже без атрибута.
+ *
+ * ПРИВАТНОСТЬ: шрифты не подгружаются из сети (§4.2 и «Закон №1» в CLAUDE.md).
+ * IBM Plex берётся из системы, если он там есть; иначе — системный стек.
+ * Никаких @import с внешних CDN в этом файле быть не должно.
+ */
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Поверхности: от шасси окна к диалогам. */
+  --sy-bg-0: oklch(0.175 0.008 255); /* сайдбар, шасси окна */
+  --sy-bg-1: oklch(0.212 0.008 255); /* рабочая область */
+  --sy-surface: oklch(0.248 0.009 255); /* карточки, поля */
+  --sy-surface-2: oklch(0.288 0.01 255); /* ховер, диалоги */
+
+  --sy-border: oklch(0.322 0.01 255);
+  --sy-border-strong: oklch(0.41 0.012 255);
+
+  /* Текст — ровно три уровня, четвёртого не заводить. */
+  --sy-text: oklch(0.955 0.004 255);
+  --sy-text-2: oklch(0.735 0.008 255);
+  --sy-text-3: oklch(0.575 0.009 255);
+
+  /* Акцент mint · 168. Остальные варианты (cyan/copper/indigo) — в макете. */
+  --sy-accent: oklch(0.8 0.13 168);
+  --sy-accent-quiet: oklch(0.8 0.13 168 / 0.14);
+  --sy-accent-border: oklch(0.8 0.13 168 / 0.38);
+  --sy-accent-fg: oklch(0.2 0.03 168);
+
+  /* Семантика — экономно. Красный зарезервирован за потерей данных. */
+  --sy-ok: oklch(0.78 0.13 158);
+  --sy-warn: oklch(0.855 0.135 98);
+  --sy-warn-quiet: oklch(0.855 0.135 98 / 0.13);
+  --sy-danger: oklch(0.69 0.16 26);
+  --sy-danger-quiet: oklch(0.69 0.16 26 / 0.14);
+  --sy-danger-fg: oklch(0.985 0 0);
+
+  --sy-shadow: 0 1px 2px rgb(0 0 0 / 0.34), 0 10px 28px -16px rgb(0 0 0 / 0.72);
+  --sy-shadow-window: 0 30px 70px -34px rgb(0 0 0 / 0.78);
+  --sy-scrim: oklch(0.14 0.008 255 / 0.62);
+
+  /*
+   * Локальные иконки-заглушки. Значения — «L C» без hue: конкретный тон
+   * подставляет компонент по хэшу домена (`oklch(var(--sy-icon-bg) 172)`).
+   * Фавиконы из сети не грузим никогда — это утечка списка сервисов.
+   */
+  --sy-icon-bg: 0.33 0.055;
+  --sy-icon-border: 0.43 0.07;
+  --sy-icon-ink: 0.86 0.09;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* Иерархия поверхностей инвертируется: карточка светлее фона. */
+  --sy-bg-0: oklch(0.972 0.003 255);
+  --sy-bg-1: oklch(0.952 0.004 255);
+  --sy-surface: oklch(1 0 0);
+  --sy-surface-2: oklch(0.935 0.005 255);
+
+  --sy-border: oklch(0.9 0.005 255);
+  --sy-border-strong: oklch(0.832 0.006 255);
+
+  --sy-text: oklch(0.245 0.01 255);
+  --sy-text-2: oklch(0.445 0.01 255);
+  --sy-text-3: oklch(0.505 0.012 255);
+
+  /* Акцент темнее на ~0.28 L при той же hue — контраст ≥ 4.5:1 на bg-0/bg-1. */
+  --sy-accent: oklch(0.52 0.12 168);
+  --sy-accent-quiet: oklch(0.52 0.12 168 / 0.1);
+  --sy-accent-border: oklch(0.52 0.12 168 / 0.32);
+  --sy-accent-fg: oklch(0.985 0.015 168);
+
+  --sy-ok: oklch(0.52 0.115 158);
+  /* Жёлтый уходит в янтарь: на белом он иначе не читается. */
+  --sy-warn: oklch(0.535 0.12 70);
+  --sy-warn-quiet: oklch(0.535 0.12 70 / 0.11);
+  --sy-danger: oklch(0.53 0.18 26);
+  --sy-danger-quiet: oklch(0.53 0.18 26 / 0.09);
+  --sy-danger-fg: oklch(0.985 0 0);
+
+  --sy-shadow: 0 1px 2px oklch(0.3 0.02 255 / 0.07), 0 8px 22px -14px oklch(0.3 0.02 255 / 0.3);
+  --sy-shadow-window: 0 30px 70px -34px oklch(0.3 0.02 255 / 0.34);
+  --sy-scrim: oklch(0.45 0.01 255 / 0.36);
+
+  --sy-icon-bg: 0.93 0.038;
+  --sy-icon-border: 0.868 0.055;
+  --sy-icon-ink: 0.47 0.115;
+}
+
+:root {
+  /* Типографика. Sans — интерфейс, mono — всё, что читают по символам. */
+  --sy-font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sy-font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+
+  --sy-text-display: 40px;
+  --sy-text-display-lh: 44px;
+  --sy-text-h1: 28px;
+  --sy-text-h1-lh: 34px;
+  --sy-text-h2: 20px;
+  --sy-text-h2-lh: 26px;
+  --sy-text-h3: 17px;
+  --sy-text-h3-lh: 24px;
+  --sy-text-body-strong: 15px;
+  --sy-text-body-strong-lh: 22px;
+  --sy-text-body: 13.5px;
+  --sy-text-body-lh: 20px;
+  --sy-text-small: 12.5px;
+  --sy-text-small-lh: 18px;
+  --sy-text-label: 11px;
+  --sy-text-label-lh: 16px;
+
+  --sy-weight-regular: 450;
+  --sy-weight-medium: 500;
+  --sy-weight-semibold: 600;
+
+  --sy-tracking-label: 0.1em;
+
+  /* Отступы. Шаг сетки — 4px, промежуточные ступени из макета. */
+  --sy-space-1: 4px;
+  --sy-space-2: 6px;
+  --sy-space-3: 8px;
+  --sy-space-4: 10px;
+  --sy-space-5: 12px;
+  --sy-space-6: 16px;
+  --sy-space-7: 20px;
+  --sy-space-8: 24px;
+  --sy-space-9: 32px;
+  --sy-space-10: 44px;
+
+  /* Форма. */
+  --sy-radius-xs: 6px;
+  --sy-radius-sm: 8px;
+  --sy-radius: 10px;
+  --sy-radius-lg: 14px;
+  --sy-radius-pill: 999px;
+
+  --sy-control-height: 36px;
+  --sy-control-height-sm: 30px;
+  --sy-control-height-lg: 42px;
+  --sy-row-height: 56px;
+
+  --sy-focus-ring: 0 0 0 3px var(--sy-accent-quiet);
+}
+
+:root {
+  --sy-transition: 120ms ease-out;
+}
+
+/* Уважаем системную настройку «меньше движения». */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --sy-transition: 0s;
+  }
+}

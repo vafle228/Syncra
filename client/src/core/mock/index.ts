@@ -2,6 +2,7 @@ import type {
   CoreErrorCode,
   EventMap,
   EventName,
+  InitVaultResponse,
   IsoDateTime,
   ListRecordsRequest,
   RecordDraft,
@@ -10,7 +11,9 @@ import type {
   RecordPatch,
   RecordSecrets,
   UnlockResponse,
+  VaultStatus,
 } from '../contract'
+import { MASTER_PASSWORD_MIN_LENGTH } from '../contract'
 import { CoreError } from '../errors'
 import type { CoreClient, Unsubscribe } from '../ipc'
 import { createSeed, MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, type MockSeedEntry } from './seed'
@@ -37,6 +40,11 @@ export interface MockCoreOptions {
   now?: () => Date
   /** Начинать разблокированным (удобно для UI-тестов, минующих экран входа). */
   startUnlocked?: boolean
+  /**
+   * Есть ли уже созданное хранилище. `false` — эмуляция первого запуска (F3):
+   * сид не загружается, любая команда до `initVault` падает `NOT_INITIALIZED`.
+   */
+  initialized?: boolean
 }
 
 /** Ручки управления фейк-ядром: только для разработки и тестов. */
@@ -47,6 +55,7 @@ export interface MockCoreControl {
   /** Заблокировать «снаружи»: таймаут бездействия, сон системы. */
   forceLock(reason: EventMap['locked']['reason']): void
   isUnlocked(): boolean
+  isInitialized(): boolean
   /** Вернуть фейк-ядро к исходному сиду. */
   reset(): void
 }
@@ -91,7 +100,6 @@ function requirePresent(value: string, field: string): string {
 }
 
 export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreClient {
-  const masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
   const now = options.now ?? (() => new Date())
   let latencyMs = options.latencyMs ?? DEFAULT_LATENCY_MS
 
@@ -100,7 +108,10 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   const failures: CoreError[] = []
   const handlers = new Map<EventName, Set<(payload: never) => void>>()
 
+  let masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
+  let initialized = options.initialized !== false
   let unlocked = false
+  let unlockedAt: IsoDateTime | null = null
 
   function timestamp(): IsoDateTime {
     return now().toISOString()
@@ -109,6 +120,8 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   function loadSeed(): void {
     meta.clear()
     secrets.clear()
+    // Свежесозданное хранилище пустое: сид — это «данные, которые уже были».
+    if (!initialized) return
     for (const entry of options.seed ?? createSeed()) {
       meta.set(entry.meta.record_id, cloneMeta(entry.meta))
       // У надгробия нет полезной нагрузки — секреты не заводим.
@@ -125,11 +138,15 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   }
 
   /** Общий пролог команды: задержка, впрыск ошибки, проверка замка. */
-  async function enter(gate: { requiresUnlock: boolean }): Promise<void> {
+  async function enter(gate: { requiresUnlock: boolean; requiresInit?: boolean }): Promise<void> {
     await delay(latencyMs)
 
     const injected = failures.shift()
     if (injected) throw injected
+
+    if ((gate.requiresInit ?? gate.requiresUnlock) && !initialized) {
+      throw new CoreError('NOT_INITIALIZED', 'Хранилище ещё не создано.')
+    }
 
     if (gate.requiresUnlock && !unlocked) {
       throw new CoreError('LOCKED', 'Хранилище заблокировано.')
@@ -144,27 +161,66 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     return found
   }
 
+  function doUnlock(): IsoDateTime {
+    unlocked = true
+    unlockedAt = timestamp()
+    emit('unlocked', { unlocked_at: unlockedAt })
+    return unlockedAt
+  }
+
   function doLock(reason: EventMap['locked']['reason']): void {
     if (!unlocked) return
     unlocked = false
+    unlockedAt = null
     emit('locked', { locked_at: timestamp(), reason })
   }
 
   loadSeed()
-  if (options.startUnlocked) unlocked = true
+  if (options.startUnlocked && initialized) {
+    unlocked = true
+    unlockedAt = timestamp()
+  }
 
   const client: MockCoreClient = {
+    async getVaultStatus(): Promise<VaultStatus> {
+      // Статус доступен всегда: с него начинается запуск UI.
+      await enter({ requiresUnlock: false, requiresInit: false })
+      return { initialized, unlocked, unlocked_at: unlockedAt }
+    },
+
+    async initVault(masterPasswordInput: string): Promise<InitVaultResponse> {
+      await enter({ requiresUnlock: false, requiresInit: false })
+
+      if (initialized) {
+        throw new CoreError('ALREADY_INITIALIZED', 'Хранилище на этом устройстве уже создано.')
+      }
+      if (masterPasswordInput.length < MASTER_PASSWORD_MIN_LENGTH) {
+        throw new CoreError(
+          'VALIDATION',
+          `Мастер-пароль короче ${MASTER_PASSWORD_MIN_LENGTH} символов.`,
+        )
+      }
+
+      // В настоящем ядре здесь генерация ключей и KDF. Фейк-ядро просто
+      // запоминает пароль: крипты во фронте нет и в моке её быть не должно.
+      masterPassword = masterPasswordInput
+      initialized = true
+      // Только что созданное хранилище пустое — записи заводит уже пользователь.
+      meta.clear()
+      secrets.clear()
+
+      const initializedAt = timestamp()
+      return { initialized_at: initializedAt, unlocked_at: doUnlock() }
+    },
+
     async unlock(masterPasswordInput: string): Promise<UnlockResponse> {
-      await enter({ requiresUnlock: false })
+      await enter({ requiresUnlock: false, requiresInit: true })
 
       if (masterPasswordInput !== masterPassword) {
         throw new CoreError('INVALID_MASTER_PASSWORD', 'Неверный мастер-пароль.')
       }
 
-      unlocked = true
-      const unlockedAt = timestamp()
-      emit('unlocked', { unlocked_at: unlockedAt })
-      return { unlocked_at: unlockedAt }
+      return { unlocked_at: doUnlock() }
     },
 
     async lock(): Promise<void> {
@@ -310,10 +366,16 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       isUnlocked() {
         return unlocked
       },
+      isInitialized() {
+        return initialized
+      },
       reset() {
+        masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
+        initialized = options.initialized !== false
         loadSeed()
         failures.length = 0
-        unlocked = options.startUnlocked === true
+        unlocked = initialized && options.startUnlocked === true
+        unlockedAt = unlocked ? timestamp() : null
       },
     },
   }
