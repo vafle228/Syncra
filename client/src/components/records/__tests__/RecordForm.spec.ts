@@ -1,0 +1,254 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises, mount } from '@vue/test-utils'
+
+import type { RecordMeta } from '@/core/contract'
+import { setCoreClient } from '@/core/ipc'
+import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import { useRecordsStore } from '@/stores/useRecordsStore'
+import RecordForm from '../RecordForm.vue'
+
+/**
+ * Форма записи (F5). Ключевое поведение редактирования: пустое секретное поле
+ * означает «не менять», а не «стереть», — и форма не подтягивает секреты сама.
+ */
+
+let core: MockCoreClient
+
+const GITHUB = '6f1c2e14-4c1e-4a3f-9b4a-1f9f0c7a1003'
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+  core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
+  setCoreClient(core)
+})
+
+afterEach(() => {
+  setCoreClient(null)
+})
+
+type Form = ReturnType<typeof mount>
+
+async function type(input: ReturnType<Form['find']>, value: string) {
+  const element = input.element as HTMLInputElement
+  element.value = value
+  await input.trigger('input')
+}
+
+/** Найти поле по подписи и вписать значение. */
+async function fill(wrapper: Form, label: string, value: string) {
+  // Адреса — список полей без собственных подписей у каждого input.
+  if (label === 'Адреса сайта') {
+    await type(wrapper.find('.form__url-input input'), value)
+    return
+  }
+
+  const field = wrapper.findAll('.sy-input').find((node) => {
+    const caption = node.find('.sy-input__label')
+    return caption.exists() && caption.text() === label
+  })
+  if (!field) throw new Error(`Поле «${label}» не найдено`)
+
+  await type(field.find('input'), value)
+}
+
+function submit(wrapper: Form) {
+  return wrapper.find('form').trigger('submit')
+}
+
+/** Явный разовый reveal ради правки — кнопка рядом с полем пароля. */
+async function revealCurrent(wrapper: Form) {
+  const button = wrapper.findAll('button').find((node) => node.text() === 'Показать текущий')
+  if (!button) throw new Error('Кнопка «Показать текущий» не найдена')
+
+  await button.trigger('click')
+  await flushPromises()
+}
+
+async function mountEdit() {
+  const list = useRecordsStore()
+  await list.load()
+  const record = list.records.find((item) => item.record_id === GITHUB) as RecordMeta
+
+  const wrapper = mount(RecordForm, { props: { record } })
+  await flushPromises()
+  return { wrapper, list, record }
+}
+
+describe('RecordForm · создание', () => {
+  it('создаёт запись в ядре и сообщает о ней наверх', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await fill(wrapper, 'Логин', 'anna@studio.example')
+    await fill(wrapper, 'Адреса сайта', 'https://figma.com')
+    await fill(wrapper, 'Пароль', 'mock-figma-pw')
+    await fill(wrapper, 'Метка аккаунта', 'рабочий')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(wrapper.emitted('saved')).toBeTruthy()
+    const created = list.records.find((record) => record.service_name === 'Figma')
+    expect(created?.login).toBe('anna@studio.example')
+    expect(created?.urls).toEqual(['https://figma.com'])
+    expect(created?.account_label).toBe('рабочий')
+    expect((await core.getSecret(created!.record_id)).password).toBe('mock-figma-pw')
+
+    wrapper.unmount()
+  })
+
+  it('не отправляет черновик без обязательных полей', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(wrapper.emitted('saved')).toBeUndefined()
+    expect(wrapper.text()).toContain('Логин обязателен.')
+    expect(wrapper.text()).toContain('Пароль обязателен.')
+    expect(list.total).toBe(4)
+
+    wrapper.unmount()
+  })
+
+  it('не пропускает строку, не похожую на адрес', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await fill(wrapper, 'Логин', 'anna')
+    await fill(wrapper, 'Пароль', 'mock-figma-pw')
+    await fill(wrapper, 'Адреса сайта', 'htp:/figma')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Не похоже на адрес')
+    expect(wrapper.emitted('saved')).toBeUndefined()
+    expect(list.total).toBe(4)
+
+    wrapper.unmount()
+  })
+
+  it('пустые строки адресов не превращаются в адреса', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await fill(wrapper, 'Логин', 'anna')
+    await fill(wrapper, 'Пароль', 'mock-figma-pw')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(list.records.find((record) => record.service_name === 'Figma')?.urls).toEqual([])
+
+    wrapper.unmount()
+  })
+
+  it('показывает сообщение ядра, если сохранить не удалось', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+    core.control.failNext('INTERNAL', 'Хранилище занято.')
+
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await fill(wrapper, 'Логин', 'anna')
+    await fill(wrapper, 'Пароль', 'mock-figma-pw')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Хранилище занято.')
+    expect(wrapper.emitted('saved')).toBeUndefined()
+
+    wrapper.unmount()
+  })
+})
+
+describe('RecordForm · редактирование (ЗАКОН №1)', () => {
+  it('открывается с метаданными, но без единого секрета', async () => {
+    const { wrapper } = await mountEdit()
+
+    expect(wrapper.find<HTMLInputElement>('.sy-input input').element.value).toBe('GitHub')
+    expect(wrapper.html()).not.toContain('mock-github-pw')
+    expect(wrapper.html()).not.toContain('MOCKTOTPSECRET')
+    expect(wrapper.html()).not.toContain('Recovery codes')
+
+    wrapper.unmount()
+  })
+
+  it('пустое секретное поле означает «оставить как было»', async () => {
+    const { wrapper, record } = await mountEdit()
+
+    await fill(wrapper, 'Метка аккаунта', 'основной')
+    await submit(wrapper)
+    await flushPromises()
+
+    const updated = useRecordsStore().records.find((item) => item.record_id === GITHUB)
+    expect(updated?.account_label).toBe('основной')
+    // Пароль не трогали: ни значение, ни дата его смены не изменились.
+    expect((await core.getSecret(GITHUB)).password).toBe('mock-github-pw')
+    expect(updated?.password_updated_at).toBe(record.password_updated_at)
+    expect(updated?.has_notes).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('заменяет пароль, когда его действительно ввели', async () => {
+    const { wrapper, record } = await mountEdit()
+
+    await fill(wrapper, 'Пароль', 'mock-github-pw-2')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect((await core.getSecret(GITHUB)).password).toBe('mock-github-pw-2')
+    const updated = useRecordsStore().records.find((item) => item.record_id === GITHUB)
+    expect(updated?.password_updated_at).not.toBe(record.password_updated_at)
+
+    wrapper.unmount()
+  })
+
+  it('подставляет текущее значение только по явному нажатию', async () => {
+    const { wrapper } = await mountEdit()
+
+    await revealCurrent(wrapper)
+
+    expect(wrapper.find<HTMLInputElement>('input[type="password"]').element.value).toBe(
+      'mock-github-pw',
+    )
+
+    wrapper.unmount()
+  })
+
+  it('не даёт стереть пароль в ноль', async () => {
+    const { wrapper } = await mountEdit()
+
+    await revealCurrent(wrapper)
+
+    await fill(wrapper, 'Пароль', '')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Пароль не может быть пустым.')
+    expect((await core.getSecret(GITHUB)).password).toBe('mock-github-pw')
+
+    wrapper.unmount()
+  })
+
+  it('черновик с секретом не оседает в Pinia', async () => {
+    const { wrapper, list } = await mountEdit()
+
+    await fill(wrapper, 'Пароль', 'mock-github-pw-3')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(JSON.stringify(list.$state)).not.toContain('mock-github-pw-3')
+
+    wrapper.unmount()
+  })
+})

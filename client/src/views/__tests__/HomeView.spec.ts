@@ -201,6 +201,92 @@ describe('HomeView · поиск', () => {
   })
 })
 
+describe('HomeView · выбор записи и панели', () => {
+  it('не открывает ничью карточку сама', async () => {
+    const wrapper = await mountHome()
+
+    expect(wrapper.text()).toContain('Запись не выбрана')
+    expect(wrapper.find('.card').exists()).toBe(false)
+  })
+
+  it('открывает карточку по клику на строку', async () => {
+    const wrapper = await mountHome()
+
+    await wrapper.findAll('.home__row')[0]!.trigger('click')
+    await flushPromises()
+
+    const card = wrapper.find('.card')
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain('GitHub')
+    // Открытая карточка не показывает секретов, пока их не попросили.
+    expect(wrapper.html()).not.toMatch(/mock-[a-z]+-pw/)
+  })
+
+  it('переключает панель в форму по «Изменить» и обратно по «Отмена»', async () => {
+    const wrapper = await mountHome()
+    await wrapper.findAll('.home__row')[0]!.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.card__head-actions button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.form__title').text()).toBe('Изменить запись')
+
+    await wrapper.find('.form__head-actions button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.card').exists()).toBe(true)
+  })
+
+  it('заводит новую запись сквозным путём: форма → ядро → список', async () => {
+    const wrapper = await mountHome()
+
+    await wrapper.find('.home__new').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.form__title').text()).toBe('Новая запись')
+
+    const inputs = wrapper.findAll<HTMLInputElement>('.form__grid .sy-input input')
+    const set = async (index: number, value: string) => {
+      const input = inputs[index]!
+      input.element.value = value
+      await input.trigger('input')
+    }
+    // Порядок полей в сетке: сервис, логин, адрес, метка.
+    await set(0, 'Figma')
+    await set(1, 'anna@studio.example')
+    await set(2, 'https://figma.com')
+
+    const password = wrapper.find<HTMLInputElement>('.form__secrets input[type="password"]')
+    password.element.value = 'mock-figma-pw'
+    await password.trigger('input')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    // Запись появилась в списке, панель показывает уже её карточку.
+    expect(wrapper.findAll('.home__group-list li')).toHaveLength(5)
+    expect(wrapper.find('.card__title').text()).toBe('Figma')
+    expect(wrapper.find('.home__count').text()).toContain('5 записей · 4 сервиса')
+    expect(wrapper.html()).not.toContain('mock-figma-pw')
+  })
+
+  it('после удаления запись уходит из списка, а панель — в пустое состояние', async () => {
+    const wrapper = await mountHome()
+    await wrapper.findAll('.home__row')[0]!.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.card__foot .sy-button--danger').trigger('click')
+    await flushPromises()
+    const confirm = [...document.body.querySelectorAll('.sy-modal__actions button')].find((node) =>
+      node.textContent?.includes('Удалить запись'),
+    ) as HTMLButtonElement
+    confirm.click()
+    await flushPromises()
+
+    expect(wrapper.findAll('.home__group-list li')).toHaveLength(3)
+    expect(wrapper.text()).not.toContain('demo-user')
+    expect(wrapper.text()).toContain('Запись не выбрана')
+  })
+})
+
 describe('HomeView · блокировка', () => {
   it('блокирует хранилище и уводит на экран входа', async () => {
     const wrapper = await mountHome()

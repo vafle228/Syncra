@@ -224,6 +224,77 @@ describe('CRUD', () => {
   })
 })
 
+describe('флаги заполненности секретных полей', () => {
+  it('выводит has_notes / has_totp из самих секретов, а не со слов UI', async () => {
+    const withNotes = await core.createRecord({
+      service_name: 'С заметкой',
+      urls: [],
+      login: 'a',
+      password: 'b',
+      notes: 'что-то важное',
+    })
+    expect(withNotes.has_notes).toBe(true)
+    expect(withNotes.has_totp).toBe(false)
+
+    const empty = await core.createRecord({
+      service_name: 'Пустая',
+      urls: [],
+      login: 'a',
+      password: 'b',
+      // Пробельная заметка — это не заметка.
+      notes: '   ',
+      totp_secret: null,
+    })
+    expect(empty.has_notes).toBe(false)
+    expect(empty.has_totp).toBe(false)
+  })
+
+  it('пересчитывает флаги при изменении записи', async () => {
+    const created = await core.createRecord({
+      service_name: 'Сервис',
+      urls: [],
+      login: 'a',
+      password: 'b',
+      notes: 'заметка',
+    })
+
+    const withTotp = await core.updateRecord(created.record_id, { totp_secret: 'MOCKTOTP' })
+    expect(withTotp.has_totp).toBe(true)
+    expect(withTotp.has_notes).toBe(true)
+
+    const cleared = await core.updateRecord(created.record_id, { notes: null })
+    expect(cleared.has_notes).toBe(false)
+    expect(cleared.has_totp).toBe(true)
+  })
+
+  it('снимает флаги с надгробия: секретов у него больше нет', async () => {
+    const created = await core.createRecord({
+      service_name: 'Сервис',
+      urls: [],
+      login: 'a',
+      password: 'b',
+      notes: 'заметка',
+      totp_secret: 'MOCKTOTP',
+    })
+
+    const tombstone = await core.deleteRecord(created.record_id)
+
+    expect(tombstone.has_notes).toBe(false)
+    expect(tombstone.has_totp).toBe(false)
+  })
+
+  it('сид тоже считает флаги по своим секретам', async () => {
+    const records = await core.listRecords()
+    const github = records.find((r) => r.service_name === 'GitHub')
+    const steam = records.find((r) => r.service_name === 'Steam')
+
+    expect(github?.has_notes).toBe(true)
+    expect(github?.has_totp).toBe(true)
+    expect(steam?.has_notes).toBe(false)
+    expect(steam?.has_totp).toBe(false)
+  })
+})
+
 describe('эмуляция ядра', () => {
   it('впрыскивает ошибку в следующую команду', async () => {
     core.control.failNext('INTERNAL')

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import SyButton from '../SyButton.vue'
+import SyCopyButton from '../SyCopyButton.vue'
 import SyEmptyState from '../SyEmptyState.vue'
 import SyInput from '../SyInput.vue'
 import SyListItem from '../SyListItem.vue'
 import SyModal from '../SyModal.vue'
+import SySecretField from '../SySecretField.vue'
 import { iconHue, iconInitials } from '../localIcon'
 
 describe('SyButton', () => {
@@ -159,6 +161,57 @@ describe('SyListItem', () => {
     // Ни <img>, ни background-image: фавиконы из сети не тянем никогда.
     expect(wrapper.find('img').exists()).toBe(false)
     expect(icon.attributes('style')).not.toContain('url(')
+  })
+})
+
+describe('SyCopyButton', () => {
+  it('показывает отсчёт очистки буфера прямо в кнопке', () => {
+    const wrapper = mount(SyCopyButton, {
+      props: { label: 'Копировать пароль', copied: true, seconds: 14 },
+    })
+
+    expect(wrapper.text()).toBe('Скопировано · 14')
+    expect(wrapper.classes()).toContain('sy-copy--copied')
+  })
+
+  it('честно называет крайние состояния и не даёт нажать', () => {
+    const empty = mount(SyCopyButton, { props: { label: 'Копировать', empty: true } })
+    expect(empty.text()).toBe('Нечего копировать')
+    expect(empty.attributes('disabled')).toBeDefined()
+
+    const broken = mount(SyCopyButton, { props: { label: 'Копировать', unavailable: true } })
+    expect(broken.text()).toBe('Буфер недоступен')
+    expect(broken.attributes('disabled')).toBeDefined()
+  })
+})
+
+describe('SySecretField', () => {
+  it('маскирует значение фиксированной длиной: длина пароля — тоже секрет', () => {
+    const short = mount(SySecretField, { props: { label: 'Пароль' } })
+    const long = mount(SySecretField, { props: { label: 'Пароль' } })
+
+    expect(short.find('.sy-secret__mask').text()).toBe(long.find('.sy-secret__mask').text())
+    expect(short.text()).toContain('копировать можно, не открывая')
+  })
+
+  it('открытое значение сопровождает обещанием закрыться', () => {
+    const wrapper = mount(SySecretField, {
+      props: { label: 'Пароль', value: 'секрет-на-экране', hideIn: 25 },
+    })
+
+    expect(wrapper.find('.sy-secret__value').text()).toBe('секрет-на-экране')
+    expect(wrapper.text()).toContain('скроется автоматически через 25 с')
+    expect(wrapper.find('.sy-secret__toggle').text()).toBe('Скрыть')
+  })
+
+  it('у пустого поля нечего открывать', () => {
+    const wrapper = mount(SySecretField, {
+      props: { label: 'Заметки', present: false, emptyText: 'Заметок нет' },
+    })
+
+    expect(wrapper.text()).toBe('ЗаметкиЗаметок нет')
+    expect(wrapper.find('.sy-secret__toggle').exists()).toBe(false)
+    expect(wrapper.find('.sy-copy').exists()).toBe(false)
   })
 })
 

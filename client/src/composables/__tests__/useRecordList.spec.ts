@@ -22,6 +22,8 @@ function record(partial: Partial<RecordMeta> = {}): RecordMeta {
     urls: [],
     login: 'user',
     account_label: null,
+    has_notes: false,
+    has_totp: false,
     version: 1,
     created_at: stamp,
     updated_at: stamp,

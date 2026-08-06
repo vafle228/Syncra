@@ -1,8 +1,14 @@
 import type { RecordMeta, RecordSecrets } from '../contract'
 
-/** Одна запись фейк-ядра: метаданные + секреты живут раздельно, как в ядре. */
+/**
+ * Одна запись фейк-ядра: метаданные + секреты живут раздельно, как в ядре.
+ *
+ * `has_notes` / `has_totp` в сиде НЕ указываются: фейк-ядро выводит их из
+ * самих секретов при загрузке. Так сид физически не может соврать про то,
+ * заполнено поле или нет.
+ */
 export interface MockSeedEntry {
-  meta: RecordMeta
+  meta: Omit<RecordMeta, 'has_notes' | 'has_totp'>
   secrets: RecordSecrets
 }
 

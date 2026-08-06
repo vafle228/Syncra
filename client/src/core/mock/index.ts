@@ -79,6 +79,18 @@ function cloneSecrets(secrets: RecordSecrets): RecordSecrets {
   return { ...secrets }
 }
 
+/**
+ * Выводит метаданные-флаги из самих секретов. Единственный источник правды о
+ * том, заполнены ли `notes` / `totp_secret`: ядро тоже считает их у себя, а не
+ * принимает от UI.
+ */
+function secretFlags(secrets: RecordSecrets): Pick<RecordMeta, 'has_notes' | 'has_totp'> {
+  return {
+    has_notes: (secrets.notes ?? '').trim() !== '',
+    has_totp: (secrets.totp_secret ?? '').trim() !== '',
+  }
+}
+
 /** Валидирует и нормализует метаданное поле. */
 function requireNonEmpty(value: string, field: string): string {
   const trimmed = value.trim()
@@ -123,11 +135,12 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     // Свежесозданное хранилище пустое: сид — это «данные, которые уже были».
     if (!initialized) return
     for (const entry of options.seed ?? createSeed()) {
-      meta.set(entry.meta.record_id, cloneMeta(entry.meta))
-      // У надгробия нет полезной нагрузки — секреты не заводим.
-      if (entry.meta.deleted_at === null) {
-        secrets.set(entry.meta.record_id, cloneSecrets(entry.secrets))
-      }
+      const alive = entry.meta.deleted_at === null
+      // У надгробия нет полезной нагрузки — ни секретов, ни флагов о них.
+      const flags = alive ? secretFlags(entry.secrets) : { has_notes: false, has_totp: false }
+
+      meta.set(entry.meta.record_id, cloneMeta({ ...entry.meta, ...flags }))
+      if (alive) secrets.set(entry.meta.record_id, cloneSecrets(entry.secrets))
     }
   }
 
@@ -259,6 +272,11 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       const password = requirePresent(draft.password, 'Пароль')
 
       const createdAt = timestamp()
+      const newSecrets: RecordSecrets = {
+        password,
+        notes: draft.notes ?? null,
+        totp_secret: draft.totp_secret ?? null,
+      }
       // ID генерирует ядро, а не UI. Здесь это делает фейк-ядро в роли ядра.
       const record: RecordMeta = {
         record_id: crypto.randomUUID(),
@@ -267,6 +285,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
         urls: [...draft.urls],
         login,
         account_label: draft.account_label ?? null,
+        ...secretFlags(newSecrets),
         version: 1,
         created_at: createdAt,
         updated_at: createdAt,
@@ -275,11 +294,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       }
 
       meta.set(record.record_id, record)
-      secrets.set(record.record_id, {
-        password,
-        notes: draft.notes ?? null,
-        totp_secret: draft.totp_secret ?? null,
-      })
+      secrets.set(record.record_id, newSecrets)
 
       return cloneMeta(record)
     },
@@ -298,6 +313,13 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
           : requirePresent(patch.password, 'Пароль')
       const passwordChanged = nextPassword !== currentSecrets.password
 
+      const nextSecrets: RecordSecrets = {
+        password: nextPassword,
+        notes: patch.notes === undefined ? currentSecrets.notes : patch.notes,
+        totp_secret:
+          patch.totp_secret === undefined ? currentSecrets.totp_secret : patch.totp_secret,
+      }
+
       const next: RecordMeta = {
         ...current,
         vault_id: patch.vault_id ?? current.vault_id,
@@ -309,18 +331,14 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
         login: patch.login === undefined ? current.login : requireNonEmpty(patch.login, 'Логин'),
         account_label:
           patch.account_label === undefined ? current.account_label : patch.account_label,
+        ...secretFlags(nextSecrets),
         version: current.version + 1,
         updated_at: changedAt,
         password_updated_at: passwordChanged ? changedAt : current.password_updated_at,
       }
 
       meta.set(recordId, next)
-      secrets.set(recordId, {
-        password: nextPassword,
-        notes: patch.notes === undefined ? currentSecrets.notes : patch.notes,
-        totp_secret:
-          patch.totp_secret === undefined ? currentSecrets.totp_secret : patch.totp_secret,
-      })
+      secrets.set(recordId, nextSecrets)
 
       return cloneMeta(next)
     },
@@ -332,6 +350,10 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       const deletedAt = timestamp()
       const tombstone: RecordMeta = {
         ...current,
+        // Надгробие не хранит секретов — значит, и «есть заметка» про него
+        // больше не правда.
+        has_notes: false,
+        has_totp: false,
         version: current.version + 1,
         updated_at: deletedAt,
         deleted_at: deletedAt,
