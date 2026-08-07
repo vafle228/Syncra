@@ -8,6 +8,8 @@ import {
   type CommandName,
   type EventMap,
   type EventName,
+  type GeneratePasswordsResponse,
+  type GeneratorProfile,
   type InitVaultResponse,
   type ListRecordsRequest,
   type RecordDraft,
@@ -67,6 +69,23 @@ export interface CoreClient {
   /** Мягкое удаление: ядро ставит tombstone и возвращает его метаданные (§5.4). */
   deleteRecord(recordId: RecordId): Promise<RecordMeta>
 
+  /** Сохранённые правила генерации (F6, §6.1). Настройки, не секрет. */
+  getGeneratorProfile(): Promise<GeneratorProfile>
+
+  /** Сохранить правила «один раз и навсегда». Ядро возвращает их после проверки. */
+  saveGeneratorProfile(profile: GeneratorProfile): Promise<GeneratorProfile>
+
+  /**
+   * Попросить `count` вариантов пароля (§6.1).
+   *
+   * Генерация целиком в ядре: случайность берётся у ОС, алфавит и словарь тоже
+   * знает только оно. На фронте нет и не должно появиться ни строчки этого кода.
+   *
+   * ЗАКОН №1: в ответе — пароли открытым текстом. Обращаться как с секретом:
+   * показать, дать выбрать, отпустить. Ни в стор, ни в localStorage.
+   */
+  generatePasswords(count: number, profile?: GeneratorProfile): Promise<GeneratePasswordsResponse>
+
   /** Подписка на событие ядра. */
   on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe
 }
@@ -99,6 +118,9 @@ export function createTauriCoreClient(): CoreClient {
     createRecord: (draft) => call('createRecord', { draft }),
     updateRecord: (recordId, patch) => call('updateRecord', { record_id: recordId, patch }),
     deleteRecord: (recordId) => call('deleteRecord', { record_id: recordId }),
+    getGeneratorProfile: () => call('getGeneratorProfile', {}),
+    saveGeneratorProfile: (profile) => call('saveGeneratorProfile', { profile }),
+    generatePasswords: (count, profile) => call('generatePasswords', { count, profile }),
 
     on: (event, handler) => {
       let cancelled = false

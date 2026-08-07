@@ -125,6 +125,7 @@ async function lock(): Promise<void> {
 
       <div class="home__header-actions">
         <SyThemeToggle />
+        <RouterLink class="home__settings" :to="{ name: 'settings' }">Настройки</RouterLink>
         <SyButton size="sm" :disabled="vault.busy" @click="lock">Заблокировать</SyButton>
       </div>
     </header>
@@ -338,6 +339,17 @@ async function lock(): Promise<void> {
   display: flex;
   align-items: center;
   gap: var(--sy-space-4);
+}
+
+.home__settings {
+  font-size: var(--sy-text-body);
+  color: var(--sy-text-2);
+  text-decoration: none;
+}
+
+.home__settings:hover {
+  color: var(--sy-text);
+  text-decoration: underline;
 }
 
 /* Две панели: список слева, карточка справа (§3.1 макета) */

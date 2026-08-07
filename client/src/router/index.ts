@@ -18,6 +18,12 @@ export const routes = [
     component: HomeView,
   },
   {
+    path: '/settings',
+    name: 'settings',
+    // Экран настроек нужен не в каждом сеансе — грузится лениво (F6, §3.11).
+    component: () => import('@/views/SettingsView.vue'),
+  },
+  {
     path: '/unlock',
     name: 'unlock',
     // Экраны входа грузятся лениво: в разблокированном сеансе они не нужны.

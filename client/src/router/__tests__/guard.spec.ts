@@ -33,8 +33,16 @@ describe('routeForStatus', () => {
 
   it('на открытом хранилище не держит на экранах входа', () => {
     expect(routeForStatus('unlocked', 'home')).toBe(true)
+    expect(routeForStatus('unlocked', 'settings')).toBe(true)
     expect(routeForStatus('unlocked', 'unlock')).toEqual({ name: 'home' })
     expect(routeForStatus('unlocked', 'setup')).toEqual({ name: 'home' })
+  })
+
+  it('настройки закрыты замком наравне с паролями (F6)', () => {
+    // Профиль генератора — тоже содержимое хранилища: показывать его на
+    // заблокированном устройстве незачем.
+    expect(routeForStatus('locked', 'settings')).toEqual({ name: 'unlock' })
+    expect(routeForStatus('uninitialized', 'settings')).toEqual({ name: 'setup' })
   })
 })
 

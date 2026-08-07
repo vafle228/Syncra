@@ -2,6 +2,8 @@ import type {
   CoreErrorCode,
   EventMap,
   EventName,
+  GeneratePasswordsResponse,
+  GeneratorProfile,
   InitVaultResponse,
   IsoDateTime,
   ListRecordsRequest,
@@ -16,9 +18,16 @@ import type {
 import { MASTER_PASSWORD_MIN_LENGTH } from '../contract'
 import { CoreError } from '../errors'
 import type { CoreClient, Unsubscribe } from '../ipc'
+import {
+  cloneProfile,
+  DEFAULT_GENERATOR_PROFILE,
+  generatePasswords,
+  validateProfile,
+} from './generator'
 import { createSeed, MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, type MockSeedEntry } from './seed'
 
 export { MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, MOCK_VAULT_WORK } from './seed'
+export { DEFAULT_GENERATOR_PROFILE } from './generator'
 
 /**
  * In-memory фейк-ядро.
@@ -45,6 +54,8 @@ export interface MockCoreOptions {
    * сид не загружается, любая команда до `initVault` падает `NOT_INITIALIZED`.
    */
   initialized?: boolean
+  /** Профиль генератора, с которым стартует хранилище (F6). */
+  generatorProfile?: GeneratorProfile
 }
 
 /** Ручки управления фейк-ядром: только для разработки и тестов. */
@@ -124,6 +135,10 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   let initialized = options.initialized !== false
   let unlocked = false
   let unlockedAt: IsoDateTime | null = null
+  /** Профиль генератора живёт в хранилище рядом с записями (F6). */
+  let generatorProfile: GeneratorProfile = cloneProfile(
+    options.generatorProfile ?? DEFAULT_GENERATOR_PROFILE,
+  )
 
   function timestamp(): IsoDateTime {
     return now().toISOString()
@@ -221,6 +236,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       // Только что созданное хранилище пустое — записи заводит уже пользователь.
       meta.clear()
       secrets.clear()
+      generatorProfile = cloneProfile(DEFAULT_GENERATOR_PROFILE)
 
       const initializedAt = timestamp()
       return { initialized_at: initializedAt, unlocked_at: doUnlock() }
@@ -366,6 +382,29 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       return cloneMeta(tombstone)
     },
 
+    async getGeneratorProfile(): Promise<GeneratorProfile> {
+      // Профиль — часть содержимого хранилища, поэтому за замком: на закрытом
+      // хранилище рассказывать, какими правилами пользуется владелец, незачем.
+      await enter({ requiresUnlock: true })
+      return cloneProfile(generatorProfile)
+    },
+
+    async saveGeneratorProfile(profile: GeneratorProfile): Promise<GeneratorProfile> {
+      await enter({ requiresUnlock: true })
+
+      generatorProfile = validateProfile(profile)
+      return cloneProfile(generatorProfile)
+    },
+
+    async generatePasswords(count: number, profile?: GeneratorProfile) {
+      await enter({ requiresUnlock: true })
+
+      // Разовые правила (предпросмотр на экране настроек) проверяются так же
+      // строго, как сохраняемые, но профиль в хранилище НЕ меняют.
+      const rules = profile === undefined ? generatorProfile : validateProfile(profile)
+      return generatePasswords(rules, count) satisfies GeneratePasswordsResponse
+    },
+
     on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe {
       const set = handlers.get(event) ?? new Set()
       handlers.set(event, set)
@@ -394,6 +433,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       reset() {
         masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
         initialized = options.initialized !== false
+        generatorProfile = cloneProfile(options.generatorProfile ?? DEFAULT_GENERATOR_PROFILE)
         loadSeed()
         failures.length = 0
         unlocked = initialized && options.startUnlocked === true

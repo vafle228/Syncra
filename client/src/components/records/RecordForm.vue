@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 
+import PasswordGenerator from '@/components/generator/PasswordGenerator.vue'
 import { SyButton, SyInput } from '@/components/ui'
 import { normalizeHost } from '@/composables/useRecordList'
 import type { RecordDraft, RecordMeta, RecordPatch, SecretField } from '@/core/contract'
@@ -141,6 +142,27 @@ const errors = reactive<Record<string, string | null>>({
 
 const saving = ref(false)
 const formError = ref<string | null>(null)
+
+// ---------------------------------------------------------------------------
+// Генератор (F6)
+// ---------------------------------------------------------------------------
+
+/**
+ * В новой записи панель открыта сразу: §6.1 обещает, что правила настраиваются
+ * один раз, а дальше «в форме будет просто готовый пароль и кнопка „другой“».
+ * Свежесгенерированная строка ещё ничей секрет — показать её не значит что-то
+ * раскрыть.
+ *
+ * В редактировании панель закрыта: смена работающего пароля — осознанное
+ * действие, и подсовывать замену тому, кто зашёл поправить логин, незачем.
+ */
+const generatorOpen = ref(!isEdit.value)
+
+/** Выбранный вариант попадает в поле пароля — то есть в тот же черновик, что и ручной ввод. */
+function usePassword(password: string): void {
+  secrets.password.value = password
+  errors.password = null
+}
 
 function validate(): boolean {
   errors.service_name =
@@ -306,12 +328,19 @@ async function save(): Promise<void> {
             v-model="secrets.password.value"
             label="Пароль"
             type="password"
-            :placeholder="isEdit ? 'Оставить как было' : 'Введите или вставьте пароль'"
+            :placeholder="isEdit ? 'Оставить как было' : 'Введите, вставьте или подберите'"
             :error="errors.password"
-            :hint="secretHint('password', 'Генератор паролей появится в следующей задаче.')"
+            :hint="secretHint('password', 'Можно ввести свой или выбрать вариант генератора.')"
             autocomplete="new-password"
             @submit="save"
           />
+          <SyButton
+            v-if="!generatorOpen"
+            size="sm"
+            :aria-expanded="false"
+            @click="generatorOpen = true"
+            >Подобрать</SyButton
+          >
           <SyButton
             v-if="isEdit && secrets.password.original === null"
             size="sm"
@@ -320,6 +349,17 @@ async function save(): Promise<void> {
             >Показать текущий</SyButton
           >
         </div>
+
+        <!--
+          Панель генератора (F6). Живёт внутри блока секретов: варианты — это
+          пароли, пусть пока и ничьи. `v-if`, а не `v-show`: закрытая панель
+          должна быть размонтирована, чтобы её composable забыл варианты.
+        -->
+        <PasswordGenerator
+          v-if="generatorOpen"
+          @pick="usePassword"
+          @close="generatorOpen = false"
+        />
 
         <div class="form__secret form__secret--notes">
           <div class="form__field">

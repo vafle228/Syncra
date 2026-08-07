@@ -15,6 +15,12 @@
  * ТОЛЬКО в ответе `get_secret` — разово, по явному действию пользователя.
  * Ни одна другая команда не возвращает расшифрованный секрет, и ни один тип
  * метаданных ниже не содержит секретных полей.
+ *
+ * Единственное исключение — `generate_passwords` (F6): он отдаёт свежие
+ * пароли-кандидаты. Это ещё ничей секрет — он не лежит в хранилище и исчезнет,
+ * если пользователь не выберет ни одного варианта, — но обращаться с ним нужно
+ * ровно так же: не в Pinia, не в localStorage, не в логи; живёт в области
+ * видимости компонента, пока пользователь выбирает.
  */
 
 export type RecordId = string
@@ -222,6 +228,99 @@ export interface DeleteRecordRequest {
   record_id: RecordId
 }
 
+// ---------------------------------------------------------------------------
+// Генератор паролей (F6, §6.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Как собирается пароль: из отдельных символов или из слов (парольная фраза).
+ * Фраза — не «режим для слабаков»: четыре случайных слова дают больше энтропии,
+ * чем короткий «Qw!7z», и их можно продиктовать вслух.
+ */
+export type GeneratorMode = 'chars' | 'words'
+
+/** Чем склеиваются слова фразы. Пробел — тоже допустимый разделитель. */
+export type WordSeparator = '-' | '.' | ' '
+
+/**
+ * Сохранённый профиль генерации (§6.1).
+ *
+ * UX-принцип спека: пользователь настраивает правила ОДИН РАЗ, а не при каждом
+ * использовании. Профиль — это настройки, а не секрет: в нём нет ни одного
+ * пароля, поэтому его можно держать в сторе и показывать на экране настроек.
+ *
+ * Поля обоих режимов лежат рядом намеренно: переключение `chars` ⇄ `words` не
+ * должно терять то, что пользователь уже настроил в другом режиме.
+ */
+export interface GeneratorProfile {
+  mode: GeneratorMode
+  /** Длина пароля в символах. Режим `chars`. */
+  length: number
+  /** Добавлять цифры. Режим `chars`. */
+  digits: boolean
+  /** Добавлять спецсимволы. Режим `chars`. */
+  symbols: boolean
+  /**
+   * Исключать похожие символы (`0`/`O`, `1`/`l`/`I`). Режим `chars`.
+   * Буквы в алфавите есть всегда — профиля с пустым алфавитом не существует.
+   */
+  avoid_ambiguous: boolean
+  /** Сколько слов в фразе. Режим `words`. */
+  words: number
+  separator: WordSeparator
+  /** Дописывать число в конец фразы — некоторые сайты требуют цифру. */
+  append_number: boolean
+}
+
+/**
+ * Границы, внутри которых ядро принимает профиль. Политику задаёт ЯДРО —
+ * здесь она продублирована, чтобы ползунки имели min/max и UI мог подсветить
+ * проблему до отправки. Ядро проверяет повторно и отвечает `VALIDATION`.
+ */
+export const GENERATOR_LIMITS = {
+  length: { min: 8, max: 40 },
+  words: { min: 3, max: 7 },
+  /** Сколько вариантов можно попросить за раз. */
+  count: { min: 1, max: 10 },
+} as const
+
+/** Сколько вариантов показывает форма записи по умолчанию (из макета §3.4). */
+export const GENERATOR_DEFAULT_COUNT = 5
+
+export type GetGeneratorProfileRequest = Record<string, never>
+export type GetGeneratorProfileResponse = GeneratorProfile
+
+export interface SaveGeneratorProfileRequest {
+  profile: GeneratorProfile
+}
+
+/** Ядро возвращает профиль после нормализации — его и показываем. */
+export type SaveGeneratorProfileResponse = GeneratorProfile
+
+export interface GeneratePasswordsRequest {
+  /** Сколько вариантов на выбор (§6.1: «пользователь указывает n»). */
+  count: number
+  /**
+   * Разовые правила — для предпросмотра на экране настроек, пока профиль ещё
+   * не сохранён. Не указан — ядро берёт сохранённый профиль.
+   */
+  profile?: GeneratorProfile
+}
+
+/**
+ * ВНИМАНИЕ: единственный ответ кроме `get_secret`, содержащий пароли открытым
+ * текстом. Правила обращения — в шапке файла.
+ */
+export interface GeneratePasswordsResponse {
+  passwords: string[]
+  /**
+   * Оценка стойкости, которую считает ЯДРО. Фронт её не выводит сам: только
+   * ядро знает настоящий алфавит и размер словаря, а считать «на глаз» —
+   * значит врать пользователю о стойкости его пароля.
+   */
+  entropy_bits: number
+}
+
 /**
  * Карта команд: имя метода клиента → форма запроса/ответа.
  * Служит единым источником истины для `ipc.ts` и мок-ядра.
@@ -237,6 +336,15 @@ export interface CommandMap {
   updateRecord: { request: UpdateRecordRequest; response: RecordMeta }
   /** Возвращает tombstone-метаданные удалённой записи (§5.4). */
   deleteRecord: { request: DeleteRecordRequest; response: RecordMeta }
+  getGeneratorProfile: {
+    request: GetGeneratorProfileRequest
+    response: GetGeneratorProfileResponse
+  }
+  saveGeneratorProfile: {
+    request: SaveGeneratorProfileRequest
+    response: SaveGeneratorProfileResponse
+  }
+  generatePasswords: { request: GeneratePasswordsRequest; response: GeneratePasswordsResponse }
 }
 
 export type CommandName = keyof CommandMap
@@ -252,6 +360,9 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   createRecord: 'create_record',
   updateRecord: 'update_record',
   deleteRecord: 'delete_record',
+  getGeneratorProfile: 'get_generator_profile',
+  saveGeneratorProfile: 'save_generator_profile',
+  generatePasswords: 'generate_passwords',
 }
 
 // ---------------------------------------------------------------------------

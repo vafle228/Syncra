@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
+import PasswordGenerator from '@/components/generator/PasswordGenerator.vue'
 import type { RecordMeta } from '@/core/contract'
 import { setCoreClient } from '@/core/ipc'
 import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import { useGeneratorStore } from '@/stores/useGeneratorStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import RecordForm from '../RecordForm.vue'
 
@@ -54,6 +56,10 @@ async function fill(wrapper: Form, label: string, value: string) {
 
 function submit(wrapper: Form) {
   return wrapper.find('form').trigger('submit')
+}
+
+function passwordInput(wrapper: Form): HTMLInputElement {
+  return wrapper.find<HTMLInputElement>('input[type="password"]').element
 }
 
 /** Явный разовый reveal ради правки — кнопка рядом с полем пароля. */
@@ -155,6 +161,9 @@ describe('RecordForm · создание', () => {
     const list = useRecordsStore()
     await list.load()
     const wrapper = mount(RecordForm)
+    // Даём панели генератора договорить с ядром: сымитированная ошибка должна
+    // достаться сохранению, а не её запросам.
+    await flushPromises()
     core.control.failNext('INTERNAL', 'Хранилище занято.')
 
     await fill(wrapper, 'Имя сервиса', 'Figma')
@@ -165,6 +174,91 @@ describe('RecordForm · создание', () => {
 
     expect(wrapper.text()).toContain('Хранилище занято.')
     expect(wrapper.emitted('saved')).toBeUndefined()
+
+    wrapper.unmount()
+  })
+})
+
+describe('RecordForm · генератор (F6)', () => {
+  it('в новой записи предлагает готовые варианты сразу', async () => {
+    await useRecordsStore().load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    // §6.1: правила настроены один раз — в форме уже лежит готовый пароль.
+    expect(wrapper.findComponent(PasswordGenerator).exists()).toBe(true)
+    expect(wrapper.findAll('.pg__value').length).toBeGreaterThan(0)
+    // Но поле пароля пустое: ни один вариант не подставился сам.
+    expect(passwordInput(wrapper).value).toBe('')
+
+    wrapper.unmount()
+  })
+
+  it('выбранный вариант попадает в поле пароля и сохраняется в ядро', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    const chosen = wrapper.findAll('.pg__value')[1]!.text()
+    await wrapper.findAll('.pg__variant')[1]!.trigger('click')
+
+    expect(passwordInput(wrapper).value).toBe(chosen)
+
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await fill(wrapper, 'Логин', 'anna@studio.example')
+    await submit(wrapper)
+    await flushPromises()
+
+    const created = list.records.find((record) => record.service_name === 'Figma')
+    expect((await core.getSecret(created!.record_id)).password).toBe(chosen)
+
+    wrapper.unmount()
+  })
+
+  it('не мешает вписать свой пароль руками', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await fill(wrapper, 'Логин', 'anna')
+    await fill(wrapper, 'Пароль', 'свой-собственный-пароль')
+    await submit(wrapper)
+    await flushPromises()
+
+    const created = list.records.find((record) => record.service_name === 'Figma')
+    expect((await core.getSecret(created!.record_id)).password).toBe('свой-собственный-пароль')
+
+    wrapper.unmount()
+  })
+
+  it('в редактировании панель закрыта: замена пароля — осознанное действие', async () => {
+    const { wrapper } = await mountEdit()
+
+    expect(wrapper.findComponent(PasswordGenerator).exists()).toBe(false)
+
+    const open = wrapper.findAll('button').find((node) => node.text() === 'Подобрать')
+    await open!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(PasswordGenerator).exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('ЗАКОН №1: варианты не оседают в Pinia', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    const shown = wrapper.findAll('.pg__value').map((node) => node.text())
+    expect(shown.length).toBeGreaterThan(0)
+
+    const snapshot = JSON.stringify(list.$state) + JSON.stringify(useGeneratorStore().$state)
+    for (const password of shown) expect(snapshot).not.toContain(password)
 
     wrapper.unmount()
   })
