@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 import PasswordGenerator from '@/components/generator/PasswordGenerator.vue'
-import { SyButton, SyInput } from '@/components/ui'
+import { SyButton, SyInput, SySelect } from '@/components/ui'
 import { normalizeHost } from '@/composables/useRecordList'
-import type { RecordDraft, RecordMeta, RecordPatch, SecretField } from '@/core/contract'
+import type { RecordDraft, RecordMeta, RecordPatch, SecretField, VaultId } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useCore } from '@/core/ipc'
 import { useRecordsStore } from '@/stores/useRecordsStore'
+import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useToastStore } from '@/stores/useToastStore'
 
 /**
@@ -23,14 +24,15 @@ import { useToastStore } from '@/stores/useToastStore'
  * Черновик с секретами живёт в локальном состоянии формы, уходит в ядро одной
  * командой и исчезает вместе с компонентом. В Pinia он не попадает.
  *
- * Секции (`vault_id`) в форме нет намеренно: команд для работы с ними ещё нет
- * в контракте — это F7. Новая запись ложится в секцию по умолчанию.
+ * Секция (F7, §4.2) выбирается здесь же: одна запись живёт ровно в одной
+ * секции, и это единственное место, где её переносят.
  */
 
 const props = defineProps<{ record?: RecordMeta | null }>()
 const emit = defineEmits<{ saved: [record: RecordMeta]; cancel: [] }>()
 
 const list = useRecordsStore()
+const sections = useSectionsStore()
 const toast = useToastStore()
 
 const isEdit = computed(() => props.record != null)
@@ -43,6 +45,50 @@ const meta = reactive({
   service_name: props.record?.service_name ?? '',
   login: props.record?.login ?? '',
   account_label: props.record?.account_label ?? '',
+})
+
+/**
+ * Секция записи (F7). У новой записи предлагается та, что открыта в сайдбаре:
+ * человек только что смотрел «Рабочее» и жмёт «новая запись» — он заводит
+ * рабочую. Если фильтра нет, решает ядро (секция по умолчанию), и пустая
+ * строка означает именно это.
+ */
+const vaultChoice = ref<VaultId | null>(props.record?.vault_id ?? list.vaultFilter ?? null)
+
+/** Что выбрано в списке: явный выбор или — пока его нет — секция по умолчанию. */
+const shownVault = computed(() => vaultChoice.value ?? sections.defaultVault?.vault_id ?? '')
+
+function chooseVault(next: string): void {
+  vaultChoice.value = next === '' ? null : next
+}
+
+const vaultOptions = computed(() => {
+  const options = sections.vaults.map((vault) => ({
+    value: vault.vault_id,
+    label: vault.sync ? vault.name : `${vault.name} · локальная`,
+  }))
+  // Пока ядро не ответило, список не должен молча подменять секцию записи
+  // первой попавшейся строкой.
+  if (shownVault.value !== '' && !options.some((option) => option.value === shownVault.value)) {
+    options.unshift({ value: shownVault.value, label: 'Текущая секция' })
+  }
+  return options
+})
+
+const selectedVault = computed(() =>
+  sections.byId(shownVault.value === '' ? null : shownVault.value),
+)
+
+const vaultHint = computed(() => {
+  const vault = selectedVault.value
+  if (vault === null) return 'Ляжет в секцию по умолчанию.'
+  return vault.sync
+    ? 'Запись уедет на другие устройства вместе с секцией.'
+    : 'Секция локальная — запись останется на этом устройстве.'
+})
+
+onMounted(() => {
+  void sections.ensure()
 })
 
 /** Всегда есть хотя бы одна строка адреса — иначе не за что нажать. */
@@ -202,6 +248,9 @@ async function save(): Promise<void> {
   try {
     if (props.record == null) {
       const draft: RecordDraft = {
+        // Секцию не указываем, если пользователь её не выбирал: пусть ядро
+        // положит запись в свою секцию по умолчанию.
+        vault_id: vaultChoice.value ?? undefined,
         service_name: meta.service_name.trim(),
         urls: cleanUrls(),
         login: meta.login.trim(),
@@ -219,6 +268,11 @@ async function save(): Promise<void> {
         urls: cleanUrls(),
         login: meta.login.trim(),
         account_label: label(),
+      }
+      // Переезд в другую секцию — тоже изменение записи, но только если её
+      // правда переставили.
+      if (vaultChoice.value !== null && vaultChoice.value !== props.record.vault_id) {
+        patch.vault_id = vaultChoice.value
       }
       // Секретные поля попадают в патч, только если пользователь их правда
       // тронул: иначе каждое сохранение переписывало бы пароль сам собой.
@@ -312,6 +366,15 @@ async function save(): Promise<void> {
           placeholder="личный / рабочий"
           hint="Ею вы отличите несколько аккаунтов одного сервиса."
           @submit="save"
+        />
+
+        <SySelect
+          class="form__vault"
+          :model-value="shownVault"
+          label="Секция"
+          :options="vaultOptions"
+          :hint="vaultHint"
+          @update:model-value="chooseVault"
         />
       </div>
 

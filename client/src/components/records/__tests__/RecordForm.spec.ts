@@ -5,7 +5,12 @@ import { flushPromises, mount } from '@vue/test-utils'
 import PasswordGenerator from '@/components/generator/PasswordGenerator.vue'
 import type { RecordMeta } from '@/core/contract'
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import {
+  createMockCoreClient,
+  MOCK_VAULT_PERSONAL,
+  MOCK_VAULT_WORK,
+  type MockCoreClient,
+} from '@/core/mock'
 import { useGeneratorStore } from '@/stores/useGeneratorStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import RecordForm from '../RecordForm.vue'
@@ -259,6 +264,83 @@ describe('RecordForm · генератор (F6)', () => {
 
     const snapshot = JSON.stringify(list.$state) + JSON.stringify(useGeneratorStore().$state)
     for (const password of shown) expect(snapshot).not.toContain(password)
+
+    wrapper.unmount()
+  })
+})
+
+describe('RecordForm · секция (F7)', () => {
+  it('по умолчанию предлагает секцию по умолчанию из ядра', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    const select = wrapper.find<HTMLSelectElement>('.form__vault select')
+    expect(select.element.value).toBe(MOCK_VAULT_PERSONAL)
+    expect(wrapper.find('.form__vault').text()).toContain('Рабочее · локальная')
+
+    wrapper.unmount()
+  })
+
+  it('предлагает ту секцию, которая открыта в сайдбаре', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    list.setVaultFilter(MOCK_VAULT_WORK)
+
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    expect(wrapper.find<HTMLSelectElement>('.form__vault select').element.value).toBe(
+      MOCK_VAULT_WORK,
+    )
+    // О последствиях выбора говорим прямо у поля.
+    expect(wrapper.find('.form__vault').text()).toContain('останется на этом устройстве')
+
+    wrapper.unmount()
+  })
+
+  it('кладёт новую запись в выбранную секцию', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    await wrapper.find('.form__vault select').setValue(MOCK_VAULT_WORK)
+    await fill(wrapper, 'Имя сервиса', 'Figma')
+    await fill(wrapper, 'Логин', 'anna')
+    await fill(wrapper, 'Пароль', 'mock-figma-pw')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(list.records.find((record) => record.service_name === 'Figma')?.vault_id).toBe(
+      MOCK_VAULT_WORK,
+    )
+
+    wrapper.unmount()
+  })
+
+  it('переносит запись в другую секцию при сохранении', async () => {
+    const { wrapper, list, record } = await mountEdit()
+    expect(record.vault_id).toBe(MOCK_VAULT_PERSONAL)
+
+    await wrapper.find('.form__vault select').setValue(MOCK_VAULT_WORK)
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(list.records.find((item) => item.record_id === GITHUB)?.vault_id).toBe(MOCK_VAULT_WORK)
+
+    wrapper.unmount()
+  })
+
+  it('не двигает секцию, если её не трогали', async () => {
+    const { wrapper, list, record } = await mountEdit()
+
+    await fill(wrapper, 'Метка аккаунта', 'основной')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect(list.records.find((item) => item.record_id === GITHUB)?.vault_id).toBe(record.vault_id)
 
     wrapper.unmount()
   })

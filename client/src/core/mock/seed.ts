@@ -1,4 +1,4 @@
-import type { RecordMeta, RecordSecrets } from '../contract'
+import type { RecordMeta, RecordSecrets, Vault } from '../contract'
 
 /**
  * Одна запись фейк-ядра: метаданные + секреты живут раздельно, как в ядре.
@@ -20,6 +20,48 @@ export const MOCK_MASTER_PASSWORD = 'syncra-dev'
 
 export const MOCK_VAULT_PERSONAL = 'vault-personal'
 export const MOCK_VAULT_WORK = 'vault-work'
+
+/**
+ * Секции фейк-хранилища (F7, §4.2).
+ *
+ * «Рабочее» намеренно стоит локальным: без такой секции в сиде невозможно
+ * увидеть, как выглядит и чем отличается несинхронизируемая секция.
+ */
+export function createVaultSeed(): Vault[] {
+  return [
+    {
+      vault_id: MOCK_VAULT_PERSONAL,
+      name: 'Личное',
+      color: 'indigo',
+      sync: true,
+      is_default: true,
+      created_at: '2024-11-19T20:50:00.000Z',
+    },
+    {
+      vault_id: MOCK_VAULT_WORK,
+      name: 'Рабочее',
+      color: 'amber',
+      sync: false,
+      is_default: false,
+      created_at: '2025-01-22T06:10:00.000Z',
+    },
+  ]
+}
+
+/**
+ * Секция свежесозданного хранилища. Ровно одна и по умолчанию: пользователь,
+ * который ещё не заводил секций, не должен выбирать между ними.
+ */
+export function createInitialVault(createdAt: string): Vault {
+  return {
+    vault_id: MOCK_VAULT_PERSONAL,
+    name: 'Личное',
+    color: 'indigo',
+    sync: true,
+    is_default: true,
+    created_at: createdAt,
+  }
+}
 
 /**
  * Сид-данные для разработки.

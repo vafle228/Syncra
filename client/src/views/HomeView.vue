@@ -4,9 +4,12 @@ import { useRouter } from 'vue-router'
 
 import RecordCard from '@/components/records/RecordCard.vue'
 import RecordForm from '@/components/records/RecordForm.vue'
+import SectionSidebar from '@/components/sections/SectionSidebar.vue'
 import { SyButton, SyEmptyState, SyListItem, SyThemeToggle } from '@/components/ui'
+import { ACCOUNT_FORMS, pluralize, RECORD_FORMS, SERVICE_FORMS } from '@/composables/plural'
 import type { RecordId } from '@/core/contract'
 import { useRecordsStore } from '@/stores/useRecordsStore'
+import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useVaultStore } from '@/stores/useVaultStore'
 
 /**
@@ -20,12 +23,14 @@ import { useVaultStore } from '@/stores/useVaultStore'
  * Записи намеренно НЕ выбирается автоматически: открывать чью-то карточку без
  * спроса — не то, чего ждёшь от менеджера паролей на общем столе.
  *
- * Сайдбар секций — F7.
+ * Слева от списка — сайдбар секций (F7): секция здесь именно ФИЛЬТР, потому
+ * что по умолчанию секции живут в одном пространстве (§4.2).
  */
 
 const router = useRouter()
 const vault = useVaultStore()
 const list = useRecordsStore()
+const sections = useSectionsStore()
 
 const searchInput = ref<HTMLInputElement | null>(null)
 
@@ -56,31 +61,29 @@ watch(
 )
 
 /** Хранилище открыто, ядро ответило, но записей в нём нет вообще. */
-const isVaultEmpty = computed(() => list.loaded && list.total === 0)
+const isVaultEmpty = computed(() => list.loaded && list.totalAll === 0)
+/** Записей в хранилище хватает, но выбранная секция пуста. */
+const isSectionEmpty = computed(
+  () => list.loaded && list.totalAll > 0 && list.vaultFilter !== null && list.total === 0,
+)
 /** Записи есть, но под запрос не подошла ни одна. */
 const isSearchEmpty = computed(() => list.loaded && list.total > 0 && list.visible === 0)
 
-function plural(count: number, forms: [string, string, string]): string {
-  const mod100 = count % 100
-  const mod10 = count % 10
-  if (mod100 >= 11 && mod100 <= 14) return forms[2]
-  if (mod10 === 1) return forms[0]
-  if (mod10 >= 2 && mod10 <= 4) return forms[1]
-  return forms[2]
-}
+/** Выбранная секция — или `null`, когда показаны все записи. */
+const currentSection = computed(() => sections.byId(list.vaultFilter))
 
 /** Строка счётчика над списком: в режиме поиска показывает «найдено N из M». */
 const countLine = computed(() => {
   if (!list.loaded) return ''
   if (list.isSearching) return `найдено ${list.visible} из ${list.total}`
 
-  const records = `${list.total} ${plural(list.total, ['запись', 'записи', 'записей'])}`
-  const services = `${list.serviceCount} ${plural(list.serviceCount, ['сервис', 'сервиса', 'сервисов'])}`
+  const records = pluralize(list.total, RECORD_FORMS)
+  const services = pluralize(list.serviceCount, SERVICE_FORMS)
   return `${records} · ${services}`
 })
 
 function groupCount(count: number): string {
-  return `${count} ${plural(count, ['аккаунт', 'аккаунта', 'аккаунтов'])}`
+  return pluralize(count, ACCOUNT_FORMS)
 }
 
 function focusSearch(): void {
@@ -99,6 +102,7 @@ function onKeydown(event: KeyboardEvent): void {
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   void list.load()
+  void sections.ensure()
 })
 
 onBeforeUnmount(() => {
@@ -131,6 +135,10 @@ async function lock(): Promise<void> {
     </header>
 
     <div class="home__panes">
+      <aside class="home__sidebar">
+        <SectionSidebar />
+      </aside>
+
       <div class="home__list-pane">
         <div class="home__toolbar">
           <div class="home__toolbar-row">
@@ -165,6 +173,15 @@ async function lock(): Promise<void> {
             <span>{{ countLine }}</span>
             <span class="home__hotkey">Ctrl + K</span>
           </div>
+
+          <!--
+            Про локальную секцию говорим там, где её записи открывают, а не
+            только в настройках: «эти пароли есть только здесь» — то, что стоит
+            знать до того, как на них понадеешься.
+          -->
+          <p v-if="currentSection && !currentSection.sync" class="home__local" role="status">
+            Секция «{{ currentSection.name }}» локальная — эти записи не уезжают с этого устройства.
+          </p>
         </div>
 
         <div class="home__body">
@@ -194,6 +211,17 @@ async function lock(): Promise<void> {
           >
             <template #actions>
               <SyButton variant="primary" size="sm" @click="startCreate">Новая запись</SyButton>
+            </template>
+          </SyEmptyState>
+
+          <SyEmptyState
+            v-else-if="isSectionEmpty"
+            title="В этой секции пока пусто"
+            description="Записи появятся здесь, когда вы создадите их с этой секцией или перенесёте существующие — секция выбирается в форме записи."
+          >
+            <template #actions>
+              <SyButton size="sm" @click="startCreate">Новая запись</SyButton>
+              <SyButton size="sm" @click="list.setVaultFilter(null)">Показать все</SyButton>
             </template>
           </SyEmptyState>
 
@@ -360,6 +388,14 @@ async function lock(): Promise<void> {
   display: flex;
 }
 
+.home__sidebar {
+  flex: none;
+  width: 238px;
+  overflow: auto;
+  border-right: 1px solid var(--sy-border);
+  background: var(--sy-bg-0);
+}
+
 .home__list-pane {
   flex: none;
   width: 376px;
@@ -389,6 +425,18 @@ async function lock(): Promise<void> {
 }
 
 /* Узкое окно: панели встают друг под друга, список перестаёт быть колонкой. */
+@media (max-width: 1080px) {
+  .home__panes {
+    flex-wrap: wrap;
+  }
+
+  .home__sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--sy-border);
+  }
+}
+
 @media (max-width: 860px) {
   .home__panes {
     flex-direction: column;
@@ -511,6 +559,17 @@ async function lock(): Promise<void> {
   padding: 2px var(--sy-space-2);
   border: 1px solid var(--sy-border);
   border-radius: var(--sy-radius-xs);
+}
+
+.home__local {
+  padding: var(--sy-space-3) var(--sy-space-4);
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius-xs);
+  background: var(--sy-surface);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
 }
 
 /* Список */

@@ -13,9 +13,13 @@ import type {
   RecordPatch,
   RecordSecrets,
   UnlockResponse,
+  Vault,
+  VaultColor,
+  VaultId,
+  VaultPatch,
   VaultStatus,
 } from '../contract'
-import { MASTER_PASSWORD_MIN_LENGTH } from '../contract'
+import { MASTER_PASSWORD_MIN_LENGTH, VAULT_COLORS, VAULT_NAME_MAX_LENGTH } from '../contract'
 import { CoreError } from '../errors'
 import type { CoreClient, Unsubscribe } from '../ipc'
 import {
@@ -24,9 +28,15 @@ import {
   generatePasswords,
   validateProfile,
 } from './generator'
-import { createSeed, MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, type MockSeedEntry } from './seed'
+import {
+  createInitialVault,
+  createSeed,
+  createVaultSeed,
+  MOCK_MASTER_PASSWORD,
+  type MockSeedEntry,
+} from './seed'
 
-export { MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, MOCK_VAULT_WORK } from './seed'
+export { createVaultSeed, MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, MOCK_VAULT_WORK } from './seed'
 export { DEFAULT_GENERATOR_PROFILE } from './generator'
 
 /**
@@ -45,6 +55,8 @@ export interface MockCoreOptions {
   latencyMs?: number
   masterPassword?: string
   seed?: MockSeedEntry[]
+  /** Секции, с которыми стартует хранилище (F7). */
+  vaults?: Vault[]
   /** Источник времени — для детерминированных тестов. */
   now?: () => Date
   /** Начинать разблокированным (удобно для UI-тестов, минующих экран входа). */
@@ -90,6 +102,10 @@ function cloneSecrets(secrets: RecordSecrets): RecordSecrets {
   return { ...secrets }
 }
 
+function cloneVault(vault: Vault): Vault {
+  return { ...vault }
+}
+
 /**
  * Выводит метаданные-флаги из самих секретов. Единственный источник правды о
  * том, заполнены ли `notes` / `totp_secret`: ядро тоже считает их у себя, а не
@@ -128,6 +144,8 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
 
   const meta = new Map<RecordId, RecordMeta>()
   const secrets = new Map<RecordId, RecordSecrets>()
+  /** Порядок секций — порядок создания: сайдбар не должен перетасовываться. */
+  let vaults: Vault[] = []
   const failures: CoreError[] = []
   const handlers = new Map<EventName, Set<(payload: never) => void>>()
 
@@ -147,8 +165,11 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   function loadSeed(): void {
     meta.clear()
     secrets.clear()
+    vaults = []
     // Свежесозданное хранилище пустое: сид — это «данные, которые уже были».
     if (!initialized) return
+
+    vaults = (options.vaults ?? createVaultSeed()).map(cloneVault)
     for (const entry of options.seed ?? createSeed()) {
       const alive = entry.meta.deleted_at === null
       // У надгробия нет полезной нагрузки — ни секретов, ни флагов о них.
@@ -179,6 +200,39 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     if (gate.requiresUnlock && !unlocked) {
       throw new CoreError('LOCKED', 'Хранилище заблокировано.')
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Секции (F7, §4.2)
+  // -------------------------------------------------------------------------
+
+  function findVault(vaultId: VaultId): Vault {
+    const found = vaults.find((vault) => vault.vault_id === vaultId)
+    if (!found) throw new CoreError('NOT_FOUND', 'Секция не найдена.')
+    return found
+  }
+
+  /** Секция по умолчанию есть всегда: иначе новую запись некуда положить. */
+  function defaultVault(): Vault {
+    const found = vaults.find((vault) => vault.is_default) ?? vaults[0]
+    if (!found) throw new CoreError('INTERNAL', 'В хранилище не осталось ни одной секции.')
+    return found
+  }
+
+  function validVaultName(name: string): string {
+    const trimmed = name.trim()
+    if (trimmed === '') throw new CoreError('VALIDATION', 'У секции должно быть имя.')
+    if (trimmed.length > VAULT_NAME_MAX_LENGTH) {
+      throw new CoreError('VALIDATION', `Имя секции длиннее ${VAULT_NAME_MAX_LENGTH} символов.`)
+    }
+    return trimmed
+  }
+
+  function validVaultColor(color: VaultColor): VaultColor {
+    if (!VAULT_COLORS.includes(color)) {
+      throw new CoreError('VALIDATION', 'Неизвестный цвет метки секции.')
+    }
+    return color
   }
 
   function liveRecord(recordId: RecordId): RecordMeta {
@@ -239,6 +293,9 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       generatorProfile = cloneProfile(DEFAULT_GENERATOR_PROFILE)
 
       const initializedAt = timestamp()
+      // Одна секция по умолчанию: выбирать между секциями до того, как они
+      // заведены, не из чего.
+      vaults = [createInitialVault(initializedAt)]
       return { initialized_at: initializedAt, unlocked_at: doUnlock() }
     },
 
@@ -286,6 +343,9 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       const serviceName = requireNonEmpty(draft.service_name, 'Сервис')
       const login = requireNonEmpty(draft.login, 'Логин')
       const password = requirePresent(draft.password, 'Пароль')
+      // Секцию проверяем до записи: чужой `vault_id` из UI не должен создать
+      // запись, которой нет ни в одной секции.
+      const vault = draft.vault_id === undefined ? defaultVault() : findVault(draft.vault_id)
 
       const createdAt = timestamp()
       const newSecrets: RecordSecrets = {
@@ -296,7 +356,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       // ID генерирует ядро, а не UI. Здесь это делает фейк-ядро в роли ядра.
       const record: RecordMeta = {
         record_id: crypto.randomUUID(),
-        vault_id: draft.vault_id ?? MOCK_VAULT_PERSONAL,
+        vault_id: vault.vault_id,
         service_name: serviceName,
         urls: [...draft.urls],
         login,
@@ -338,7 +398,8 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
 
       const next: RecordMeta = {
         ...current,
-        vault_id: patch.vault_id ?? current.vault_id,
+        vault_id:
+          patch.vault_id === undefined ? current.vault_id : findVault(patch.vault_id).vault_id,
         service_name:
           patch.service_name === undefined
             ? current.service_name
@@ -380,6 +441,95 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       secrets.delete(recordId)
 
       return cloneMeta(tombstone)
+    },
+
+    async listVaults(): Promise<Vault[]> {
+      // Состав секций — содержимое хранилища: за замком его не показываем.
+      await enter({ requiresUnlock: true })
+      return vaults.map(cloneVault)
+    },
+
+    async createVault(name: string, color: VaultColor): Promise<Vault> {
+      await enter({ requiresUnlock: true })
+
+      const vault: Vault = {
+        vault_id: crypto.randomUUID(),
+        name: validVaultName(name),
+        color: validVaultColor(color),
+        // Новая секция синхронизируется: продукт про синхронизацию, и молча
+        // оставлять записи на одном устройстве было бы сюрпризом. Выключить —
+        // тумблером, осознанно.
+        sync: true,
+        is_default: false,
+        created_at: timestamp(),
+      }
+
+      vaults = [...vaults, vault]
+      return cloneVault(vault)
+    },
+
+    async updateVault(vaultId: VaultId, patch: VaultPatch): Promise<Vault> {
+      await enter({ requiresUnlock: true })
+
+      const current = findVault(vaultId)
+      const next: Vault = {
+        ...current,
+        name: patch.name === undefined ? current.name : validVaultName(patch.name),
+        color: patch.color === undefined ? current.color : validVaultColor(patch.color),
+      }
+
+      vaults = vaults.map((vault) => (vault.vault_id === vaultId ? next : vault))
+      return cloneVault(next)
+    },
+
+    async setVaultSync(vaultId: VaultId, sync: boolean): Promise<Vault> {
+      await enter({ requiresUnlock: true })
+
+      const next: Vault = { ...findVault(vaultId), sync }
+      vaults = vaults.map((vault) => (vault.vault_id === vaultId ? next : vault))
+      return cloneVault(next)
+    },
+
+    async setDefaultVault(vaultId: VaultId): Promise<Vault[]> {
+      await enter({ requiresUnlock: true })
+
+      findVault(vaultId)
+      // Ровно одна секция помечена: флаг снимается со всех остальных сразу.
+      vaults = vaults.map((vault) => ({ ...vault, is_default: vault.vault_id === vaultId }))
+      return vaults.map(cloneVault)
+    },
+
+    async deleteVault(vaultId: VaultId): Promise<Vault[]> {
+      await enter({ requiresUnlock: true })
+
+      const doomed = findVault(vaultId)
+      if (doomed.is_default) {
+        throw new CoreError(
+          'VALIDATION',
+          'Секция по умолчанию не удаляется: новым записям нужно куда-то попадать.',
+        )
+      }
+
+      vaults = vaults.filter((vault) => vault.vault_id !== vaultId)
+
+      // Записи НЕ удаляются вместе с секцией (§4.2): они переезжают в секцию
+      // по умолчанию. Смена секции — обычное изменение записи, поэтому версия
+      // растёт: на другом устройстве переезд должен быть виден как правка.
+      const home = defaultVault().vault_id
+      const movedAt = timestamp()
+      for (const [recordId, record] of meta) {
+        // Надгробие не переносим: переезжать нечему, а лишняя версия у него
+        // только добавила бы работы синхронизации (§5.4).
+        if (record.vault_id !== vaultId || record.deleted_at !== null) continue
+        meta.set(recordId, {
+          ...record,
+          vault_id: home,
+          version: record.version + 1,
+          updated_at: movedAt,
+        })
+      }
+
+      return vaults.map(cloneVault)
     },
 
     async getGeneratorProfile(): Promise<GeneratorProfile> {

@@ -3,7 +3,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import { createMockCoreClient, MOCK_VAULT_WORK, type MockCoreClient } from '@/core/mock'
+import { useRecordsStore } from '@/stores/useRecordsStore'
+import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useVaultStore } from '@/stores/useVaultStore'
 import HomeView from '../HomeView.vue'
 
@@ -284,6 +286,109 @@ describe('HomeView · выбор записи и панели', () => {
     expect(wrapper.findAll('.home__group-list li')).toHaveLength(3)
     expect(wrapper.text()).not.toContain('demo-user')
     expect(wrapper.text()).toContain('Запись не выбрана')
+  })
+})
+
+describe('HomeView · сайдбар секций (F7)', () => {
+  /** Найти строку сайдбара по имени секции. */
+  function section(wrapper: Awaited<ReturnType<typeof mountHome>>, name: string) {
+    const found = wrapper
+      .findAll('.sections__item')
+      .find((node) => node.find('.sections__name').text() === name)
+    if (!found) throw new Error(`Секция «${name}» не найдена в сайдбаре`)
+    return found
+  }
+
+  it('показывает секции ядра со счётчиками и пометкой локальной', async () => {
+    const wrapper = await mountHome()
+
+    expect(section(wrapper, 'Все записи').text()).toContain('4')
+    expect(section(wrapper, 'Личное').text()).toContain('3')
+    expect(section(wrapper, 'Рабочее').text()).toContain('1')
+    // «Рабочее» не синхронизируется — это видно там же, где её открывают.
+    expect(section(wrapper, 'Рабочее').text()).toContain('локально')
+    expect(section(wrapper, 'Личное').text()).not.toContain('локально')
+
+    wrapper.unmount()
+  })
+
+  it('фильтрует список по выбранной секции', async () => {
+    const wrapper = await mountHome()
+
+    await section(wrapper, 'Рабочее').trigger('click')
+
+    expect(wrapper.findAll('.home__group-list li')).toHaveLength(1)
+    expect(wrapper.text()).toContain('work.demo@syncra.example')
+    expect(wrapper.text()).not.toContain('demo-user')
+    expect(wrapper.find('.home__count').text()).toContain('1 запись')
+
+    await section(wrapper, 'Все записи').trigger('click')
+    expect(wrapper.findAll('.home__group-list li')).toHaveLength(4)
+
+    wrapper.unmount()
+  })
+
+  it('предупреждает, что записи локальной секции никуда не уезжают', async () => {
+    const wrapper = await mountHome()
+
+    await section(wrapper, 'Рабочее').trigger('click')
+    expect(wrapper.find('.home__local').text()).toContain('не уезжают с этого устройства')
+
+    await section(wrapper, 'Личное').trigger('click')
+    expect(wrapper.find('.home__local').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('объясняет пустую секцию и даёт вернуться ко всем записям', async () => {
+    const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
+    const wrapper = await mountHome(core)
+    const empty = await core.createVault('Учёба', 'mint')
+    await useSectionsStore().load()
+    await flushPromises()
+
+    await section(wrapper, 'Учёба').trigger('click')
+
+    expect(wrapper.text()).toContain('В этой секции пока пусто')
+    expect(wrapper.find('.home__list').exists()).toBe(false)
+    expect(useRecordsStore().vaultFilter).toBe(empty.vault_id)
+
+    const back = wrapper
+      .findAll('.sy-empty__actions button')
+      .find((n) => n.text() === 'Показать все')
+    await back!.trigger('click')
+    expect(wrapper.findAll('.home__group-list li')).toHaveLength(4)
+
+    wrapper.unmount()
+  })
+
+  it('новая запись ложится в открытую секцию', async () => {
+    const wrapper = await mountHome()
+    await wrapper.findAll('.sections__item')[2]!.trigger('click')
+
+    await wrapper.find('.home__new').trigger('click')
+    await flushPromises()
+
+    const inputs = wrapper.findAll<HTMLInputElement>('.form__grid .sy-input input')
+    const set = async (index: number, value: string) => {
+      const input = inputs[index]!
+      input.element.value = value
+      await input.trigger('input')
+    }
+    await set(0, 'Figma')
+    await set(1, 'anna@studio.example')
+
+    const password = wrapper.find<HTMLInputElement>('.form__secrets input[type="password"]')
+    password.element.value = 'mock-figma-pw'
+    await password.trigger('input')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const created = useRecordsStore().records.find((record) => record.service_name === 'Figma')
+    expect(created?.vault_id).toBe(MOCK_VAULT_WORK)
+
+    wrapper.unmount()
   })
 })
 

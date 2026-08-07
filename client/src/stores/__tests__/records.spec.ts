@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import {
+  createMockCoreClient,
+  MOCK_VAULT_PERSONAL,
+  MOCK_VAULT_WORK,
+  type MockCoreClient,
+} from '@/core/mock'
 import { useRecordsStore } from '../useRecordsStore'
 
 let core: MockCoreClient
@@ -96,6 +101,74 @@ describe('поиск и группировка', () => {
 
     expect(list.visible).toBe(1)
     expect(list.matched[0]?.service_name).toBe('Steam')
+  })
+})
+
+describe('фильтр по секции (F7)', () => {
+  it('по умолчанию показывает все записи', async () => {
+    const list = useRecordsStore()
+    await list.load()
+
+    expect(list.vaultFilter).toBeNull()
+    expect(list.total).toBe(list.totalAll)
+  })
+
+  it('сужает список до выбранной секции, не меняя общего счётчика', async () => {
+    const list = useRecordsStore()
+    await list.load()
+
+    list.setVaultFilter(MOCK_VAULT_WORK)
+
+    expect(list.total).toBe(1)
+    expect(list.totalAll).toBe(4)
+    expect(list.matched.every((record) => record.vault_id === MOCK_VAULT_WORK)).toBe(true)
+
+    list.setVaultFilter(null)
+    expect(list.total).toBe(4)
+  })
+
+  it('считает записи по секциям для сайдбара', async () => {
+    const list = useRecordsStore()
+    await list.load()
+
+    expect(list.countByVault.get(MOCK_VAULT_PERSONAL)).toBe(3)
+    expect(list.countByVault.get(MOCK_VAULT_WORK)).toBe(1)
+  })
+
+  it('поиск работает внутри выбранной секции', async () => {
+    const list = useRecordsStore()
+    await list.load()
+
+    list.setVaultFilter(MOCK_VAULT_WORK)
+    list.setQuery('google')
+    expect(list.visible).toBe(1)
+    expect(list.matched[0]?.login).toBe('work.demo@syncra.example')
+
+    // Личный аккаунт того же сервиса лежит в другой секции — его здесь нет.
+    list.setQuery('personal')
+    expect(list.visible).toBe(0)
+  })
+
+  it('снимает выбор записи, оставшейся в другой секции', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const personal = list.records.find((record) => record.vault_id === MOCK_VAULT_PERSONAL)!
+    list.select(personal.record_id)
+
+    list.setVaultFilter(MOCK_VAULT_WORK)
+
+    expect(list.selectedId).toBeNull()
+  })
+
+  it('забывает фильтр по удалённой секции', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    list.setVaultFilter(MOCK_VAULT_WORK)
+
+    list.forgetVault(MOCK_VAULT_WORK)
+
+    expect(list.vaultFilter).toBeNull()
+    expect(list.total).toBe(4)
   })
 })
 

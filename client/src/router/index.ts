@@ -24,6 +24,12 @@ export const routes = [
     component: () => import('@/views/SettingsView.vue'),
   },
   {
+    path: '/sections',
+    name: 'sections',
+    // Управление секциями — редкий экран, грузится лениво (F7, §4.2).
+    component: () => import('@/views/SectionsView.vue'),
+  },
+  {
     path: '/unlock',
     name: 'unlock',
     // Экраны входа грузятся лениво: в разблокированном сеансе они не нужны.

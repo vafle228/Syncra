@@ -8,7 +8,10 @@ import SyInput from '../SyInput.vue'
 import SyListItem from '../SyListItem.vue'
 import SyModal from '../SyModal.vue'
 import SySecretField from '../SySecretField.vue'
+import SySelect from '../SySelect.vue'
+import SyToggle from '../SyToggle.vue'
 import { iconHue, iconInitials } from '../localIcon'
+import { vaultColorVar } from '../vaultColor'
 
 describe('SyButton', () => {
   it('вешает класс варианта и размера', () => {
@@ -212,6 +215,76 @@ describe('SySecretField', () => {
     expect(wrapper.text()).toBe('ЗаметкиЗаметок нет')
     expect(wrapper.find('.sy-secret__toggle').exists()).toBe(false)
     expect(wrapper.find('.sy-copy').exists()).toBe(false)
+  })
+})
+
+describe('SyToggle', () => {
+  it('это switch: состояние читается и голосом, и словами', () => {
+    const wrapper = mount(SyToggle, {
+      props: {
+        modelValue: false,
+        label: 'Синхронизировать',
+        stateText: 'только здесь',
+      },
+    })
+
+    const control = wrapper.find('.sy-toggle__switch')
+    expect(control.attributes('role')).toBe('switch')
+    expect(control.attributes('aria-checked')).toBe('false')
+    expect(wrapper.text()).toContain('только здесь')
+  })
+
+  it('шлёт наверх противоположное значение, а сам не переключается', async () => {
+    const wrapper = mount(SyToggle, { props: { modelValue: true, label: 'Синхронизировать' } })
+
+    await wrapper.find('.sy-toggle__switch').trigger('click')
+
+    // Состояние приходит из ответа ядра, а не «оптимистично» из клика.
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([false])
+    expect(wrapper.find('.sy-toggle__switch').attributes('aria-checked')).toBe('true')
+  })
+
+  it('пока ядро отвечает, нажать нельзя', async () => {
+    const wrapper = mount(SyToggle, {
+      props: { modelValue: false, label: 'Синхронизировать', busy: true },
+    })
+
+    expect(wrapper.find('.sy-toggle__switch').attributes('disabled')).toBeDefined()
+    await wrapper.find('.sy-toggle__switch').trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+})
+
+describe('SySelect', () => {
+  const options = [
+    { value: 'personal', label: 'Личное' },
+    { value: 'work', label: 'Рабочее · локальная' },
+  ]
+
+  it('показывает выбранное и прокидывает выбор наверх', async () => {
+    const wrapper = mount(SySelect, {
+      props: { modelValue: 'personal', label: 'Секция', options },
+    })
+
+    expect(wrapper.find<HTMLSelectElement>('select').element.value).toBe('personal')
+
+    await wrapper.find('select').setValue('work')
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['work'])
+  })
+
+  it('без вариантов нечего выбирать', () => {
+    const wrapper = mount(SySelect, { props: { modelValue: '', options: [] } })
+
+    expect(wrapper.find('select').attributes('disabled')).toBeDefined()
+  })
+})
+
+describe('цвета секций', () => {
+  it('отдаёт токен темы, а не готовый цвет', () => {
+    // Цвет метки зависит от темы: в светлой те же метки темнее. Хардкод здесь
+    // сломал бы контраст в одной из тем.
+    expect(vaultColorVar('indigo')).toBe('var(--sy-vault-indigo)')
+    expect(vaultColorVar('coral')).toBe('var(--sy-vault-coral)')
   })
 })
 

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { useRecordList } from '@/composables/useRecordList'
-import type { RecordDraft, RecordId, RecordMeta, RecordPatch } from '@/core/contract'
+import type { RecordDraft, RecordId, RecordMeta, RecordPatch, VaultId } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useCore, type Unsubscribe } from '@/core/ipc'
 
@@ -37,10 +37,34 @@ export const useRecordsStore = defineStore('records', () => {
   const loaded = ref(false)
   /** Какая запись открыта в правой панели. */
   const selectedId = ref<RecordId | null>(null)
+  /**
+   * Выбранная секция сайдбара (F7). `null` — «Все записи»: по умолчанию секции
+   * живут в одном пространстве (§4.2), и фильтр по ним — дело пользователя.
+   */
+  const vaultFilter = ref<VaultId | null>(null)
 
-  const { matched, groups, isSearching } = useRecordList(records, query)
+  /** Записи выбранной секции. Поиск и группировка идут уже внутри неё. */
+  const scoped = computed(() =>
+    vaultFilter.value === null
+      ? records.value
+      : records.value.filter((record) => record.vault_id === vaultFilter.value),
+  )
 
-  const total = computed(() => records.value.length)
+  const { matched, groups, isSearching } = useRecordList(scoped, query)
+
+  /** Сколько записей в секции — для счётчиков сайдбара. */
+  const countByVault = computed(() => {
+    const counts = new Map<VaultId, number>()
+    for (const record of records.value) {
+      counts.set(record.vault_id, (counts.get(record.vault_id) ?? 0) + 1)
+    }
+    return counts
+  })
+
+  /** Записей в текущей секции (или во всём хранилище, если фильтр снят). */
+  const total = computed(() => scoped.value.length)
+  /** Записей во всём хранилище — независимо от выбранной секции. */
+  const totalAll = computed(() => records.value.length)
   const visible = computed(() => matched.value.length)
   /** Сколько сервисов в выдаче — группа §4.4 считается за один. */
   const serviceCount = computed(() => groups.value.length)
@@ -65,6 +89,7 @@ export const useRecordsStore = defineStore('records', () => {
     error.value = null
     loaded.value = false
     selectedId.value = null
+    vaultFilter.value = null
   }
 
   /** Забрать метаданные записей у ядра. */
@@ -126,6 +151,22 @@ export const useRecordsStore = defineStore('records', () => {
     if (selectedId.value === id) selectedId.value = null
   }
 
+  /** Показать одну секцию или (при `null`) все записи сразу. */
+  function setVaultFilter(vaultId: VaultId | null): void {
+    vaultFilter.value = vaultId
+    // Выбранная запись могла остаться в другой секции — прятать её строку и
+    // держать карточку открытой было бы враньём про то, что сейчас на экране.
+    if (vaultId !== null && selected.value?.vault_id !== vaultId) selectedId.value = null
+  }
+
+  /**
+   * Секции больше нет (её удалили): фильтр по ней показал бы пустой список
+   * вместо всех записей. Сами записи ядро перенесло в секцию по умолчанию.
+   */
+  function forgetVault(vaultId: VaultId): void {
+    if (vaultFilter.value === vaultId) vaultFilter.value = null
+  }
+
   function setQuery(next: string): void {
     query.value = next
   }
@@ -148,14 +189,19 @@ export const useRecordsStore = defineStore('records', () => {
     loaded,
     selectedId,
     selected,
+    vaultFilter,
     groups,
     matched,
     isSearching,
+    countByVault,
     total,
+    totalAll,
     visible,
     serviceCount,
     load,
     select,
+    setVaultFilter,
+    forgetVault,
     create,
     update,
     remove,

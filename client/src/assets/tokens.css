@@ -57,6 +57,16 @@
   --sy-icon-bg: 0.33 0.055;
   --sy-icon-border: 0.43 0.07;
   --sy-icon-ink: 0.86 0.09;
+
+  /*
+   * Метки секций (F7). Пять ступеней палитры макета — ровно те, между которыми
+   * пользователь выбирает; шестой цвет не заводить.
+   */
+  --sy-vault-indigo: oklch(0.74 0.12 262);
+  --sy-vault-amber: oklch(0.74 0.12 78);
+  --sy-vault-magenta: oklch(0.74 0.12 320);
+  --sy-vault-mint: oklch(0.74 0.12 168);
+  --sy-vault-coral: oklch(0.74 0.12 32);
 }
 
 :root[data-theme='light'] {
@@ -96,6 +106,13 @@
   --sy-icon-bg: 0.93 0.038;
   --sy-icon-border: 0.868 0.055;
   --sy-icon-ink: 0.47 0.115;
+
+  /* Те же hue, но темнее: на белом метка L≈0.74 не читается. */
+  --sy-vault-indigo: oklch(0.56 0.13 262);
+  --sy-vault-amber: oklch(0.56 0.13 78);
+  --sy-vault-magenta: oklch(0.56 0.13 320);
+  --sy-vault-mint: oklch(0.56 0.13 168);
+  --sy-vault-coral: oklch(0.56 0.13 32);
 }
 
 :root {

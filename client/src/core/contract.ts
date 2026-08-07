@@ -229,6 +229,92 @@ export interface DeleteRecordRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Секции / vaults (F7, §4.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Цвет метки секции. На проводе — ИМЯ ступени палитры, а не CSS-цвет: набор
+ * цветов задаёт дизайн-система, и хранить в ядре строку `oklch(...)` значило бы
+ * зашить оформление в данные, которые синхронизируются между устройствами и
+ * переживут смену темы.
+ */
+export type VaultColor = 'indigo' | 'amber' | 'magenta' | 'mint' | 'coral'
+
+/** Порядок — как в палитре макета (§ «Секции»). */
+export const VAULT_COLORS = ['indigo', 'amber', 'magenta', 'mint', 'coral'] as const
+
+/**
+ * Секция (§4.2).
+ *
+ * Секция — это ПАПКА, а не отдельное хранилище: ключ у всех секций один, и при
+ * автозаполнении подходящая запись предлагается независимо от того, в какой
+ * секции лежит. Единственное, что секция правда решает, — уезжает ли её
+ * содержимое на другие устройства (`sync`).
+ *
+ * Секретов здесь нет: имя и цвет — метаданные, как и всё остальное в списках.
+ */
+export interface Vault {
+  vault_id: VaultId
+  name: string
+  color: VaultColor
+  /**
+   * Синхронизировать секцию между устройствами (§4.2). `false` — секция
+   * остаётся локальной: её записи не уезжают с этого устройства и не появятся
+   * на других, даже сопряжённых.
+   */
+  sync: boolean
+  /**
+   * Куда ложится запись, созданная без явной секции. Помечена ровно одна
+   * секция — иначе `create_record` без `vault_id` было бы некуда положить.
+   */
+  is_default: boolean
+  created_at: IsoDateTime
+}
+
+/**
+ * Максимальная длина имени секции. Политику задаёт ЯДРО — здесь продублирована
+ * ради `maxlength` в поле ввода; ядро проверяет повторно (`VALIDATION`).
+ */
+export const VAULT_NAME_MAX_LENGTH = 40
+
+export type ListVaultsRequest = Record<string, never>
+export type ListVaultsResponse = Vault[]
+
+export interface CreateVaultRequest {
+  name: string
+  color: VaultColor
+}
+
+/** Что можно поменять у секции. Отсутствующее поле = «не трогать». */
+export interface VaultPatch {
+  name?: string
+  color?: VaultColor
+}
+
+export interface UpdateVaultRequest {
+  vault_id: VaultId
+  patch: VaultPatch
+}
+
+/**
+ * Флаг синхронизации вынесен из `update_vault` намеренно: переименование —
+ * косметика, а этот тумблер решает, покидают ли записи устройство. Такие вещи
+ * не стоит уметь менять «заодно», патчем вместе с цветом.
+ */
+export interface SetVaultSyncRequest {
+  vault_id: VaultId
+  sync: boolean
+}
+
+export interface SetDefaultVaultRequest {
+  vault_id: VaultId
+}
+
+export interface DeleteVaultRequest {
+  vault_id: VaultId
+}
+
+// ---------------------------------------------------------------------------
 // Генератор паролей (F6, §6.1)
 // ---------------------------------------------------------------------------
 
@@ -336,6 +422,21 @@ export interface CommandMap {
   updateRecord: { request: UpdateRecordRequest; response: RecordMeta }
   /** Возвращает tombstone-метаданные удалённой записи (§5.4). */
   deleteRecord: { request: DeleteRecordRequest; response: RecordMeta }
+  listVaults: { request: ListVaultsRequest; response: ListVaultsResponse }
+  createVault: { request: CreateVaultRequest; response: Vault }
+  updateVault: { request: UpdateVaultRequest; response: Vault }
+  setVaultSync: { request: SetVaultSyncRequest; response: Vault }
+  /**
+   * Меняет флаг сразу у двух секций (новая и прежняя), поэтому в ответе — весь
+   * список: иначе UI пришлось бы догадываться, с кого флаг сняли.
+   */
+  setDefaultVault: { request: SetDefaultVaultRequest; response: Vault[] }
+  /**
+   * Удаление секции НЕ удаляет записи: ядро переносит их в секцию по умолчанию
+   * (§4.2 — секция это папка, а не хранилище). В ответе список оставшихся
+   * секций; записи после этого стоит перечитать — у них сменился `vault_id`.
+   */
+  deleteVault: { request: DeleteVaultRequest; response: Vault[] }
   getGeneratorProfile: {
     request: GetGeneratorProfileRequest
     response: GetGeneratorProfileResponse
@@ -360,6 +461,12 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   createRecord: 'create_record',
   updateRecord: 'update_record',
   deleteRecord: 'delete_record',
+  listVaults: 'list_vaults',
+  createVault: 'create_vault',
+  updateVault: 'update_vault',
+  setVaultSync: 'set_vault_sync',
+  setDefaultVault: 'set_default_vault',
+  deleteVault: 'delete_vault',
   getGeneratorProfile: 'get_generator_profile',
   saveGeneratorProfile: 'save_generator_profile',
   generatePasswords: 'generate_passwords',

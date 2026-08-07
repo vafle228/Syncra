@@ -18,6 +18,10 @@ import {
   type RecordPatch,
   type RecordSecrets,
   type UnlockResponse,
+  type Vault,
+  type VaultColor,
+  type VaultId,
+  type VaultPatch,
   type VaultStatus,
 } from './contract'
 import { toCoreError } from './errors'
@@ -69,6 +73,29 @@ export interface CoreClient {
   /** Мягкое удаление: ядро ставит tombstone и возвращает его метаданные (§5.4). */
   deleteRecord(recordId: RecordId): Promise<RecordMeta>
 
+  /** Секции хранилища (F7, §4.2). Имя и цвет — метаданные, не секрет. */
+  listVaults(): Promise<Vault[]>
+
+  createVault(name: string, color: VaultColor): Promise<Vault>
+
+  /** Переименовать / перекрасить. Флаг синхронизации сюда не входит. */
+  updateVault(vaultId: VaultId, patch: VaultPatch): Promise<Vault>
+
+  /**
+   * Включить или выключить синхронизацию секции (§4.2). Выключенная секция
+   * остаётся на этом устройстве целиком — вместе со всеми своими записями.
+   */
+  setVaultSync(vaultId: VaultId, sync: boolean): Promise<Vault>
+
+  /** Назначить секцию по умолчанию. Возвращает весь список: флаг сняли ещё с одной. */
+  setDefaultVault(vaultId: VaultId): Promise<Vault[]>
+
+  /**
+   * Удалить секцию. Записи не удаляются — ядро переносит их в секцию по
+   * умолчанию, поэтому после этого список записей надо перечитать.
+   */
+  deleteVault(vaultId: VaultId): Promise<Vault[]>
+
   /** Сохранённые правила генерации (F6, §6.1). Настройки, не секрет. */
   getGeneratorProfile(): Promise<GeneratorProfile>
 
@@ -118,6 +145,12 @@ export function createTauriCoreClient(): CoreClient {
     createRecord: (draft) => call('createRecord', { draft }),
     updateRecord: (recordId, patch) => call('updateRecord', { record_id: recordId, patch }),
     deleteRecord: (recordId) => call('deleteRecord', { record_id: recordId }),
+    listVaults: () => call('listVaults', {}),
+    createVault: (name, color) => call('createVault', { name, color }),
+    updateVault: (vaultId, patch) => call('updateVault', { vault_id: vaultId, patch }),
+    setVaultSync: (vaultId, sync) => call('setVaultSync', { vault_id: vaultId, sync }),
+    setDefaultVault: (vaultId) => call('setDefaultVault', { vault_id: vaultId }),
+    deleteVault: (vaultId) => call('deleteVault', { vault_id: vaultId }),
     getGeneratorProfile: () => call('getGeneratorProfile', {}),
     saveGeneratorProfile: (profile) => call('saveGeneratorProfile', { profile }),
     generatePasswords: (count, profile) => call('generatePasswords', { count, profile }),

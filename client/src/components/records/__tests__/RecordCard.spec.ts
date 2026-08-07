@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 import type { RecordMeta } from '@/core/contract'
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import { createMockCoreClient, MOCK_VAULT_WORK, type MockCoreClient } from '@/core/mock'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import RecordCard from '../RecordCard.vue'
 
@@ -81,6 +81,29 @@ describe('RecordCard · метаданные', () => {
     expect(secretField(wrapper, 'Ключ TOTP').text()).toContain('Не подключён')
     // Пустое поле нечего открывать — кнопки «Показать» у него нет.
     expect(secretField(wrapper, 'Заметки').find('.sy-secret__toggle').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('показывает секцию записи и говорит, уезжает ли она (F7, §4.2)', async () => {
+    const { wrapper } = await mountCard()
+
+    expect(wrapper.text()).toContain('Личное')
+    expect(wrapper.text()).toContain('синхронизируется')
+
+    wrapper.unmount()
+  })
+
+  it('прямо говорит, что у записи локальной секции нет копии на других устройствах', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    const record = list.records.find((item) => item.vault_id === MOCK_VAULT_WORK) as RecordMeta
+
+    const wrapper = mount(RecordCard, { props: { record }, attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.find('.card__foot-note').text()).toContain('копии этой записи на других')
+    expect(wrapper.text()).toContain('только это устройство')
 
     wrapper.unmount()
   })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import {
   iconHue,
@@ -8,11 +8,13 @@ import {
   SyCopyButton,
   SyModal,
   SySecretField,
+  vaultColorVar,
 } from '@/components/ui'
 import { useRecordSecrets } from '@/composables/useRecordSecrets'
 import type { RecordMeta } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useRecordsStore } from '@/stores/useRecordsStore'
+import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useToastStore } from '@/stores/useToastStore'
 
 import { formatDate, passwordAgeWarning } from './recordFormat'
@@ -34,7 +36,19 @@ const props = defineProps<{ record: RecordMeta }>()
 const emit = defineEmits<{ edit: [] }>()
 
 const list = useRecordsStore()
+const sections = useSectionsStore()
 const toast = useToastStore()
+
+onMounted(() => {
+  void sections.ensure()
+})
+
+/**
+ * Секция записи (F7). Синхронизация настраивается по секциям (§4.2), поэтому
+ * ответ на вопрос «а этот пароль вообще есть на других устройствах?» должен
+ * быть виден прямо здесь, а не только в настройках.
+ */
+const section = computed(() => sections.byId(props.record.vault_id))
 
 const recordId = computed(() => props.record.record_id)
 const secrets = useRecordSecrets(recordId)
@@ -155,6 +169,22 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
           </div>
 
           <div class="card__field">
+            <span class="card__field-label">Секция</span>
+            <div class="card__value card__value--plain">
+              <span
+                v-if="section"
+                class="card__section-dot"
+                :style="{ background: vaultColorVar(section.color) }"
+                aria-hidden="true"
+              />
+              <span class="card__value-text">{{ section?.name ?? '—' }}</span>
+              <span v-if="section" class="card__section-sync">
+                {{ section.sync ? 'синхронизируется' : 'только это устройство' }}
+              </span>
+            </div>
+          </div>
+
+          <div class="card__field">
             <span class="card__field-label">Создано · пароль изменён</span>
             <div class="card__dates">
               <span>{{ formatDate(record.created_at) }}</span>
@@ -237,9 +267,13 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
     </div>
 
     <footer class="card__foot">
-      <span class="card__foot-note"
-        >Хранится на этом устройстве · синхронизация — в следующих задачах</span
-      >
+      <span class="card__foot-note">
+        {{
+          section === null || section.sync
+            ? 'Хранится на этом устройстве · синхронизация — в следующих задачах'
+            : `Секция «${section.name}» локальная · копии этой записи на других устройствах нет`
+        }}
+      </span>
       <SyButton variant="danger" size="sm" @click="askDelete">Удалить запись</SyButton>
     </footer>
 
@@ -435,6 +469,25 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
 
 .card__value + .card__value {
   margin-top: var(--sy-space-2);
+}
+
+/* Значение, которое нечего копировать: рамка есть, кнопки нет. */
+.card__value--plain {
+  padding-right: var(--sy-space-5);
+}
+
+.card__section-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.card__section-sync {
+  flex: none;
+  font-family: var(--sy-font-mono);
+  font-size: 10px;
+  color: var(--sy-text-3);
 }
 
 .card__value--empty {
