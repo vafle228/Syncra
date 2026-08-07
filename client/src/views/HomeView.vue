@@ -129,6 +129,7 @@ async function lock(): Promise<void> {
 
       <div class="home__header-actions">
         <SyThemeToggle />
+        <RouterLink class="home__settings" :to="{ name: 'devices' }">Устройства</RouterLink>
         <RouterLink class="home__settings" :to="{ name: 'settings' }">Настройки</RouterLink>
         <SyButton size="sm" :disabled="vault.busy" @click="lock">Заблокировать</SyButton>
       </div>

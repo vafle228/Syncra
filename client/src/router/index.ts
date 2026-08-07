@@ -30,6 +30,12 @@ export const routes = [
     component: () => import('@/views/SectionsView.vue'),
   },
   {
+    path: '/devices',
+    name: 'devices',
+    // Сопряжение по QR — редкий экран, грузится лениво (F8, §2.2).
+    component: () => import('@/views/DevicesView.vue'),
+  },
+  {
     path: '/unlock',
     name: 'unlock',
     // Экраны входа грузятся лениво: в разблокированном сеансе они не нужны.

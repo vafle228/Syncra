@@ -12,6 +12,10 @@ import {
   type GeneratorProfile,
   type InitVaultResponse,
   type ListRecordsRequest,
+  type PairingHandshake,
+  type PairingOffer,
+  type PairingResult,
+  type PairingSessionId,
   type RecordDraft,
   type RecordId,
   type RecordMeta,
@@ -113,6 +117,30 @@ export interface CoreClient {
    */
   generatePasswords(count: number, profile?: GeneratorProfile): Promise<GeneratePasswordsResponse>
 
+  /**
+   * Код для второго устройства (F8, §2.2): готовая матрица QR и тот же код
+   * цифрами-буквами на случай, когда камеры нет.
+   *
+   * Пейлоад собирает и кодирует ядро — UI получает картинку, а не одноразовый
+   * ключ сеанса строкой. Код живёт ограниченное время (`expires_at`).
+   */
+  getPairingPayload(): Promise<PairingOffer>
+
+  /**
+   * Отдать ядру прочитанный код второго устройства.
+   *
+   * Сопряжение этим ещё не завершается: ядро возвращает слова-отпечаток,
+   * которые человек сверяет с экраном второго устройства (§2.2). Пока он не
+   * подтвердил, устройство в доверенные НЕ записано.
+   */
+  submitPairedKey(payload: string): Promise<PairingHandshake>
+
+  /** Слова совпали: записать устройство в доверенные и перенести хранилище. */
+  confirmPairing(sessionId: PairingSessionId): Promise<PairingResult>
+
+  /** Слова не совпали или передумали — закрыть сеанс, ключ не запоминать. */
+  cancelPairing(sessionId: PairingSessionId): Promise<void>
+
   /** Подписка на событие ядра. */
   on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe
 }
@@ -154,6 +182,12 @@ export function createTauriCoreClient(): CoreClient {
     getGeneratorProfile: () => call('getGeneratorProfile', {}),
     saveGeneratorProfile: (profile) => call('saveGeneratorProfile', { profile }),
     generatePasswords: (count, profile) => call('generatePasswords', { count, profile }),
+    getPairingPayload: () => call('getPairingPayload', {}),
+    submitPairedKey: (payload) => call('submitPairedKey', { payload }),
+    confirmPairing: (sessionId) => call('confirmPairing', { session_id: sessionId }),
+    cancelPairing: async (sessionId) => {
+      await call('cancelPairing', { session_id: sessionId })
+    },
 
     on: (event, handler) => {
       let cancelled = false

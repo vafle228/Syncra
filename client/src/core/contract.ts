@@ -132,6 +132,8 @@ export const CORE_ERROR_CODES = [
   'NOT_FOUND',
   /** Запрос не прошёл валидацию ядра. */
   'VALIDATION',
+  /** Код сопряжения устарел: срок жизни вышел (F8, §2.2). */
+  'PAIRING_EXPIRED',
   /** Непредвиденная ошибка ядра. */
   'INTERNAL',
 ] as const
@@ -407,6 +409,130 @@ export interface GeneratePasswordsResponse {
   entropy_bits: number
 }
 
+// ---------------------------------------------------------------------------
+// Сопряжение устройств (F8, §2.2)
+// ---------------------------------------------------------------------------
+
+export type DeviceId = string
+export type PairingSessionId = string
+
+/** Тип устройства — только для иконки и подписи. В доверии не участвует (§2.1). */
+export type DeviceKind = 'desktop' | 'mobile'
+
+/**
+ * Доверенное устройство (§2.2).
+ *
+ * Корень доверия — публичный ключ, и он остаётся В ЯДРЕ: сюда приходит только
+ * то, что нужно нарисовать список. Ни ключа, ни MAC-адреса в этом типе нет —
+ * MAC вообще не основание для доверия (§2.1), а показывать сетевые адреса
+ * пользователю незачем.
+ */
+export interface Device {
+  device_id: DeviceId
+  name: string
+  kind: DeviceKind
+  /** Устройство, на котором открыт этот UI. Себя отозвать нельзя (F9). */
+  is_this_device: boolean
+  paired_at: IsoDateTime
+  /** Когда устройство последний раз выходило на связь. `null` — ни разу. */
+  last_seen_at: IsoDateTime | null
+  /** Отзыв доступа (§2.3). `null` у действующих устройств. Наполняется в F9. */
+  revoked_at: IsoDateTime | null
+}
+
+/**
+ * Готовая матрица QR-кода.
+ *
+ * Кодирует ядро, а не UI. Причина не в удобстве: в пейлоаде лежит одноразовый
+ * ключ сеанса, и чем меньше он существует в виде JS-строки, тем лучше. UI
+ * получает КАРТИНКУ кода, рисует её и ничего не знает о содержимом.
+ */
+export interface QrMatrix {
+  /** Сторона матрицы в модулях (без полей вокруг — их добавляет UI). */
+  size: number
+  /** `size` строк по `size` символов: `'1'` — тёмный модуль, `'0'` — светлый. */
+  rows: string[]
+}
+
+/**
+ * Код, который устройство показывает второму (§2.2, §3.6 макета).
+ *
+ * Живёт ограниченное время: одноразовый ключ сеанса, повисший на экране
+ * до утра, — это приглашение сопрячься для любого, кто мимо прошёл.
+ */
+export interface PairingOffer {
+  session_id: PairingSessionId
+  qr: QrMatrix
+  /**
+   * Тот же код словами-цифрами для ручного переноса, когда камеры нет.
+   * Канонический вид — без разделителей; их для читаемости расставляет UI.
+   */
+  manual_code: string
+  expires_at: IsoDateTime
+}
+
+/**
+ * Что второе устройство узнало, прочитав код. Сопряжение на этом ещё НЕ
+ * состоялось: ключами обменялись, но подтверждения человека нет.
+ *
+ * `fingerprint_words` — та самая защита от MITM (§2.2): слова считаются из
+ * ключей обеих сторон и должны совпасть на двух экранах. Совпали — посередине
+ * никого нет. Поэтому ядро возвращает их ДО того, как запишет устройство в
+ * доверенные, а не после.
+ */
+export interface PairingHandshake {
+  session_id: PairingSessionId
+  peer_name: string
+  peer_kind: DeviceKind
+  fingerprint_words: string[]
+  /** Докуда действителен этот сеанс: сверять отпечаток вечно нельзя. */
+  expires_at: IsoDateTime
+}
+
+/** Чем закончилось сопряжение. */
+export interface PairingResult {
+  device: Device
+  /**
+   * Сколько записей уехало на новое устройство. Записи локальных секций сюда
+   * НЕ входят: выключенная синхронизация означает «не уезжает никуда», в том
+   * числе на только что сопряжённое устройство (§4.2).
+   */
+  records_transferred: number
+  /** Сколько занял перенос. Считает ядро — оно его и делало. */
+  duration_ms: number
+}
+
+/** Длина кода для ручного ввода. Политика ЯДРА, здесь — ради `maxlength`. */
+export const PAIRING_MANUAL_CODE_LENGTH = 6
+
+export type GetPairingPayloadRequest = Record<string, never>
+export type GetPairingPayloadResponse = PairingOffer
+
+/**
+ * Отдать ядру то, что прочитали со второго устройства.
+ *
+ * Один строковый `payload` вместо двух полей намеренно: UI не разбирает код и
+ * не знает его формата — он не отличает полный пейлоад из QR от шестизначного
+ * кода, набранного руками. Разбирает ядро, оно же отвечает `VALIDATION`, если
+ * это вообще не код Syncra.
+ */
+export interface SubmitPairedKeyRequest {
+  payload: string
+}
+
+export type SubmitPairedKeyResponse = PairingHandshake
+
+/** Человек сверил слова на двух экранах и подтвердил (§2.2). */
+export interface ConfirmPairingRequest {
+  session_id: PairingSessionId
+}
+
+export type ConfirmPairingResponse = PairingResult
+
+export interface CancelPairingRequest {
+  session_id: PairingSessionId
+}
+
 /**
  * Карта команд: имя метода клиента → форма запроса/ответа.
  * Служит единым источником истины для `ipc.ts` и мок-ядра.
@@ -446,6 +572,12 @@ export interface CommandMap {
     response: SaveGeneratorProfileResponse
   }
   generatePasswords: { request: GeneratePasswordsRequest; response: GeneratePasswordsResponse }
+  getPairingPayload: { request: GetPairingPayloadRequest; response: GetPairingPayloadResponse }
+  submitPairedKey: { request: SubmitPairedKeyRequest; response: SubmitPairedKeyResponse }
+  /** Записывает второе устройство в доверенные — после сверки слов человеком. */
+  confirmPairing: { request: ConfirmPairingRequest; response: ConfirmPairingResponse }
+  /** Слова не совпали или передумали: сеанс закрывается, ключ не запоминается. */
+  cancelPairing: { request: CancelPairingRequest; response: null }
 }
 
 export type CommandName = keyof CommandMap
@@ -470,6 +602,10 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   getGeneratorProfile: 'get_generator_profile',
   saveGeneratorProfile: 'save_generator_profile',
   generatePasswords: 'generate_passwords',
+  getPairingPayload: 'get_pairing_payload',
+  submitPairedKey: 'submit_paired_key',
+  confirmPairing: 'confirm_pairing',
+  cancelPairing: 'cancel_pairing',
 }
 
 // ---------------------------------------------------------------------------

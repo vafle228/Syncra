@@ -116,6 +116,14 @@
 }
 
 :root {
+  /*
+   * QR-код (F8). Единственная пара цветов, которая НЕ переворачивается вместе
+   * с темой: код читает камера, а она ждёт тёмные модули на светлом поле.
+   * Инвертированный «под тёмную тему» QR — красивый и нечитаемый.
+   */
+  --sy-qr-bg: oklch(0.985 0.003 255);
+  --sy-qr-ink: oklch(0.175 0.008 255);
+
   /* Типографика. Sans — интерфейс, mono — всё, что читают по символам. */
   --sy-font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --sy-font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', 'Consolas', monospace;

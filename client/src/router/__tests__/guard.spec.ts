@@ -38,6 +38,14 @@ describe('routeForStatus', () => {
     expect(routeForStatus('unlocked', 'setup')).toEqual({ name: 'home' })
   })
 
+  it('сопряжение закрыто замком (F8)', () => {
+    // Код сопряжения даёт право забрать копию хранилища: показывать его на
+    // заблокированном устройстве нельзя тем более.
+    expect(routeForStatus('locked', 'devices')).toEqual({ name: 'unlock' })
+    expect(routeForStatus('uninitialized', 'devices')).toEqual({ name: 'setup' })
+    expect(routeForStatus('unlocked', 'devices')).toBe(true)
+  })
+
   it('настройки закрыты замком наравне с паролями (F6)', () => {
     // Профиль генератора — тоже содержимое хранилища: показывать его на
     // заблокированном устройстве незачем.

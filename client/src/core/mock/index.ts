@@ -1,5 +1,6 @@
 import type {
   CoreErrorCode,
+  Device,
   EventMap,
   EventName,
   GeneratePasswordsResponse,
@@ -7,6 +8,10 @@ import type {
   InitVaultResponse,
   IsoDateTime,
   ListRecordsRequest,
+  PairingHandshake,
+  PairingOffer,
+  PairingResult,
+  PairingSessionId,
   RecordDraft,
   RecordId,
   RecordMeta,
@@ -29,6 +34,17 @@ import {
   validateProfile,
 } from './generator'
 import {
+  buildQrMatrix,
+  createManualCode,
+  createPairingPayload,
+  createThisDevice,
+  fingerprintWords,
+  normalizePairingInput,
+  PAIRING_CODE_TTL_MS,
+  peerDevice,
+  unreadableCode,
+} from './pairing'
+import {
   createInitialVault,
   createSeed,
   createVaultSeed,
@@ -38,6 +54,12 @@ import {
 
 export { createVaultSeed, MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, MOCK_VAULT_WORK } from './seed'
 export { DEFAULT_GENERATOR_PROFILE } from './generator'
+export {
+  FINGERPRINT_WORD_COUNT,
+  PAIRING_CODE_TTL_MS,
+  PAIRING_PAYLOAD_PREFIX,
+  normalizePairingInput,
+} from './pairing'
 
 /**
  * In-memory фейк-ядро.
@@ -149,6 +171,17 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   const failures: CoreError[] = []
   const handlers = new Map<EventName, Set<(payload: never) => void>>()
 
+  // Сопряжение (F8, §2.2). Всё это состояние живёт только в открытом
+  // хранилище: замок его сбрасывает вместе с расшифрованными данными.
+  /** Код, который это устройство показывает прямо сейчас. */
+  let offer: { session_id: PairingSessionId; code: string; expires_at: IsoDateTime } | null = null
+  /** Коды, которые это устройство выдавало раньше: по ним отвечаем «истёк». */
+  const retiredCodes = new Set<string>()
+  /** Прочитанные коды, ждущие сверки слов человеком. */
+  const handshakes = new Map<PairingSessionId, PairingHandshake>()
+  /** Доверенные устройства. Полноценный список и отзыв — F9 (§2.3). */
+  let devices: Device[] = []
+
   let masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
   let initialized = options.initialized !== false
   let unlocked = false
@@ -166,9 +199,13 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     meta.clear()
     secrets.clear()
     vaults = []
+    devices = []
+    forgetPairing()
     // Свежесозданное хранилище пустое: сид — это «данные, которые уже были».
     if (!initialized) return
 
+    // Одно устройство — это самое. Сопряжённых нет: их заводит пользователь.
+    devices = [createThisDevice(timestamp())]
     vaults = (options.vaults ?? createVaultSeed()).map(cloneVault)
     for (const entry of options.seed ?? createSeed()) {
       const alive = entry.meta.deleted_at === null
@@ -254,7 +291,21 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     if (!unlocked) return
     unlocked = false
     unlockedAt = null
+    // Незавершённое сопряжение не переживает замок: код на экране даёт право
+    // забрать копию хранилища, а закрытое хранилище такого права не выдаёт.
+    forgetPairing()
     emit('locked', { locked_at: timestamp(), reason })
+  }
+
+  /** Забыть код и все начатые сеансы сопряжения. */
+  function forgetPairing(): void {
+    offer = null
+    retiredCodes.clear()
+    handshakes.clear()
+  }
+
+  function expired(at: IsoDateTime): boolean {
+    return Date.parse(at) <= now().getTime()
   }
 
   loadSeed()
@@ -296,6 +347,9 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       // Одна секция по умолчанию: выбирать между секциями до того, как они
       // заведены, не из чего.
       vaults = [createInitialVault(initializedAt)]
+      // Устройство ровно одно — это. Второе появится через сопряжение (F8).
+      devices = [createThisDevice(initializedAt)]
+      forgetPairing()
       return { initialized_at: initializedAt, unlocked_at: doUnlock() }
     },
 
@@ -553,6 +607,123 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       // строго, как сохраняемые, но профиль в хранилище НЕ меняют.
       const rules = profile === undefined ? generatorProfile : validateProfile(profile)
       return generatePasswords(rules, count) satisfies GeneratePasswordsResponse
+    },
+
+    // -------------------------------------------------------------------------
+    // Сопряжение устройств (F8, §2.2)
+    // -------------------------------------------------------------------------
+
+    async getPairingPayload(): Promise<PairingOffer> {
+      // Код даёт право забрать копию хранилища — на закрытом хранилище такого
+      // права нет, поэтому команда за замком.
+      await enter({ requiresUnlock: true })
+
+      // Каждый запрос — НОВЫЙ код: одноразовый ключ на то и одноразовый.
+      // Прежний сразу перестаёт действовать, а не доживает свой срок.
+      if (offer) retiredCodes.add(offer.code)
+
+      const code = createManualCode()
+      const payload = createPairingPayload(code)
+      offer = {
+        session_id: crypto.randomUUID(),
+        code,
+        expires_at: new Date(now().getTime() + PAIRING_CODE_TTL_MS).toISOString(),
+      }
+
+      return {
+        session_id: offer.session_id,
+        // UI получает картинку кода, а не пейлоад: одноразовому ключу сеанса
+        // незачем существовать ещё и JS-строкой.
+        qr: buildQrMatrix(payload),
+        manual_code: code,
+        expires_at: offer.expires_at,
+      }
+    },
+
+    async submitPairedKey(payload: string): Promise<PairingHandshake> {
+      await enter({ requiresUnlock: true })
+
+      const code = normalizePairingInput(payload)
+      if (code === null) throw unreadableCode()
+
+      // Свой же код, который уже не действует, — самая частая ошибка: человек
+      // читает со второго экрана устаревший QR.
+      if (
+        retiredCodes.has(code) ||
+        (offer !== null && offer.code === code && expired(offer.expires_at))
+      ) {
+        throw new CoreError(
+          'PAIRING_EXPIRED',
+          'Этот код больше не действует. Покажите новый на втором устройстве.',
+        )
+      }
+      if (offer !== null && offer.code === code) {
+        throw new CoreError(
+          'VALIDATION',
+          'Это код этого же устройства. Нужен код второго — с его экрана.',
+        )
+      }
+
+      const peer = peerDevice(code)
+      const handshake: PairingHandshake = {
+        session_id: crypto.randomUUID(),
+        peer_name: peer.name,
+        peer_kind: peer.kind,
+        // Слова считаются из кода, поэтому на обоих экранах выходят
+        // одинаковыми — в этом весь смысл сверки (§2.2).
+        fingerprint_words: fingerprintWords(code),
+        expires_at: new Date(now().getTime() + PAIRING_CODE_TTL_MS).toISOString(),
+      }
+
+      // Устройство ещё НЕ доверенное: сначала человек сверяет слова.
+      handshakes.set(handshake.session_id, handshake)
+      return { ...handshake, fingerprint_words: [...handshake.fingerprint_words] }
+    },
+
+    async confirmPairing(sessionId: PairingSessionId): Promise<PairingResult> {
+      await enter({ requiresUnlock: true })
+
+      const handshake = handshakes.get(sessionId)
+      if (!handshake) throw new CoreError('NOT_FOUND', 'Сеанс сопряжения не найден.')
+
+      handshakes.delete(sessionId)
+      if (expired(handshake.expires_at)) {
+        throw new CoreError('PAIRING_EXPIRED', 'Сеанс сопряжения истёк. Начните заново.')
+      }
+
+      const pairedAt = timestamp()
+      const device: Device = {
+        device_id: crypto.randomUUID(),
+        name: handshake.peer_name,
+        kind: handshake.peer_kind,
+        is_this_device: false,
+        paired_at: pairedAt,
+        last_seen_at: pairedAt,
+        revoked_at: null,
+      }
+      devices = [...devices, device]
+
+      // Уезжают только записи синхронизируемых секций: выключенная
+      // синхронизация означает «никуда», в том числе на новое устройство (§4.2).
+      const syncing = new Set(vaults.filter((vault) => vault.sync).map((vault) => vault.vault_id))
+      const transferred = [...meta.values()].filter(
+        (record) => record.deleted_at === null && syncing.has(record.vault_id),
+      ).length
+
+      return {
+        device: { ...device },
+        records_transferred: transferred,
+        // Настоящее ядро измеряет перенос; фейк-ядро его не делает и честно
+        // считает время по объёму, а не выдумывает красивую цифру.
+        duration_ms: 200 + transferred * 9,
+      }
+    },
+
+    async cancelPairing(sessionId: PairingSessionId): Promise<void> {
+      await enter({ requiresUnlock: true })
+      // Идемпотентно: отменять уже отменённое — не ошибка, а норма для кнопки
+      // «Отмена», по которой можно нажать дважды.
+      handshakes.delete(sessionId)
     },
 
     on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe {
