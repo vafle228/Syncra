@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import ConflictBanner from '@/components/conflicts/ConflictBanner.vue'
 import ConflictDialog from '@/components/conflicts/ConflictDialog.vue'
@@ -22,7 +22,7 @@ import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useSyncStore } from '@/stores/useSyncStore'
 import { useToastStore } from '@/stores/useToastStore'
 
-import { formatDate, passwordAgeWarning } from './recordFormat'
+import { formatDate, hostOf, passwordAgeWarning } from './recordFormat'
 
 /**
  * Карточка записи (F5, §3.3).
@@ -78,6 +78,81 @@ const clipboard = secrets.clipboard
 const hue = computed(() => iconHue(props.record.urls[0] ?? props.record.service_name))
 const initials = computed(() => iconInitials(props.record.service_name))
 const ageWarning = computed(() => passwordAgeWarning(props.record.password_updated_at))
+
+/**
+ * Плашка состояния рядом с логином (прототип, шапка карточки). Отвечает на
+ * вопрос «а этот пароль вообще есть где-то ещё», не заставляя идти в настройки.
+ *
+ * Порядок проверок — это приоритет, а не удобство чтения: конфликт заслонять
+ * нечем, локальная секция важнее очереди отправки (запись не уедет НИКОГДА, а
+ * не «пока»), и лишь потом обычное ожидание обмена.
+ */
+const syncChip = computed<{ tone: 'accent' | 'warn' | 'danger'; text: string }>(() => {
+  if (conflict.value !== null) return { tone: 'danger', text: 'конфликт версий' }
+  if (section.value !== null && !section.value.sync) {
+    return { tone: 'warn', text: 'только это устройство' }
+  }
+  if (isPending.value) return { tone: 'warn', text: 'ждёт синхронизации' }
+  return { tone: 'accent', text: 'синхронизировано' }
+})
+
+// ---------------------------------------------------------------------------
+// Адреса
+//
+// Показываем ХОСТ, копируем ПОЛНЫЙ адрес: имя сайта — это то, что человек
+// узнаёт с одного взгляда, а путь и протокол нужны тому, кто адрес заберёт.
+// ---------------------------------------------------------------------------
+
+/** Сколько дополнительных адресов показывать, не спрашивая. */
+const URL_CHIPS_SHOWN = 2
+
+const extraUrls = computed(() => props.record.urls.slice(1))
+const urlsExpanded = ref(false)
+
+const visibleExtras = computed(() =>
+  urlsExpanded.value ? extraUrls.value : extraUrls.value.slice(0, URL_CHIPS_SHOWN),
+)
+
+const hiddenUrlCount = computed(() => Math.max(0, extraUrls.value.length - URL_CHIPS_SHOWN))
+
+// ---------------------------------------------------------------------------
+// Меню «···»
+//
+// Реплика дизайна: пункт в нём ровно один — признание, что состав редких
+// действий ещё не решён. Порт дословный (см. `TASKS.md`), но с настоящей
+// семантикой поповера: у прототипа это див с `onClick`.
+// ---------------------------------------------------------------------------
+
+const menuOpen = ref(false)
+const menuRoot = ref<HTMLElement | null>(null)
+
+function toggleMenu(): void {
+  menuOpen.value = !menuOpen.value
+}
+
+/**
+ * Поповер закрывается щелчком мимо и Escape. Без этого он выглядел бы ловушкой:
+ * открыл — и обратно только тем же «···», которого уже не видно за самим меню.
+ */
+function onDocumentPointerDown(event: MouseEvent): void {
+  if (!menuOpen.value) return
+  if (menuRoot.value?.contains(event.target as Node)) return
+  menuOpen.value = false
+}
+
+function onDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') menuOpen.value = false
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', onDocumentPointerDown)
+  document.addEventListener('keydown', onDocumentKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocumentPointerDown)
+  document.removeEventListener('keydown', onDocumentKeydown)
+})
 
 /** Копирование метаданных: буфер не чистим — там нет секрета. */
 async function copyMeta(key: string, value: string, what: string): Promise<void> {
@@ -149,11 +224,48 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
           <h2 class="card__title">{{ record.service_name }}</h2>
           <span v-if="record.account_label" class="card__label">{{ record.account_label }}</span>
         </div>
-        <p class="card__login">{{ record.login }}</p>
+        <div class="card__login-row">
+          <p class="card__login">{{ record.login }}</p>
+          <span class="card__sync" :class="`card__sync--${syncChip.tone}`">
+            <span class="card__sync-dot" aria-hidden="true" />
+            {{ syncChip.text }}
+          </span>
+        </div>
       </div>
 
       <div class="card__head-actions">
-        <SyButton size="sm" @click="emit('edit')">Изменить</SyButton>
+        <SyButton size="sm" data-test="card-edit" @click="emit('edit')">Изменить</SyButton>
+
+        <div ref="menuRoot" class="card__menu">
+          <button
+            type="button"
+            class="card__menu-button"
+            title="Другие действия"
+            aria-label="Другие действия"
+            :aria-expanded="menuOpen"
+            @click="toggleMenu"
+          >
+            ···
+          </button>
+
+          <div v-if="menuOpen" class="card__menu-pop" role="dialog" aria-label="Другие действия">
+            <div class="card__menu-head">
+              <span class="card__menu-tag">
+                <span class="card__menu-dot" aria-hidden="true" />
+                Ещё думаем
+              </span>
+              <p class="card__menu-text">
+                Здесь появятся редкие действия — что именно, решаем. В обсуждении: история
+                изменений, экспорт одной записи, перенос в другую секцию, доступ для близкого
+                человека.
+              </p>
+            </div>
+            <hr class="card__menu-rule" />
+            <p class="card__menu-foot">
+              Всё, что работает сейчас, лежит на виду: в карточке и в «Изменить».
+            </p>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -173,19 +285,60 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
         <div class="card__grid">
           <div class="card__field">
             <span class="card__field-label">Адреса сайта</span>
+
             <div v-if="record.urls.length === 0" class="card__value card__value--empty">
               Адресов нет — автозаполнению не за что зацепиться
             </div>
-            <div v-for="(url, index) in record.urls" :key="url" class="card__value">
-              <span class="card__value-text">{{ url }}</span>
-              <SyCopyButton
-                compact
-                label="Скопировать адрес"
-                :copied="clipboard.copiedKey.value === `url:${index}`"
-                :unavailable="!clipboard.available.value"
-                @click="copyMeta(`url:${index}`, url, 'Адрес')"
-              />
-            </div>
+
+            <template v-else>
+              <div class="card__value">
+                <span class="card__value-text" :title="record.urls[0]">
+                  {{ hostOf(record.urls[0]!) }}
+                </span>
+                <SyCopyButton
+                  compact
+                  label="Скопировать адрес"
+                  :copied="clipboard.copiedKey.value === 'url:0'"
+                  :unavailable="!clipboard.available.value"
+                  @click="copyMeta('url:0', record.urls[0]!, 'Адрес')"
+                />
+              </div>
+
+              <!--
+                Остальные адреса — чипами: у одной записи их бывает пять, и пять
+                полноразмерных строк вытеснили бы с экрана всё остальное.
+                Нажатие копирует полный адрес, как и у первого.
+              -->
+              <div v-if="visibleExtras.length > 0" class="card__chips">
+                <button
+                  v-for="(url, index) in visibleExtras"
+                  :key="url"
+                  type="button"
+                  class="card__chip"
+                  :title="`Скопировать ${url}`"
+                  @click="copyMeta(`url:${index + 1}`, url, 'Адрес')"
+                >
+                  {{ hostOf(url) }}
+                </button>
+              </div>
+
+              <button
+                v-if="hiddenUrlCount > 0 && !urlsExpanded"
+                type="button"
+                class="card__more"
+                @click="urlsExpanded = true"
+              >
+                ещё {{ hiddenUrlCount }}
+              </button>
+              <button
+                v-else-if="urlsExpanded && extraUrls.length > URL_CHIPS_SHOWN"
+                type="button"
+                class="card__more"
+                @click="urlsExpanded = false"
+              >
+                свернуть
+              </button>
+            </template>
           </div>
 
           <div class="card__field">
@@ -211,10 +364,11 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
                 :style="{ background: vaultColorVar(section.color) }"
                 aria-hidden="true"
               />
+              <!--
+                Только точка и имя: уедет ли запись, уже сказано плашкой в шапке,
+                и повторять это здесь значило бы держать две правды об одном.
+              -->
               <span class="card__value-text">{{ section?.name ?? '—' }}</span>
-              <span v-if="section" class="card__section-sync">
-                {{ section.sync ? 'синхронизируется' : 'только это устройство' }}
-              </span>
             </div>
           </div>
 
@@ -409,15 +563,149 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
   color: var(--sy-text-2);
 }
 
+.card__login-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sy-space-5);
+  min-width: 0;
+}
+
 .card__login {
   font-size: var(--sy-text-body);
   color: var(--sy-text-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Плашка «где живёт этот пароль» — рядом с логином, как в прототипе. */
+.card__sync {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--sy-border);
+  border-radius: 12px;
+  background: var(--sy-surface);
+  font-size: 11.5px;
+  color: var(--sy-text-2);
+  white-space: nowrap;
+}
+
+.card__sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sy-accent);
+}
+
+.card__sync--warn .card__sync-dot {
+  background: var(--sy-warn);
+}
+
+.card__sync--danger {
+  border-color: var(--sy-danger);
+}
+
+.card__sync--danger .card__sync-dot {
+  background: var(--sy-danger);
 }
 
 .card__head-actions {
   flex: none;
   display: flex;
   gap: var(--sy-space-3);
+}
+
+/* Меню «···» */
+
+.card__menu {
+  position: relative;
+}
+
+.card__menu-button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--sy-border-strong);
+  border-radius: var(--sy-radius-sm);
+  background: var(--sy-surface);
+  color: var(--sy-text-2);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--sy-transition);
+}
+
+.card__menu-button:hover {
+  background: var(--sy-surface-2);
+}
+
+.card__menu-button:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+.card__menu-pop {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  z-index: 20;
+  width: 278px;
+  padding: var(--sy-space-2);
+  border: 1px solid var(--sy-border-strong);
+  border-radius: var(--sy-radius-md);
+  background: var(--sy-surface);
+  box-shadow: var(--sy-shadow-window-2);
+  animation: sy-in 0.14s ease-out;
+}
+
+.card__menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px var(--sy-space-4) var(--sy-space-1);
+}
+
+.card__menu-tag {
+  display: flex;
+  align-items: center;
+  gap: var(--sy-space-3);
+  font-family: var(--sy-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--sy-tracking-label);
+  text-transform: uppercase;
+  color: var(--sy-text-3);
+}
+
+.card__menu-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sy-warn);
+}
+
+.card__menu-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
+}
+
+.card__menu-rule {
+  height: 1px;
+  margin: 7px var(--sy-space-2) 5px;
+  border: none;
+  background: var(--sy-border);
+}
+
+.card__menu-foot {
+  padding: 0 var(--sy-space-4) var(--sy-space-3);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--sy-text-3);
 }
 
 /* Тело */
@@ -521,11 +809,60 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
   border-radius: 2px;
 }
 
-.card__section-sync {
-  flex: none;
+/* Дополнительные адреса: чипы вместо строк — их бывает пять на одну запись. */
+.card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: var(--sy-space-2);
+}
+
+.card__chip {
+  max-width: 100%;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius-xs);
+  background: var(--sy-bg-0);
+  color: var(--sy-text-2);
   font-family: var(--sy-font-mono);
-  font-size: 10px;
-  color: var(--sy-text-3);
+  font-size: 11.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    border-color var(--sy-transition),
+    color var(--sy-transition);
+}
+
+.card__chip:hover {
+  border-color: var(--sy-accent);
+  color: var(--sy-text);
+}
+
+.card__chip:focus-visible,
+.card__more:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+.card__more {
+  align-self: flex-start;
+  height: 26px;
+  margin-top: var(--sy-space-2);
+  padding: 0 9px;
+  border: 1px dashed var(--sy-accent-border);
+  border-radius: var(--sy-radius-xs);
+  background: transparent;
+  color: var(--sy-accent);
+  font-family: var(--sy-font-mono);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.card__more:hover {
+  background: var(--sy-accent-quiet);
 }
 
 .card__value--empty {

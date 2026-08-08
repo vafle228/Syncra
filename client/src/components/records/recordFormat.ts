@@ -30,6 +30,27 @@ export function formatDateTime(value: IsoDateTime): string {
   return Number.isNaN(date.getTime()) ? '—' : DATE_TIME.format(date)
 }
 
+/**
+ * Короткое имя адреса для показа: `https://admin.google.com/u/0` → `admin.google.com`.
+ *
+ * Только для показа. Копируется и матчится по-прежнему ПОЛНЫЙ адрес: путь и
+ * протокол — часть того, что человек когда-то ввёл, и терять их при копировании
+ * значило бы молча испортить данные. Поэтому же неразбираемая строка
+ * возвращается как есть, а не заменяется прочерком: «example» без схемы это
+ * по-прежнему то, что написал пользователь.
+ */
+export function hostOf(url: string): string {
+  const trimmed = url.trim()
+  if (trimmed === '') return trimmed
+
+  try {
+    const parsed = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`)
+    return parsed.host === '' ? trimmed : parsed.host
+  } catch {
+    return trimmed
+  }
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export function daysSince(value: IsoDateTime, now: Date = new Date()): number | null {

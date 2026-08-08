@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { daysSince, formatDate, passwordAgeWarning } from '../recordFormat'
+import { daysSince, formatDate, hostOf, passwordAgeWarning } from '../recordFormat'
 
 const NOW = new Date('2026-08-06T12:00:00.000Z')
 
@@ -29,5 +29,21 @@ describe('passwordAgeWarning', () => {
     expect(passwordAgeWarning('2023-01-01T00:00:00.000Z', NOW)).toBe(
       'Пароль не менялся больше 3 лет — стоит заменить.',
     )
+  })
+})
+
+describe('hostOf', () => {
+  it('оставляет от адреса то, что человек узнаёт с одного взгляда', () => {
+    expect(hostOf('https://admin.google.com/u/0/ac/users')).toBe('admin.google.com')
+    expect(hostOf('http://localhost:5173/records')).toBe('localhost:5173')
+    // Схемы в сиде нет — адрес всё равно должен читаться.
+    expect(hostOf('store.steampowered.com')).toBe('store.steampowered.com')
+  })
+
+  it('на неразбираемой строке возвращает её саму, а не прочерк', () => {
+    // Это то, что человек когда-то ввёл. Показывать вместо адреса «—» значило бы
+    // делать вид, что поле пустое, когда оно заполнено.
+    expect(hostOf('не адрес вовсе')).toBe('не адрес вовсе')
+    expect(hostOf('   ')).toBe('')
   })
 })

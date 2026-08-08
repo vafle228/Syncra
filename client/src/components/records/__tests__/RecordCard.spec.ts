@@ -19,6 +19,8 @@ const writes: string[] = []
 
 const GITHUB = '6f1c2e14-4c1e-4a3f-9b4a-1f9f0c7a1003'
 const STEAM = '6f1c2e14-4c1e-4a3f-9b4a-1f9f0c7a1004'
+/** Запись в локальной секции «Рабочее» — и единственная с двумя адресами. */
+const GOOGLE_WORK = '6f1c2e14-4c1e-4a3f-9b4a-1f9f0c7a1002'
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -286,6 +288,165 @@ describe('подвал карточки (F10)', () => {
     await flushPromises()
 
     expect(wrapper.find('.card__foot-note').text()).toContain('уедет, когда рядом')
+
+    wrapper.unmount()
+  })
+})
+
+describe('RecordCard · адреса (F13)', () => {
+  /**
+   * Смонтировать карточку с заданным набором адресов.
+   *
+   * Проп — снимок записи, а не ссылка в стор: `update()` кладёт туда НОВЫЙ
+   * объект, поэтому свежую версию надо передать карточке явно, как это делает
+   * `VaultView` через `list.selected`.
+   */
+  async function mountWithUrls(urls: string[], recordId = GOOGLE_WORK) {
+    const mounted = await mountCard(recordId)
+    const updated = await useRecordsStore().update(recordId, { urls })
+    await mounted.wrapper.setProps({ record: updated })
+    await flushPromises()
+    return mounted
+  }
+
+  it('показывает имя сайта, а копирует полный адрес', async () => {
+    // Сид хранит адреса без схемы; после правки в форме там появляется путь —
+    // именно его надо отдать тому, кто адрес забирает.
+    const { wrapper } = await mountWithUrls([
+      'https://admin.google.com/u/0/ac/users',
+      'accounts.google.com',
+    ])
+
+    const primary = wrapper.find('.card__value-text')
+    expect(primary.text()).toBe('admin.google.com')
+    // Полный адрес не потерян — он в подсказке.
+    expect(primary.attributes('title')).toBe('https://admin.google.com/u/0/ac/users')
+
+    await wrapper.find('.card__value .sy-copy').trigger('click')
+    await flushPromises()
+
+    expect(writes).toEqual(['https://admin.google.com/u/0/ac/users'])
+
+    wrapper.unmount()
+  })
+
+  it('прячет лишние адреса за «ещё N», а не растит карточку', async () => {
+    const { wrapper } = await mountWithUrls([
+      'a.example',
+      'b.example',
+      'c.example',
+      'd.example',
+      'e.example',
+    ])
+
+    // Первый адрес — строкой, два следующих — чипами, остальные скрыты.
+    expect(wrapper.findAll('.card__chip')).toHaveLength(2)
+    expect(wrapper.find('.card__more').text()).toBe('ещё 2')
+
+    await wrapper.find('.card__more').trigger('click')
+    expect(wrapper.findAll('.card__chip')).toHaveLength(4)
+    expect(wrapper.find('.card__more').text()).toBe('свернуть')
+
+    wrapper.unmount()
+  })
+
+  it('чип копирует свой адрес целиком', async () => {
+    const { wrapper } = await mountCard(GOOGLE_WORK)
+
+    await wrapper.find('.card__chip').trigger('click')
+    await flushPromises()
+
+    expect(writes).toEqual(['admin.google.com'])
+
+    wrapper.unmount()
+  })
+
+  it('говорит, когда адреса нет вообще', async () => {
+    const { wrapper } = await mountWithUrls([], GITHUB)
+
+    expect(wrapper.find('.card__value--empty').text()).toContain('автозаполнению не за что')
+    expect(wrapper.find('.card__chip').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+})
+
+describe('RecordCard · плашка состояния в шапке (F13)', () => {
+  it('конфликт заслоняет всё остальное', async () => {
+    const { wrapper } = await mountCard(GITHUB)
+
+    expect(wrapper.find('.card__sync').text()).toBe('конфликт версий')
+    expect(wrapper.find('.card__sync').classes()).toContain('card__sync--danger')
+
+    wrapper.unmount()
+  })
+
+  it('про локальную секцию говорит прямо: копии нигде нет', async () => {
+    const { wrapper } = await mountCard(GOOGLE_WORK)
+
+    // «Только это устройство» важнее «ждёт синхронизации»: запись не уедет
+    // никогда, а не «пока».
+    expect(wrapper.find('.card__sync').text()).toBe('только это устройство')
+
+    wrapper.unmount()
+  })
+
+  it('спокойная запись подтверждает, что копии есть', async () => {
+    const { wrapper } = await mountCard(STEAM)
+
+    expect(wrapper.find('.card__sync').text()).toBe('синхронизировано')
+
+    wrapper.unmount()
+  })
+})
+
+describe('RecordCard · меню «···» (F13)', () => {
+  it('открывается по нажатию и честно говорит, что состав не решён', async () => {
+    const { wrapper } = await mountCard()
+    const button = wrapper.find('.card__menu-button')
+
+    expect(button.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('.card__menu-pop').exists()).toBe(false)
+
+    await button.trigger('click')
+
+    expect(button.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('.card__menu-pop').text()).toContain('Ещё думаем')
+    // Обещание реплики: рабочие действия не прячутся в меню.
+    expect(wrapper.find('.card__menu-pop').text()).toContain('лежит на виду')
+
+    await button.trigger('click')
+    expect(wrapper.find('.card__menu-pop').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('закрывается по Escape и щелчком мимо, а не только тем же «···»', async () => {
+    // Иначе поповер — ловушка: кнопка, которой его открыли, за ним же и скрыта.
+    const { wrapper } = await mountCard()
+
+    await wrapper.find('.card__menu-button').trigger('click')
+    expect(wrapper.find('.card__menu-pop').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('.card__menu-pop').exists()).toBe(false)
+
+    await wrapper.find('.card__menu-button').trigger('click')
+    expect(wrapper.find('.card__menu-pop').exists()).toBe(true)
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.card__menu-pop').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('удаление осталось в подвале, а не уехало в меню', async () => {
+    // Существующий тест ищет кнопку удаления там же — и должен продолжать.
+    const { wrapper } = await mountCard()
+
+    expect(wrapper.find('.card__foot .sy-button--danger').text()).toBe('Удалить запись')
 
     wrapper.unmount()
   })
