@@ -4,7 +4,7 @@ import type { GetConflictSecretResponse, RecordId, SecretField } from '@/core/co
 import { isCoreError } from '@/core/errors'
 import { useCore, type Unsubscribe } from '@/core/ipc'
 
-import { SECRET_AUTO_HIDE_MS } from './useRecordSecrets'
+import { securityPolicy } from './securityPolicy'
 
 /**
  * Секретные поля двух версий записи при разрешении конфликта (F11, §5.5).
@@ -67,14 +67,14 @@ export function useConflictSecrets(recordId: Ref<RecordId | null>) {
 
   function startAutoHide(field: SecretField): void {
     stopTimer(field)
-    hideIn[field] = Math.ceil(SECRET_AUTO_HIDE_MS / 1000)
+    hideIn[field] = Math.ceil(securityPolicy().value.secret_reveal_ms / 1000)
     timers[field] = setInterval(() => {
       hideIn[field] -= 1
       if (hideIn[field] <= 0) hide(field)
     }, 1000)
   }
 
-  /** Открыть одно поле обеих версий. Закроется само через `SECRET_AUTO_HIDE_MS`. */
+  /** Открыть одно поле обеих версий. Закроется само через `secret_reveal_ms`. */
   async function reveal(field: SecretField): Promise<void> {
     const id = recordId.value
     if (id === null) return

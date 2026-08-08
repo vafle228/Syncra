@@ -4,7 +4,8 @@ import type { RecordId, SecretField } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useCore, type Unsubscribe } from '@/core/ipc'
 
-import { clearClipboardNow, CLIPBOARD_CLEAR_MS, useClipboard } from './useClipboard'
+import { securityPolicy } from './securityPolicy'
+import { clearClipboardNow, useClipboard } from './useClipboard'
 
 /**
  * Доступ к секретам одной записи (F5).
@@ -18,10 +19,11 @@ import { clearClipboardNow, CLIPBOARD_CLEAR_MS, useClipboard } from './useClipbo
  *    при размонтировании и при блокировке хранилища;
  *  - копирование вообще не требует показа: значение уходит в буфер, не побывав
  *    на экране.
+ *
+ * Сроки авто-скрытия и очистки буфера приходят из настроек безопасности
+ * (F13, `securityPolicy()`), а не из константы: пользователь выбирает их сам, и
+ * два разных числа — на экране и в таймере — были бы обманом.
  */
-
-/** Через сколько открытый секрет закрывается сам. Из макета — 30 с. */
-export const SECRET_AUTO_HIDE_MS = 30_000
 
 type SecretMap<T> = Record<SecretField, T>
 
@@ -65,7 +67,10 @@ export function useRecordSecrets(recordId: Ref<RecordId | null>) {
 
   function startAutoHide(field: SecretField): void {
     stopTimer(field)
-    hideIn[field] = Math.ceil(SECRET_AUTO_HIDE_MS / 1000)
+    // Срок читается В МОМЕНТ показа: настройку могли поменять между открытием
+    // экрана и нажатием. Уже идущий отсчёт при этом не продлевается — открытый
+    // секрет закрывается по тому сроку, который был обещан при открытии.
+    hideIn[field] = Math.ceil(securityPolicy().value.secret_reveal_ms / 1000)
     timers[field] = setInterval(() => {
       hideIn[field] -= 1
       if (hideIn[field] <= 0) hide(field)
@@ -93,7 +98,7 @@ export function useRecordSecrets(recordId: Ref<RecordId | null>) {
     }
   }
 
-  /** Показать поле на экране. Закроется само через `SECRET_AUTO_HIDE_MS`. */
+  /** Показать поле на экране. Закроется само через `secret_reveal_ms`. */
   async function reveal(field: SecretField): Promise<void> {
     const value = await fetchField(field)
     if (value === null) return
@@ -115,7 +120,9 @@ export function useRecordSecrets(recordId: Ref<RecordId | null>) {
     const value = await fetchField(field)
     if (value === null || value === '') return false
 
-    return clipboard.copy(field, value, { clearAfterMs: CLIPBOARD_CLEAR_MS })
+    return clipboard.copy(field, value, {
+      clearAfterMs: securityPolicy().value.clipboard_clear_ms,
+    })
   }
 
   // Сменилась запись — открытое значение предыдущей закрываем немедленно.

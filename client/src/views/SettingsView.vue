@@ -3,7 +3,8 @@ import { computed, onMounted, watch } from 'vue'
 
 import GeneratorProfileForm from '@/components/generator/GeneratorProfileForm.vue'
 import { SyButton, SyThemeToggle } from '@/components/ui'
-import { CLIPBOARD_CLEAR_MS, useClipboard } from '@/composables/useClipboard'
+import { securityPolicy } from '@/composables/securityPolicy'
+import { useClipboard } from '@/composables/useClipboard'
 import {
   useDebounced,
   useGeneratorProfileDraft,
@@ -97,7 +98,9 @@ async function save(): Promise<void> {
 async function copyExample(): Promise<void> {
   if (example.value === '') return
 
-  const done = await clipboard.copy('example', example.value, { clearAfterMs: CLIPBOARD_CLEAR_MS })
+  const done = await clipboard.copy('example', example.value, {
+    clearAfterMs: securityPolicy().value.clipboard_clear_ms,
+  })
   if (done) toast.push('Пароль в буфере · очистится через 20 с', 'success')
   else toast.push('Буфер обмена недоступен', 'danger')
 }

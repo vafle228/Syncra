@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { effectScope, ref } from 'vue'
 
-import type { RecordId } from '@/core/contract'
+import { DEFAULT_SECURITY_SETTINGS, type RecordId } from '@/core/contract'
 import { setCoreClient } from '@/core/ipc'
 import { createMockCoreClient, MOCK_RECORD_GITHUB, type MockCoreClient } from '@/core/mock'
 import { useConflictsStore } from '@/stores/useConflictsStore'
 
+import { resetSecurityPolicy, setSecurityPolicy } from '../securityPolicy'
 import { useConflictSecrets } from '../useConflictSecrets'
-import { SECRET_AUTO_HIDE_MS } from '../useRecordSecrets'
 
 /**
  * ЗАКОН №1 при разрешении конфликта (F11): значения двух версий приходят
@@ -35,6 +35,8 @@ beforeEach(() => {
 afterEach(() => {
   core.control.dispose()
   setCoreClient(null)
+  // Политика живёт в модуле: без сброса она протекла бы из теста в тест.
+  resetSecurityPolicy()
   vi.useRealTimers()
 })
 
@@ -59,11 +61,27 @@ describe('открытие пары значений', () => {
     const { secrets, stop } = run()
     await secrets.reveal('password')
 
-    expect(secrets.hideIn.password).toBe(30)
-    await vi.advanceTimersByTimeAsync(SECRET_AUTO_HIDE_MS)
+    expect(secrets.hideIn.password).toBe(DEFAULT_SECURITY_SETTINGS.secret_reveal_ms / 1000)
+    await vi.advanceTimersByTimeAsync(DEFAULT_SECURITY_SETTINGS.secret_reveal_ms)
 
     expect(secrets.shown.password).toBeNull()
     expect(secrets.hideIn.password).toBe(0)
+
+    stop()
+  })
+
+  it('слушается срока из настроек безопасности (F13)', async () => {
+    // Сравнение версий подчиняется той же настройке, что и карточка: иначе
+    // пароль оставался бы на экране дольше обещанного именно там, где рядом
+    // открыты сразу две версии.
+    setSecurityPolicy({ ...DEFAULT_SECURITY_SETTINGS, secret_reveal_ms: 15_000 })
+    const { secrets, stop } = run()
+
+    await secrets.reveal('password')
+    expect(secrets.hideIn.password).toBe(15)
+
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(secrets.shown.password).toBeNull()
 
     stop()
   })

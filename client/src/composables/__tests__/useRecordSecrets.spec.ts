@@ -2,13 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { effectScope, ref } from 'vue'
 
-import type { RecordId } from '@/core/contract'
+import { DEFAULT_SECURITY_SETTINGS, type RecordId } from '@/core/contract'
 import { setCoreClient } from '@/core/ipc'
 import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 
+import { resetSecurityPolicy, setSecurityPolicy } from '../securityPolicy'
 import { clearClipboardNow } from '../useClipboard'
-import { SECRET_AUTO_HIDE_MS, useRecordSecrets } from '../useRecordSecrets'
+import { useRecordSecrets } from '../useRecordSecrets'
+
+/**
+ * Сроки авто-скрытия и очистки буфера приходят из настроек безопасности (F13).
+ * По умолчанию действуют значения из контракта — их и берём, чтобы тест не
+ * держал свою копию числа, способную разойтись с продуктом молча.
+ */
+const REVEAL_MS = DEFAULT_SECURITY_SETTINGS.secret_reveal_ms
+const CLEAR_MS = DEFAULT_SECURITY_SETTINGS.clipboard_clear_ms
 
 /**
  * ЗАКОН №1 в исполнении: секрет приходит разово, живёт ровно пока показан и
@@ -46,6 +55,9 @@ beforeEach(() => {
 afterEach(async () => {
   await clearClipboardNow()
   setCoreClient(null)
+  // Политика живёт в модуле, а не в компоненте: без сброса она протекла бы
+  // из теста в тест.
+  resetSecurityPolicy()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -68,12 +80,12 @@ describe('reveal', () => {
     const { secrets, stop } = run()
     await secrets.reveal('password')
 
-    expect(secrets.hideIn.password).toBe(30)
+    expect(secrets.hideIn.password).toBe(REVEAL_MS / 1000)
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(secrets.hideIn.password).toBe(20)
+    expect(secrets.hideIn.password).toBe(REVEAL_MS / 1000 - 10)
     expect(secrets.shown.password).toBe('mock-github-pw')
 
-    await vi.advanceTimersByTimeAsync(SECRET_AUTO_HIDE_MS - 10_000)
+    await vi.advanceTimersByTimeAsync(REVEAL_MS - 10_000)
 
     expect(secrets.shown.password).toBeNull()
     expect(secrets.hideIn.password).toBe(0)
@@ -113,6 +125,73 @@ describe('reveal', () => {
 
     expect(secrets.error.value).toBe('Запись не найдена.')
     expect(secrets.shown.password).toBeNull()
+
+    stop()
+  })
+})
+
+describe('таймеры слушаются настроек безопасности (F13)', () => {
+  it('авто-скрытие идёт по выбранному пользователем сроку', async () => {
+    setSecurityPolicy({ ...DEFAULT_SECURITY_SETTINGS, secret_reveal_ms: 15_000 })
+    const { secrets, stop } = run()
+
+    await secrets.reveal('password')
+    expect(secrets.hideIn.password).toBe(15)
+
+    // По прежнему умолчанию поле было бы ещё открыто.
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(secrets.shown.password).toBeNull()
+
+    stop()
+  })
+
+  it('срок читается в момент показа, а не при создании composable', async () => {
+    // Настройку могли поменять между открытием экрана и нажатием «Показать».
+    const { secrets, stop } = run()
+    setSecurityPolicy({ ...DEFAULT_SECURITY_SETTINGS, secret_reveal_ms: 120_000 })
+
+    await secrets.reveal('password')
+
+    expect(secrets.hideIn.password).toBe(120)
+
+    stop()
+  })
+
+  it('уже открытый секрет не продлевается сменой настройки', async () => {
+    // Обещание даётся в момент открытия — задним числом его менять нельзя.
+    const { secrets, stop } = run()
+    await secrets.reveal('password')
+    expect(secrets.hideIn.password).toBe(REVEAL_MS / 1000)
+
+    setSecurityPolicy({ ...DEFAULT_SECURITY_SETTINGS, secret_reveal_ms: 120_000 })
+    await vi.advanceTimersByTimeAsync(REVEAL_MS)
+
+    expect(secrets.shown.password).toBeNull()
+
+    stop()
+  })
+
+  it('буфер чистится по выбранному сроку', async () => {
+    setSecurityPolicy({ ...DEFAULT_SECURITY_SETTINGS, clipboard_clear_ms: 10_000 })
+    const { secrets, stop } = run()
+
+    await secrets.copy('password')
+    expect(secrets.clipboard.secondsLeft.value).toBe(10)
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(writes[writes.length - 1]).toBe('')
+
+    stop()
+  })
+
+  it('по умолчанию действуют значения из контракта', async () => {
+    const { secrets, stop } = run()
+
+    await secrets.reveal('password')
+    expect(secrets.hideIn.password).toBe(REVEAL_MS / 1000)
+
+    await secrets.copy('password')
+    expect(secrets.clipboard.secondsLeft.value).toBe(CLEAR_MS / 1000)
 
     stop()
   })
