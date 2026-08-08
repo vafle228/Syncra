@@ -2,7 +2,7 @@
 import { computed, onMounted, watch } from 'vue'
 
 import GeneratorProfileForm from '@/components/generator/GeneratorProfileForm.vue'
-import { SyButton, SyThemeToggle } from '@/components/ui'
+import { SyButton } from '@/components/ui'
 import { securityPolicy } from '@/composables/securityPolicy'
 import { useClipboard } from '@/composables/useClipboard'
 import {
@@ -113,7 +113,6 @@ async function copyExample(): Promise<void> {
         <RouterLink class="settings__back" :to="{ name: 'home' }">← К паролям</RouterLink>
         <h1 class="settings__title">Настройки</h1>
       </div>
-      <SyThemeToggle />
     </header>
 
     <div class="settings__body">

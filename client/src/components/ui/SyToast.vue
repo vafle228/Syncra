@@ -2,8 +2,9 @@
 import { useToastStore } from '@/stores/useToastStore'
 
 /**
- * Хост тостов (F2). Монтируется один раз в `App.vue`, читает очередь из стора.
- * Текст приходит из стора — про запрет секретов см. `useToastStore.ts`.
+ * Хост тостов (F2). Монтируется один раз — внутри `AppWindow` (F13), читает
+ * очередь из стора. Текст приходит из стора — про запрет секретов см.
+ * `useToastStore.ts`.
  */
 
 const toasts = useToastStore()
@@ -32,11 +33,17 @@ const toasts = useToastStore()
 </template>
 
 <style scoped>
+/*
+ * `absolute`, а не `fixed`: тост всплывает ВНУТРИ окна приложения (как в
+ * прототипе), а не поверх вьюпорта. Пока окно развёрнуто, разницы не видно — но
+ * в окне без системной рамки и не на весь экран `fixed` вынес бы тост за его
+ * пределы. Систему координат задаёт `position: relative` на `AppWindow`.
+ */
 .sy-toast-host {
-  position: fixed;
+  position: absolute;
   left: 0;
   right: 0;
-  bottom: var(--sy-space-9);
+  bottom: 26px;
   z-index: 70;
   display: flex;
   flex-direction: column;

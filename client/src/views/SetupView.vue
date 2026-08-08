@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { SyButton, SyInput, SyThemeToggle } from '@/components/ui'
+import { SyButton, SyInput } from '@/components/ui'
 import { usePasswordStrength } from '@/composables/usePasswordStrength'
 import type { RestoreBackupResult } from '@/core/contract'
 import { useVaultStore } from '@/stores/useVaultStore'
@@ -105,11 +105,6 @@ async function restore(): Promise<void> {
 
 <template>
   <main class="setup">
-    <div class="setup__chrome">
-      <span class="setup__chrome-title">Syncra — знакомство</span>
-      <SyThemeToggle />
-    </div>
-
     <div class="setup__body">
       <nav v-if="step <= 2" class="setup__steps" aria-label="Шаги создания хранилища">
         <span class="setup__steps-caption">Шаги</span>
@@ -353,33 +348,20 @@ async function restore(): Promise<void> {
 </template>
 
 <style scoped>
+/* Экран живёт внутри окна (F13): свою полосу заголовка он больше не рисует. */
 .setup {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  min-height: 0;
   background: var(--sy-bg-1);
-}
-
-.setup__chrome {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sy-space-5);
-  height: 48px;
-  padding: 0 var(--sy-space-6);
-  border-bottom: 1px solid var(--sy-border);
-  background: var(--sy-bg-0);
-}
-
-.setup__chrome-title {
-  font-size: 12px;
-  color: var(--sy-text-2);
 }
 
 .setup__body {
   flex: 1;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+  min-height: 0;
+  overflow: auto;
 }
 
 .setup__steps {

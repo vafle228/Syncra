@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { SyButton, SyInput, SyThemeToggle } from '@/components/ui'
+import { SyButton, SyInput } from '@/components/ui'
 import { useVaultStore } from '@/stores/useVaultStore'
 
 /**
@@ -54,11 +54,6 @@ async function submit(): Promise<void> {
 
 <template>
   <main class="unlock" @keydown="onKeydown">
-    <div class="unlock__chrome">
-      <span class="unlock__chrome-title">Syncra — заблокировано</span>
-      <SyThemeToggle />
-    </div>
-
     <section class="unlock__panel">
       <div class="unlock__mark" aria-hidden="true"><span /></div>
 
@@ -112,27 +107,13 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
+/* Экран живёт внутри окна (F13): свою полосу заголовка он больше не рисует. */
 .unlock {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
-  background: var(--sy-bg-1);
-}
-
-.unlock__chrome {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sy-space-5);
-  height: 48px;
-  padding: 0 var(--sy-space-6);
-  border-bottom: 1px solid var(--sy-border);
+  min-height: 0;
+  overflow: auto;
   background: var(--sy-bg-0);
-}
-
-.unlock__chrome-title {
-  font-size: 12px;
-  color: var(--sy-text-3);
 }
 
 .unlock__panel {

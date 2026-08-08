@@ -6,7 +6,7 @@ import RecordCard from '@/components/records/RecordCard.vue'
 import RecordForm from '@/components/records/RecordForm.vue'
 import SectionSidebar from '@/components/sections/SectionSidebar.vue'
 import SyncIndicator from '@/components/sync/SyncIndicator.vue'
-import { SyButton, SyEmptyState, SyListItem, SyThemeToggle } from '@/components/ui'
+import { SyButton, SyEmptyState, SyListItem } from '@/components/ui'
 import { ACCOUNT_FORMS, pluralize, RECORD_FORMS, SERVICE_FORMS } from '@/composables/plural'
 import type { RecordId } from '@/core/contract'
 import { useConflictsStore } from '@/stores/useConflictsStore'
@@ -146,7 +146,6 @@ async function lock(): Promise<void> {
 
       <div class="home__header-actions">
         <SyncIndicator />
-        <SyThemeToggle />
         <RouterLink class="home__settings" :to="{ name: 'devices' }">Устройства</RouterLink>
         <RouterLink class="home__settings" :to="{ name: 'settings' }">Настройки</RouterLink>
         <SyButton size="sm" :disabled="vault.busy" @click="lock">Заблокировать</SyButton>

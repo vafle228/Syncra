@@ -5,7 +5,6 @@ import { useRoute, useRouter } from 'vue-router'
 import BackupCard from '@/components/data/BackupCard.vue'
 import CsvExportCard from '@/components/data/CsvExportCard.vue'
 import ImportWizard from '@/components/data/ImportWizard.vue'
-import { SyThemeToggle } from '@/components/ui'
 import type { VaultId } from '@/core/contract'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
@@ -61,7 +60,6 @@ function showImported(vaultId: VaultId): void {
         <RouterLink class="data__back" :to="{ name: 'home' }">← К паролям</RouterLink>
         <h1 class="data__title">Данные</h1>
       </div>
-      <SyThemeToggle />
     </header>
 
     <div class="data__body">

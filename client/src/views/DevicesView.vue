@@ -7,7 +7,7 @@ import PairingQr from '@/components/pairing/PairingQr.vue'
 import PairingScanBox from '@/components/pairing/PairingScanBox.vue'
 import SyncIndicator from '@/components/sync/SyncIndicator.vue'
 import SyncPanel from '@/components/sync/SyncPanel.vue'
-import { SyButton, SyThemeToggle } from '@/components/ui'
+import { SyButton } from '@/components/ui'
 import { pluralize, RECORD_FORMS } from '@/composables/plural'
 import { formatManualCode, usePairingOffer, usePairingScan } from '@/composables/usePairing'
 import type { Device } from '@/core/contract'
@@ -150,7 +150,6 @@ function formatDuration(ms: number): string {
       </div>
       <div class="devices__header-actions">
         <SyncIndicator />
-        <SyThemeToggle />
       </div>
     </header>
 
