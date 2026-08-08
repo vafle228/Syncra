@@ -5,7 +5,6 @@ import { useRouter } from 'vue-router'
 import TrustedDevices from '@/components/devices/TrustedDevices.vue'
 import PairingQr from '@/components/pairing/PairingQr.vue'
 import PairingScanBox from '@/components/pairing/PairingScanBox.vue'
-import SyncIndicator from '@/components/sync/SyncIndicator.vue'
 import SyncPanel from '@/components/sync/SyncPanel.vue'
 import { SyButton } from '@/components/ui'
 import { pluralize, RECORD_FORMS } from '@/composables/plural'
@@ -143,13 +142,13 @@ function formatDuration(ms: number): string {
 
 <template>
   <main class="devices">
+    <!--
+      Ни «назад», ни индикатора обмена: возвращаться некуда — сайдбар никуда не
+      уходил (F13), а состояние обмена стоит в его подвале постоянно.
+    -->
     <header class="devices__header">
       <div class="devices__brand">
-        <RouterLink class="devices__back" :to="{ name: 'home' }">← К паролям</RouterLink>
         <h1 class="devices__title">Устройства</h1>
-      </div>
-      <div class="devices__header-actions">
-        <SyncIndicator />
       </div>
     </header>
 
@@ -362,10 +361,17 @@ function formatDuration(ms: number): string {
 </template>
 
 <style scoped>
+/*
+ * Экран — правая панель окна (F13), а не отдельная страница: он занимает
+ * остаток ширины и высоту окна, а прокручивается его тело, оставляя сайдбар и
+ * полосу заголовка на месте.
+ */
 .devices {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  min-width: 0;
+  min-height: 0;
   background: var(--sy-bg-1);
 }
 
@@ -385,22 +391,6 @@ function formatDuration(ms: number): string {
   gap: var(--sy-space-6);
 }
 
-.devices__header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sy-space-4);
-}
-
-.devices__back {
-  font-size: var(--sy-text-body);
-  color: var(--sy-accent);
-  text-decoration: none;
-}
-
-.devices__back:hover {
-  text-decoration: underline;
-}
-
 .devices__title {
   font-size: var(--sy-text-body-strong);
   font-weight: var(--sy-weight-semibold);
@@ -417,6 +407,15 @@ function formatDuration(ms: number): string {
   width: 100%;
   margin: 0 auto;
   padding: var(--sy-space-9) var(--sy-space-8);
+}
+
+/*
+ * Секции тела не сжимаются. Пока экран был страницей во всю высоту документа,
+ * это ничего не значило; в панели окна высота стала определённой, и без запрета
+ * flex сплющил бы панель сопряжения вместо того, чтобы дать телу прокрутиться.
+ */
+.devices__body > * {
+  flex: none;
 }
 
 .devices__intro {

@@ -363,10 +363,17 @@ async function confirmDelete(): Promise<void> {
 </template>
 
 <style scoped>
+/*
+ * Экран — правая панель окна (F13), а не отдельная страница: он занимает
+ * остаток ширины и высоту окна, а прокручивается его тело, оставляя сайдбар и
+ * полосу заголовка на месте.
+ */
 .sections-view {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  min-width: 0;
+  min-height: 0;
   background: var(--sy-bg-1);
 }
 
@@ -427,6 +434,11 @@ async function confirmDelete(): Promise<void> {
   flex-direction: column;
   gap: var(--sy-space-8);
   padding: var(--sy-space-8) var(--sy-space-9) var(--sy-space-9);
+}
+
+/* Карточки секций не сжимаются — тело прокручивается (см. `DevicesView`). */
+.sections-view__body > * {
+  flex: none;
 }
 
 .sections-view__cards {

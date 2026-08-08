@@ -12,6 +12,7 @@ import {
   SySecretField,
   vaultColorVar,
 } from '@/components/ui'
+import { securityPolicy } from '@/composables/securityPolicy'
 import { useRecordSecrets } from '@/composables/useRecordSecrets'
 import type { RecordMeta } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
@@ -86,8 +87,15 @@ async function copyMeta(key: string, value: string, what: string): Promise<void>
 
 async function copySecret(field: 'password' | 'notes' | 'totp_secret'): Promise<void> {
   const done = await secrets.copy(field)
-  if (done) toast.push('Пароль в буфере · очистится через 20 с', 'success')
-  else if (secrets.error.value === null) toast.push('Буфер обмена недоступен', 'danger')
+  if (done) {
+    // Срок берём из действующей политики, а не из константы в тексте: с F13 его
+    // выбирает пользователь, и зашитое «20 с» стало бы враньём при первом же
+    // изменении настройки.
+    const seconds = Math.ceil(securityPolicy().value.clipboard_clear_ms / 1000)
+    toast.push(`Пароль в буфере · очистится через ${seconds} с`, 'success')
+  } else if (secrets.error.value === null) {
+    toast.push('Буфер обмена недоступен', 'danger')
+  }
 }
 
 // ---------------------------------------------------------------------------

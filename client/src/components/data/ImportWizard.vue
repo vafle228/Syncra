@@ -16,7 +16,12 @@ import { IMPORT_SOURCE_INFO, IMPORT_STATUS_LABEL, importSourceInfo } from './imp
  * пароли ждут согласия в ядре и забываются по отмене.
  */
 
-const emit = defineEmits<{ imported: [vaultId: string] }>()
+/**
+ * Сколько записей приехало — вместе с секцией, в которую они легли. Число нужно
+ * баннеру над списком: он называет его вслух, и брать его повторным пересчётом
+ * списка значило бы иметь две правды об одном импорте.
+ */
+const emit = defineEmits<{ imported: [vaultId: string, count: number] }>()
 
 const source = ref<ImportSource>('chrome')
 const wizard = useVaultImport()
@@ -66,7 +71,7 @@ function again(): void {
 
 function showImported(): void {
   const done = wizard.result.value
-  if (done) emit('imported', done.vault.vault_id)
+  if (done) emit('imported', done.vault.vault_id, done.imported)
 }
 </script>
 

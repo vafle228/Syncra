@@ -26,38 +26,45 @@ function count(vaultId: VaultId): number {
   <nav class="sections" aria-label="Секции">
     <p class="sections__caption">Секции</p>
 
-    <button
-      type="button"
-      class="sections__item"
-      :class="{ 'sections__item--active': list.vaultFilter === null }"
-      :aria-current="list.vaultFilter === null ? 'true' : undefined"
-      @click="list.setVaultFilter(null)"
-    >
-      <span class="sections__dot sections__dot--all" aria-hidden="true" />
-      <span class="sections__name">Все записи</span>
-      <span class="sections__count">{{ list.totalAll }}</span>
-    </button>
+    <!--
+      Скроллер: секций может быть много, а подвал сайдбара с состоянием обмена и
+      замком должен оставаться на виду. «Управление секциями» стоит НИЖЕ него —
+      выход из длинного списка не должен уезжать вместе со списком.
+    -->
+    <div class="sections__scroll">
+      <button
+        type="button"
+        class="sections__item"
+        :class="{ 'sections__item--active': list.vaultFilter === null }"
+        :aria-current="list.vaultFilter === null ? 'true' : undefined"
+        @click="list.setVaultFilter(null)"
+      >
+        <span class="sections__dot sections__dot--all" aria-hidden="true" />
+        <span class="sections__name">Все записи</span>
+        <span class="sections__count">{{ list.totalAll }}</span>
+      </button>
 
-    <button
-      v-for="vault in sections.vaults"
-      :key="vault.vault_id"
-      type="button"
-      class="sections__item"
-      :class="{ 'sections__item--active': list.vaultFilter === vault.vault_id }"
-      :aria-current="list.vaultFilter === vault.vault_id ? 'true' : undefined"
-      @click="list.setVaultFilter(vault.vault_id)"
-    >
-      <span
-        class="sections__dot"
-        :style="{ background: vaultColorVar(vault.color) }"
-        aria-hidden="true"
-      />
-      <span class="sections__name">{{ vault.name }}</span>
-      <span v-if="!vault.sync" class="sections__local" title="Не уезжает с этого устройства">
-        локально
-      </span>
-      <span class="sections__count">{{ count(vault.vault_id) }}</span>
-    </button>
+      <button
+        v-for="vault in sections.vaults"
+        :key="vault.vault_id"
+        type="button"
+        class="sections__item"
+        :class="{ 'sections__item--active': list.vaultFilter === vault.vault_id }"
+        :aria-current="list.vaultFilter === vault.vault_id ? 'true' : undefined"
+        @click="list.setVaultFilter(vault.vault_id)"
+      >
+        <span
+          class="sections__dot"
+          :style="{ background: vaultColorVar(vault.color) }"
+          aria-hidden="true"
+        />
+        <span class="sections__name">{{ vault.name }}</span>
+        <span v-if="!vault.sync" class="sections__local" title="Не уезжает с этого устройства">
+          локально
+        </span>
+        <span class="sections__count">{{ count(vault.vault_id) }}</span>
+      </button>
+    </div>
 
     <p v-if="sections.error" class="sections__error" role="alert">{{ sections.error }}</p>
 
@@ -82,6 +89,14 @@ function count(vaultId: VaultId): number {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--sy-text-3);
+}
+
+.sections__scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 206px;
+  overflow: auto;
 }
 
 .sections__item {

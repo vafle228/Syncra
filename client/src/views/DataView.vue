@@ -8,6 +8,7 @@ import ImportWizard from '@/components/data/ImportWizard.vue'
 import type { VaultId } from '@/core/contract'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
+import { useVaultUiStore } from '@/stores/useVaultUiStore'
 
 /**
  * Данные на входе и на выходе (F12, §3.10 макета, §6.2 спека).
@@ -27,6 +28,7 @@ const route = useRoute()
 const router = useRouter()
 const records = useRecordsStore()
 const sections = useSectionsStore()
+const ui = useVaultUiStore()
 
 type Tab = 'import' | 'export'
 
@@ -46,9 +48,12 @@ onMounted(() => {
  * свежую секцию: 300 чужих записей вперемешку со своими нельзя ни проверить,
  * ни разобрать.
  */
-function showImported(vaultId: VaultId): void {
+function showImported(vaultId: VaultId, count: number): void {
   records.setVaultFilter(vaultId)
   void records.load()
+  // Баннер над списком: главное про свежий импорт не «сколько», а «пока только
+  // здесь» — и сказать это надо там, где записи видно.
+  ui.showImportBanner(count)
   void router.push({ name: 'home' })
 }
 </script>

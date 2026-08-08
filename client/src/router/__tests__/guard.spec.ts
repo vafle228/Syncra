@@ -54,6 +54,57 @@ describe('routeForStatus', () => {
   })
 })
 
+describe('вложенное дерево оболочки (F13)', () => {
+  /** Роутер на открытом хранилище — чтобы хранитель никуда не уводил. */
+  async function unlockedRouter() {
+    setCoreClient(createMockCoreClient({ latencyMs: 0, startUnlocked: true }))
+    return createAppRouter(createMemoryHistory())
+  }
+
+  it('экраны хранилища — дети общей оболочки, а адреса не изменились', async () => {
+    const router = await unlockedRouter()
+
+    for (const [path, name] of [
+      ['/', 'home'],
+      ['/sections', 'sections'],
+      ['/devices', 'devices'],
+      ['/settings', 'settings'],
+    ] as const) {
+      await router.push(path)
+
+      expect(router.currentRoute.value.name).toBe(name)
+      // Два уровня: оболочка и экран. Родитель намеренно без имени — иначе
+      // `to.name` в хранителе перестало бы быть именем экрана.
+      expect(router.currentRoute.value.matched).toHaveLength(2)
+      expect(router.currentRoute.value.matched[0]?.name).toBeUndefined()
+    }
+  })
+
+  it('средний столбец со списком заявлен только на главном экране', async () => {
+    // Геометрия панелей — функция от того, где мы находимся: дублировать её
+    // в стор значило бы позволить двум правдам разойтись.
+    const router = await unlockedRouter()
+
+    await router.push('/')
+    expect(router.currentRoute.value.meta.listPane).toBe(true)
+
+    for (const path of ['/sections', '/devices', '/settings']) {
+      await router.push(path)
+      expect(router.currentRoute.value.meta.listPane).toBeUndefined()
+    }
+  })
+
+  it('экраны входа лежат ВНЕ оболочки: сайдбару за замком делать нечего', async () => {
+    setCoreClient(createMockCoreClient({ latencyMs: 0 }))
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/')
+
+    expect(router.currentRoute.value.name).toBe('unlock')
+    expect(router.currentRoute.value.matched).toHaveLength(1)
+  })
+})
+
 describe('навигационный хранитель', () => {
   it('уводит на экран входа при попытке открыть главный экран', async () => {
     setCoreClient(createMockCoreClient({ latencyMs: 0 }))

@@ -19,8 +19,10 @@ describe('App', () => {
     const { wrapper } = await mountWithRouter(App)
 
     expect(wrapper.find('[data-test="titlebar"]').exists()).toBe(true)
-    // Внутри окна — реальный экран, а не заглушка: роутер настоящий.
-    expect(wrapper.find('.home').exists()).toBe(true)
+    // Внутри окна — реальный экран, а не заглушка: роутер настоящий. Причём
+    // оба уровня вложенности (F13): оболочка и её дочерний экран.
+    expect(wrapper.find('[data-test="sidebar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="right-pane"]').exists()).toBe(true)
   })
 
   it('полоса заголовка говорит, заперто ли хранилище', async () => {

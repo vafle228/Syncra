@@ -108,9 +108,9 @@ async function copyExample(): Promise<void> {
 
 <template>
   <main class="settings">
+    <!-- «Назад» нет: сайдбар с паролями никуда не уходил (F13). -->
     <header class="settings__header">
       <div class="settings__brand">
-        <RouterLink class="settings__back" :to="{ name: 'home' }">← К паролям</RouterLink>
         <h1 class="settings__title">Настройки</h1>
       </div>
     </header>
@@ -203,10 +203,17 @@ async function copyExample(): Promise<void> {
 </template>
 
 <style scoped>
+/*
+ * Экран — правая панель окна (F13), а не отдельная страница: он занимает
+ * остаток ширины и высоту окна, а прокручивается его тело, оставляя сайдбар и
+ * полосу заголовка на месте.
+ */
 .settings {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  min-width: 0;
+  min-height: 0;
   background: var(--sy-bg-1);
 }
 
@@ -224,16 +231,6 @@ async function copyExample(): Promise<void> {
   display: flex;
   align-items: baseline;
   gap: var(--sy-space-6);
-}
-
-.settings__back {
-  font-size: var(--sy-text-body);
-  color: var(--sy-accent);
-  text-decoration: none;
-}
-
-.settings__back:hover {
-  text-decoration: underline;
 }
 
 .settings__title {
