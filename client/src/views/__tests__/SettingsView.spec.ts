@@ -267,4 +267,22 @@ describe('SettingsView · данные (F12)', () => {
     // Дословный текст риска — `CLAUDE.md` запрещает его смягчать.
     expect(document.body.textContent).toContain('пароли внутри читаются как обычный текст')
   })
+
+  it('бэкап и импорт тоже открываются, и до открытия их содержимого нет', async () => {
+    // Содержимое под `v-if`: мастер импорта держит сеанс в ядре, и оставлять
+    // его смонтированным за закрытым диалогом значило бы держать открытым
+    // разобранный чужой файл.
+    const { wrapper } = await mountView('/settings?tab=data')
+
+    expect(document.body.querySelector('[data-test="backup-modal"]')).toBeNull()
+    expect(document.body.querySelector('[data-test="import-modal"]')).toBeNull()
+
+    await wrapper.find('[data-test="open-backup"]').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="backup-modal"]')).not.toBeNull()
+
+    await wrapper.find('[data-test="open-import"]').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="import-modal"]')).not.toBeNull()
+  })
 })
