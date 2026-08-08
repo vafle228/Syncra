@@ -39,11 +39,27 @@ afterEach(() => {
 async function mountDevices() {
   const wrapper = mount(DevicesView, {
     attachTo: document.body,
-    // Модалку сопряжения не разворачиваем: у неё свой спек.
-    global: { stubs: { PairingModal: true } },
+    global: {
+      // Модалку сопряжения не разворачиваем: у неё свой спек. Подтверждение
+      // отзыва, наоборот, оставляем настоящим — оно часть этого сценария.
+      stubs: { PairingModal: true, teleport: true },
+    },
   })
   await flushPromises()
   return wrapper
+}
+
+/** Диалог подтверждения отзыва — он живёт вне карточки (F13). */
+function revokeDialog(wrapper: View) {
+  return wrapper.find('[data-test="revoke-modal"]')
+}
+
+function dialogButton(wrapper: View, text: string) {
+  const found = wrapper
+    .findAll('.sy-modal__actions button')
+    .find((node) => node.text() === text)
+  if (!found) throw new Error(`Кнопка «${text}» не найдена в диалоге`)
+  return found
 }
 
 type View = Awaited<ReturnType<typeof mountDevices>>
@@ -98,7 +114,9 @@ describe('DevicesView · доверенные устройства и отзыв
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
 
-    const confirm = card(wrapper, 'ThinkPad X1')
+    // Имя устройства в заголовке — единственная защита от ошибки строкой,
+    // когда вопрос вырван из списка.
+    const confirm = wrapper.find('.sy-modal__dialog')
     expect(confirm.text()).toContain('Отозвать доступ у «ThinkPad X1»?')
     // Формулировка из макета: реплику на украденном устройстве отзыв не стирает.
     expect(confirm.text()).toContain('не сможет сопрячься по старому ключу')
@@ -115,10 +133,10 @@ describe('DevicesView · доверенные устройства и отзыв
     const wrapper = await mountDevices()
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
-    await cardButton(wrapper, 'ThinkPad X1', 'Оставить').trigger('click')
+    await dialogButton(wrapper, 'Оставить').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.trusted__confirm').exists()).toBe(false)
+    expect(revokeDialog(wrapper).exists()).toBe(false)
     expect((await core.listDevices()).every((device) => device.revoked_at === null)).toBe(true)
 
     wrapper.unmount()
@@ -128,7 +146,7 @@ describe('DevicesView · доверенные устройства и отзыв
     const wrapper = await mountDevices()
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
-    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать доступ').trigger('click')
+    await dialogButton(wrapper, 'Отозвать доступ').trigger('click')
     await flushPromises()
 
     const revoked = (await core.listDevices()).find(
@@ -140,7 +158,7 @@ describe('DevicesView · доверенные устройства и отзыв
     const still = card(wrapper, 'ThinkPad X1')
     expect(still.text()).toContain('доступ отозван')
     expect(still.text()).toContain('копия на устройстве больше не обновляется')
-    expect(wrapper.find('.trusted__confirm').exists()).toBe(false)
+    expect(revokeDialog(wrapper).exists()).toBe(false)
 
     wrapper.unmount()
   })
@@ -150,10 +168,11 @@ describe('DevicesView · доверенные устройства и отзыв
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
     core.control.failNext('INTERNAL', 'Ядро недоступно.')
-    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать доступ').trigger('click')
+    await dialogButton(wrapper, 'Отозвать доступ').trigger('click')
     await flushPromises()
 
-    expect(card(wrapper, 'ThinkPad X1').text()).toContain('Ядро недоступно.')
+    // Отказ показывается в самом диалоге: решение принимают там же.
+    expect(revokeDialog(wrapper).text()).toContain('Ядро недоступно.')
     // Список цел: отказ на одном устройстве не гасит остальные.
     expect(card(wrapper, 'iPhone 14').exists()).toBe(true)
 
@@ -166,7 +185,7 @@ describe('DevicesView · доверенные устройства и отзыв
     const wrapper = await mountDevices()
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
-    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать доступ').trigger('click')
+    await dialogButton(wrapper, 'Отозвать доступ').trigger('click')
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'PairingModal' }).props('open')).toBe(false)

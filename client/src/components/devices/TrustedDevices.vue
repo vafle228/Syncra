@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { iconHue, iconInitials, SyButton } from '@/components/ui'
+import RevokeDeviceModal from './RevokeDeviceModal.vue'
 import { pluralize } from '@/composables/plural'
 import type { Device } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
@@ -18,9 +19,9 @@ import { DEVICE_FORMS, deviceSubtitle, isStale } from './deviceFormat'
  * это прямым текстом и советует то, что правда помогает (сменить мастер-пароль
  * и пароли важных сервисов), а не изображает кнопку «стереть удалённо».
  *
- * Подтверждение — полоса внутри карточки, а не модальное окно: отзыв читают
- * рядом с тем устройством, у которого его отзывают, иначе легко ошибиться
- * строкой.
+ * Подтверждение — модалка (F13, как в прототипе). Риск «ошибиться строкой»
+ * снимается тем, что имя устройства стоит в заголовке диалога: вопрос называет
+ * вслух, у кого именно отбирают доступ.
  */
 
 const emit = defineEmits<{
@@ -36,6 +37,9 @@ onMounted(() => {
 
 /** Устройство, у которого сейчас спрашивают подтверждение. Открыто одно. */
 const asking = ref<string | null>(null)
+const askingDevice = computed(
+  () => store.devices.find((device) => device.device_id === asking.value) ?? null,
+)
 const busyId = ref<string | null>(null)
 const actionError = ref<{ deviceId: string; message: string } | null>(null)
 
@@ -164,35 +168,20 @@ function tile(device: Device): { initials: string; hue: number } {
           </SyButton>
         </div>
 
-        <div v-if="asking === device.device_id" class="trusted__confirm">
-          <div class="trusted__confirm-text">
-            <p class="trusted__confirm-title">Отозвать доступ у «{{ device.name }}»?</p>
-            <p class="trusted__confirm-body">
-              Устройство перестанет получать обновления и не сможет сопрячься по старому ключу.
-              Записи, которые оно уже скачало, остаются в его копии — если ноутбук потерян, смените
-              мастер-пароль и пароли важных сервисов.
-            </p>
-          </div>
-          <div class="trusted__confirm-actions">
-            <SyButton size="sm" :disabled="busyId === device.device_id" @click="asking = null">
-              Оставить
-            </SyButton>
-            <SyButton
-              size="sm"
-              variant="danger"
-              :loading="busyId === device.device_id"
-              @click="revoke(device)"
-            >
-              Отозвать доступ
-            </SyButton>
-          </div>
-        </div>
       </article>
 
       <p v-if="store.loaded && store.devices.length === 0" class="trusted__empty">
         Ядро не вернуло ни одного устройства — даже этого. Похоже на сбой хранилища.
       </p>
     </div>
+
+    <RevokeDeviceModal
+      :device="askingDevice"
+      :busy="busyId !== null"
+      :error="asking === null ? null : errorFor(asking)"
+      @close="asking = null"
+      @confirm="askingDevice && revoke(askingDevice)"
+    />
   </section>
 </template>
 
@@ -333,52 +322,9 @@ function tile(device: Device): { initials: string; hue: number } {
   flex: none;
 }
 
-.trusted__confirm {
-  display: flex;
-  align-items: center;
-  gap: var(--sy-space-7);
-  padding: var(--sy-space-6);
-  border-top: 1px solid var(--sy-border);
-  background: var(--sy-danger-quiet);
-}
-
-.trusted__confirm-text {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sy-space-2);
-}
-
-.trusted__confirm-title {
-  font-size: 13.5px;
-  font-weight: var(--sy-weight-semibold);
-}
-
-.trusted__confirm-body {
-  max-width: 760px;
-  font-size: var(--sy-text-small);
-  line-height: 1.55;
-  color: var(--sy-text-2);
-  text-wrap: pretty;
-}
-
-.trusted__confirm-actions {
-  flex: none;
-  display: flex;
-  gap: var(--sy-space-3);
-}
-
 .trusted__empty,
 .trusted__error {
   font-size: var(--sy-text-small);
   color: var(--sy-danger);
-}
-
-@media (max-width: 900px) {
-  .trusted__confirm {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--sy-space-5);
-  }
 }
 </style>
