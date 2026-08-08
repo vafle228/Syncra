@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPinia, setActivePinia } from 'pinia'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
+import { flushPromises, type VueWrapper } from '@vue/test-utils'
 
 import { setCoreClient } from '@/core/ipc'
 import {
@@ -14,37 +13,24 @@ import { useConflictsStore } from '@/stores/useConflictsStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useVaultStore } from '@/stores/useVaultStore'
+import { mountWithRouter, waitForRoute } from '@/test/mountWithRouter'
 import HomeView from '../HomeView.vue'
-
-const push = vi.fn()
-
-vi.mock('vue-router', () => ({
-  useRouter: () => ({ push }),
-}))
-
-beforeEach(() => {
-  setActivePinia(createPinia())
-  push.mockClear()
-})
 
 afterEach(() => {
   setCoreClient(null)
 })
 
-/** Смонтировать экран на открытом хранилище и дождаться ответа мок-ядра. */
-async function mountHome(
-  core: MockCoreClient = createMockCoreClient({
-    latencyMs: 0,
-    startUnlocked: true,
-  }),
-) {
-  setCoreClient(core)
-  const wrapper = mount(HomeView)
-  await flushPromises()
-  return wrapper
+/**
+ * Смонтировать экран на открытом хранилище и дождаться ответа мок-ядра.
+ *
+ * Роутер здесь НАСТОЯЩИЙ (см. `mountWithRouter`), поэтому переходы проверяются
+ * по `router.currentRoute`, а не по шпиону над `push`.
+ */
+async function mountHome(core?: MockCoreClient) {
+  return mountWithRouter(HomeView, { core })
 }
 
-async function search(wrapper: Awaited<ReturnType<typeof mountHome>>, value: string) {
+async function search(wrapper: VueWrapper, value: string) {
   const input = wrapper.find<HTMLInputElement>('.home__search-input')
   input.element.value = value
   await input.trigger('input')
@@ -52,7 +38,7 @@ async function search(wrapper: Awaited<ReturnType<typeof mountHome>>, value: str
 
 describe('HomeView · список (сквозной путь UI → IPC → мок-ядро)', () => {
   it('рендерит метаданные записей из мок-ядра', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     const text = wrapper.text()
     expect(text).toContain('Google')
@@ -61,7 +47,7 @@ describe('HomeView · список (сквозной путь UI → IPC → м�
   })
 
   it('не выводит на экран ни одного секрета', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     // Все сид-секреты помечены префиксом `mock-` / MOCKTOTP — ничего из этого
     // не должно попасть в разметку списка (Закон №1).
@@ -71,22 +57,24 @@ describe('HomeView · список (сквозной путь UI → IPC → м�
   })
 
   it('не показывает удалённую запись (tombstone)', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     expect(wrapper.text()).not.toContain('Jira')
     expect(wrapper.findAll('.home__group-list li')).toHaveLength(4)
   })
 
   it('показывает счётчик записей и сервисов', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     expect(wrapper.find('.home__count').text()).toContain('4 записи · 3 сервиса')
   })
 
   it('показывает скелет, пока ядро не ответило', async () => {
-    setCoreClient(createMockCoreClient({ latencyMs: 5, startUnlocked: true }))
-
-    const wrapper = mount(HomeView)
+    const { wrapper } = await mountWithRouter(HomeView, {
+      core: createMockCoreClient({ latencyMs: 5, startUnlocked: true }),
+      // Здесь важен именно кадр ДО ответа ядра — ждём вручную, ниже.
+      awaitCore: false,
+    })
 
     expect(wrapper.find('.home__skeleton').exists()).toBe(true)
     expect(wrapper.find('.home__list').exists()).toBe(false)
@@ -101,7 +89,7 @@ describe('HomeView · список (сквозной путь UI → IPC → м�
 
   it('показывает сообщение ядра вместо списка, если ядро вернуло ошибку', async () => {
     const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
-    const wrapper = await mountHome(core)
+    const { wrapper } = await mountHome(core)
 
     // `failNext` роняет БЛИЖАЙШУЮ команду, а при открытии экрана их несколько
     // (записи, секции, конфликты, статус синхронизации). Поэтому роняем именно
@@ -118,11 +106,10 @@ describe('HomeView · список (сквозной путь UI → IPC → м�
 
   it('показывает пустое состояние на свежесозданном хранилище', async () => {
     const core = createMockCoreClient({ latencyMs: 0, initialized: false })
-    setCoreClient(core)
+    // Хранилище создаётся ДО монтирования: иначе хранитель уведёт в онбординг.
     await core.initVault('рыжий трамвай у моста')
 
-    const wrapper = mount(HomeView)
-    await flushPromises()
+    const { wrapper } = await mountHome(core)
 
     expect(wrapper.text()).toContain('Пока ни одного пароля')
     expect(wrapper.find('.home__list').exists()).toBe(false)
@@ -132,7 +119,7 @@ describe('HomeView · список (сквозной путь UI → IPC → м�
 describe('HomeView · синхронизация и конфликты (F10, F11)', () => {
   it('показывает индикатор в шапке — по состоянию из ядра', async () => {
     const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
-    const wrapper = await mountHome(core)
+    const { wrapper } = await mountHome(core)
 
     // В сиде есть конфликт — он важнее всего остального (§ «Состояния»).
     expect(wrapper.find('.sync-chip').text()).toBe('1 конфликт')
@@ -151,7 +138,7 @@ describe('HomeView · синхронизация и конфликты (F10, F11
 
   it('помечает в списке запись, из-за которой спор, и ту, что ещё не уехала', async () => {
     const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
-    const wrapper = await mountHome(core)
+    const { wrapper } = await mountHome(core)
 
     const conflictRow = wrapper
       .findAll('.home__group-list li')
@@ -174,7 +161,7 @@ describe('HomeView · синхронизация и конфликты (F10, F11
 
 describe('HomeView · группировка нескольких аккаунтов (§4.4)', () => {
   it('показывает заголовок группы там, где у сервиса несколько аккаунтов', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     const multi = wrapper.findAll('.home__group--multi')
     expect(multi).toHaveLength(1)
@@ -186,7 +173,7 @@ describe('HomeView · группировка нескольких аккаунт
   })
 
   it('одиночная запись остаётся обычной строкой, без заголовка группы', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     const heads = wrapper.findAll('.home__group-head')
     expect(heads).toHaveLength(1)
@@ -200,7 +187,7 @@ describe('HomeView · группировка нескольких аккаунт
 
 describe('HomeView · поиск', () => {
   it('сужает список по имени сервиса', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await search(wrapper, 'github')
 
@@ -211,7 +198,7 @@ describe('HomeView · поиск', () => {
   })
 
   it('ищет по логину и по адресу сайта', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await search(wrapper, 'demo_player')
     expect(wrapper.text()).toContain('Steam')
@@ -222,7 +209,7 @@ describe('HomeView · поиск', () => {
   })
 
   it('различает аккаунты одного сервиса по метке', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await search(wrapper, 'google личный')
 
@@ -234,7 +221,7 @@ describe('HomeView · поиск', () => {
   })
 
   it('объясняет пустую выдачу и позволяет сбросить поиск', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await search(wrapper, 'dropbox')
 
@@ -252,7 +239,7 @@ describe('HomeView · поиск', () => {
   })
 
   it('поиск не находит секретов — их нечем индексировать', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await search(wrapper, 'mock-github-pw')
 
@@ -262,14 +249,14 @@ describe('HomeView · поиск', () => {
 
 describe('HomeView · выбор записи и панели', () => {
   it('не открывает ничью карточку сама', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     expect(wrapper.text()).toContain('Запись не выбрана')
     expect(wrapper.find('.card').exists()).toBe(false)
   })
 
   it('открывает карточку по клику на строку', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await wrapper.findAll('.home__row')[0]!.trigger('click')
     await flushPromises()
@@ -282,7 +269,7 @@ describe('HomeView · выбор записи и панели', () => {
   })
 
   it('переключает панель в форму по «Изменить» и обратно по «Отмена»', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
     await wrapper.findAll('.home__row')[0]!.trigger('click')
     await flushPromises()
 
@@ -296,7 +283,7 @@ describe('HomeView · выбор записи и панели', () => {
   })
 
   it('заводит новую запись сквозным путём: форма → ядро → список', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await wrapper.find('.home__new').trigger('click')
     await flushPromises()
@@ -328,7 +315,7 @@ describe('HomeView · выбор записи и панели', () => {
   })
 
   it('после удаления запись уходит из списка, а панель — в пустое состояние', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
     await wrapper.findAll('.home__row')[0]!.trigger('click')
     await flushPromises()
 
@@ -348,7 +335,7 @@ describe('HomeView · выбор записи и панели', () => {
 
 describe('HomeView · сайдбар секций (F7)', () => {
   /** Найти строку сайдбара по имени секции. */
-  function section(wrapper: Awaited<ReturnType<typeof mountHome>>, name: string) {
+  function section(wrapper: VueWrapper, name: string) {
     const found = wrapper
       .findAll('.sections__item')
       .find((node) => node.find('.sections__name').text() === name)
@@ -357,7 +344,7 @@ describe('HomeView · сайдбар секций (F7)', () => {
   }
 
   it('показывает секции ядра со счётчиками и пометкой локальной', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     expect(section(wrapper, 'Все записи').text()).toContain('4')
     expect(section(wrapper, 'Личное').text()).toContain('3')
@@ -370,7 +357,7 @@ describe('HomeView · сайдбар секций (F7)', () => {
   })
 
   it('фильтрует список по выбранной секции', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await section(wrapper, 'Рабочее').trigger('click')
 
@@ -386,7 +373,7 @@ describe('HomeView · сайдбар секций (F7)', () => {
   })
 
   it('предупреждает, что записи локальной секции никуда не уезжают', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
 
     await section(wrapper, 'Рабочее').trigger('click')
     expect(wrapper.find('.home__local').text()).toContain('не уезжают с этого устройства')
@@ -399,7 +386,7 @@ describe('HomeView · сайдбар секций (F7)', () => {
 
   it('объясняет пустую секцию и даёт вернуться ко всем записям', async () => {
     const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
-    const wrapper = await mountHome(core)
+    const { wrapper } = await mountHome(core)
     const empty = await core.createVault('Учёба', 'mint')
     await useSectionsStore().load()
     await flushPromises()
@@ -420,7 +407,7 @@ describe('HomeView · сайдбар секций (F7)', () => {
   })
 
   it('новая запись ложится в открытую секцию', async () => {
-    const wrapper = await mountHome()
+    const { wrapper } = await mountHome()
     await wrapper.findAll('.sections__item')[2]!.trigger('click')
 
     await wrapper.find('.home__new').trigger('click')
@@ -451,12 +438,14 @@ describe('HomeView · сайдбар секций (F7)', () => {
 
 describe('HomeView · блокировка', () => {
   it('блокирует хранилище и уводит на экран входа', async () => {
-    const wrapper = await mountHome()
+    const { wrapper, router } = await mountHome()
 
     await wrapper.find('.home__header-actions button:last-child').trigger('click')
     await flushPromises()
 
     expect(useVaultStore().status).toBe('locked')
-    expect(push).toHaveBeenCalledWith({ name: 'unlock' })
+    // Роутер настоящий, поэтому проверяем не вызов `push`, а то, что приложение
+    // правда стоит на экране входа — и что хранитель этому не помешал.
+    await waitForRoute(router, 'unlock')
   })
 })
