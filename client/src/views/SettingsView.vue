@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
+import BackupModal from '@/components/data/BackupModal.vue'
+import CsvExportModal from '@/components/data/CsvExportModal.vue'
+import ImportModal from '@/components/data/ImportModal.vue'
 import GeneratorProfileForm from '@/components/generator/GeneratorProfileForm.vue'
+import MasterPasswordModal from '@/components/security/MasterPasswordModal.vue'
 import { SyButton } from '@/components/ui'
 import { securityPolicy } from '@/composables/securityPolicy'
 import { useClipboard } from '@/composables/useClipboard'
@@ -10,57 +15,144 @@ import {
   useGeneratorProfileDraft,
   usePasswordGenerator,
 } from '@/composables/usePasswordGenerator'
-import type { GeneratorProfile } from '@/core/contract'
+import {
+  AUTOLOCK_OPTIONS_MS,
+  CLIPBOARD_CLEAR_OPTIONS_MS,
+  SECRET_REVEAL_OPTIONS_MS,
+  type GeneratorProfile,
+  type SecuritySettingsPatch,
+  type VaultId,
+} from '@/core/contract'
+import { isCoreError } from '@/core/errors'
+import { useRecordsStore } from '@/stores/useRecordsStore'
+import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useToastStore } from '@/stores/useToastStore'
+import { useVaultUiStore } from '@/stores/useVaultUiStore'
 
 /**
- * Настройки (F6, §3.11 макета).
+ * Настройки (F6, F13, §3.11 макета) — три вкладки одной правой панели.
  *
- * Две секции: профиль генератора (F6) и данные (F12) — вход в импорт, бэкап и
- * CSV-экспорт. Сами потоки живут на `/data`: здесь у каждого только честный
- * ценник, и опасное помечено словами, а не одним цветом.
+ * Порядок вкладок не случаен: «Безопасность» первая, потому что это единственная
+ * вкладка, где выбор меняет то, как продукт защищает человека. Генератор — про
+ * удобство, данные — про редкие операции.
  *
- * ЗАКОН №1: профиль — это правила, а не секрет, и он спокойно живёт в сторе.
- * Пароль-пример рядом с ним — уже пароль: он приходит разово из ядра, лежит в
- * области видимости этого экрана и исчезает при уходе с него.
+ * ЗАКОН №1: профиль и таймауты — это правила, а не секреты, и они спокойно живут
+ * в сторах. Пароль-пример рядом с генератором — уже пароль: он приходит разово
+ * из ядра, лежит в области видимости экрана и исчезает при уходе с него. Сами
+ * файлы импорта и экспорта собирает и разбирает ядро.
  */
+
+const route = useRoute()
+const router = useRouter()
+const records = useRecordsStore()
+const security = useSecurityStore()
+const ui = useVaultUiStore()
+const toast = useToastStore()
+
+// ---------------------------------------------------------------------------
+// Вкладки
+//
+// Адрес — единственная правда о том, какая вкладка открыта: так на неё можно
+// дать ссылку, а `Back` не шагает по вкладкам (`replace`, а не `push`).
+// ---------------------------------------------------------------------------
+
+const TABS = [
+  { id: 'security', name: 'Безопасность' },
+  { id: 'generator', name: 'Генератор' },
+  { id: 'data', name: 'Данные' },
+] as const
+
+type TabId = (typeof TABS)[number]['id']
+
+/** Старые ссылки `/data?tab=import|export` вели сюда же — принимаем их. */
+function readTab(raw: unknown): TabId {
+  if (raw === 'generator') return 'generator'
+  if (raw === 'data' || raw === 'import' || raw === 'export') return 'data'
+  return 'security'
+}
+
+const tab = ref<TabId>(readTab(route.query.tab))
+
+watch(
+  () => route.query.tab,
+  (raw) => {
+    tab.value = readTab(raw)
+  },
+)
+
+function pickTab(next: TabId): void {
+  tab.value = next
+  void router.replace({ name: 'settings', query: next === 'security' ? {} : { tab: next } })
+}
+
+// ---------------------------------------------------------------------------
+// Безопасность
+// ---------------------------------------------------------------------------
+
+/** Подпись варианта: «1 мин», «5 мин», «30 с». Секунды и минуты — не одно и то же. */
+function durationLabel(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)} с`
+  return `${Math.round(ms / 60_000)} мин`
+}
+
+const securityRows = computed(() => [
+  {
+    key: 'autolock_ms' as const,
+    name: 'Автоблокировка',
+    // Считает бездействие ЯДРО. Фронт эти числа только показывает — второй
+    // таймер означал бы вторую правду о том, заперто ли хранилище.
+    description:
+      'Через сколько бездействия хранилище запрётся само. Считает ядро, а не окно: свернули или заперли крышку — отсчёт продолжается.',
+    options: AUTOLOCK_OPTIONS_MS,
+    value: security.settings.autolock_ms,
+  },
+  {
+    key: 'clipboard_clear_ms' as const,
+    name: 'Очистка буфера обмена',
+    description:
+      'Скопированный пароль стирается из буфера сам. Пока он там лежит, его может прочитать любая программа на этом компьютере.',
+    options: CLIPBOARD_CLEAR_OPTIONS_MS,
+    value: security.settings.clipboard_clear_ms,
+  },
+  {
+    key: 'secret_reveal_ms' as const,
+    name: 'Показ секрета на экране',
+    description:
+      'Через сколько открытый пароль скроется обратно. Отсчёт начинается в момент показа и не продлевается.',
+    options: SECRET_REVEAL_OPTIONS_MS,
+    value: security.settings.secret_reveal_ms,
+  },
+])
+
+const savingKey = ref<string | null>(null)
+const securityError = ref<string | null>(null)
+
+async function setSecurity(key: keyof SecuritySettingsPatch, value: number): Promise<void> {
+  if (savingKey.value !== null) return
+
+  savingKey.value = key
+  securityError.value = null
+  try {
+    await security.save({ [key]: value } as SecuritySettingsPatch)
+    toast.push('Настройка сохранена', 'success')
+  } catch (cause) {
+    securityError.value = isCoreError(cause)
+      ? cause.message
+      : 'Не удалось сохранить настройку безопасности.'
+  } finally {
+    savingKey.value = null
+  }
+}
+
+const changingMaster = ref(false)
+
+// ---------------------------------------------------------------------------
+// Генератор (F6)
+// ---------------------------------------------------------------------------
 
 const profile = useGeneratorProfileDraft()
 const preview = usePasswordGenerator()
 const clipboard = useClipboard()
-const toast = useToastStore()
-
-/**
- * Данные (F12, §3.11 макета). Сами потоки живут на `/data` — здесь только
- * вход в них и честный ценник у каждого: «безопасно» и «открытый текст»
- * стоят рядом, но выглядят по-разному.
- */
-const dataRows = [
-  {
-    title: 'Импорт из другого менеджера',
-    tag: 'безопасно',
-    body: 'Файл читается локально и удаляется сразу после разбора.',
-    action: 'Открыть импорт',
-    tab: 'import',
-    danger: false,
-  },
-  {
-    title: 'Зашифрованный бэкап',
-    tag: 'безопасно',
-    body: 'Копия хранилища под мастер-паролем — можно хранить где угодно.',
-    action: 'Сделать бэкап',
-    tab: 'export',
-    danger: false,
-  },
-  {
-    title: 'Экспорт в CSV',
-    tag: 'открытый текст',
-    body: 'Пароли без шифрования. Только для переезда, с удалением файла сразу после.',
-    action: 'Открыть экспорт',
-    tab: 'export',
-    danger: true,
-  },
-]
 
 /** Пример — ровно один: это не выбор варианта, а иллюстрация правил. */
 function reroll(): void {
@@ -72,6 +164,7 @@ const rerollSoon = useDebounced(reroll)
 const example = computed(() => preview.variants.value[0] ?? '')
 
 onMounted(async () => {
+  void security.ensure()
   await profile.ensure()
   reroll()
 })
@@ -94,15 +187,37 @@ async function save(): Promise<void> {
   if (await profile.save()) toast.push('Профиль генератора сохранён', 'success')
 }
 
-/** Копируем как секрет: буфер очистится сам через 20 с. */
+/** Копируем как секрет: буфер очистится сам по действующей политике. */
 async function copyExample(): Promise<void> {
   if (example.value === '') return
 
+  const seconds = Math.ceil(securityPolicy().value.clipboard_clear_ms / 1000)
   const done = await clipboard.copy('example', example.value, {
     clearAfterMs: securityPolicy().value.clipboard_clear_ms,
   })
-  if (done) toast.push('Пароль в буфере · очистится через 20 с', 'success')
+  if (done) toast.push(`Пароль в буфере · очистится через ${seconds} с`, 'success')
   else toast.push('Буфер обмена недоступен', 'danger')
+}
+
+// ---------------------------------------------------------------------------
+// Данные (F12)
+// ---------------------------------------------------------------------------
+
+const importing = ref(false)
+const backing = ref(false)
+const exporting = ref(false)
+
+/**
+ * Импорт закончился — показываем, что приехало. Фильтр списка ставим на свежую
+ * секцию: 300 чужих записей вперемешку со своими нельзя ни проверить, ни
+ * разобрать. Баннер над списком договаривает главное: они пока только здесь.
+ */
+async function onImported(vaultId: VaultId, count: number): Promise<void> {
+  importing.value = false
+  records.setVaultFilter(vaultId)
+  await records.load()
+  ui.showImportBanner(count)
+  await router.push({ name: 'home' })
 }
 </script>
 
@@ -112,11 +227,67 @@ async function copyExample(): Promise<void> {
     <header class="settings__header">
       <div class="settings__brand">
         <h1 class="settings__title">Настройки</h1>
+        <p class="settings__lead">Каждый пункт объясняет цену выбора, а не просто включает галочку.</p>
+      </div>
+
+      <div class="settings__tabs" role="tablist" aria-label="Разделы настроек">
+        <button
+          v-for="item in TABS"
+          :key="item.id"
+          type="button"
+          role="tab"
+          class="settings__tab"
+          :class="{ 'settings__tab--on': tab === item.id }"
+          :aria-selected="tab === item.id"
+          :data-test="`tab-${item.id}`"
+          @click="pickTab(item.id)"
+        >
+          {{ item.name }}
+        </button>
       </div>
     </header>
 
     <div class="settings__body">
-      <section class="settings__pane">
+      <!-- Безопасность -->
+      <section v-if="tab === 'security'" class="settings__pane" data-test="pane-security">
+        <p v-if="security.error" class="settings__error" role="alert">{{ security.error }}</p>
+        <p v-if="securityError" class="settings__error" role="alert">{{ securityError }}</p>
+
+        <div v-for="row in securityRows" :key="row.key" class="settings__option">
+          <div class="settings__option-text">
+            <span class="settings__option-name">{{ row.name }}</span>
+            <span class="settings__option-desc">{{ row.description }}</span>
+          </div>
+
+          <div class="settings__choices" role="group" :aria-label="row.name">
+            <button
+              v-for="option in row.options"
+              :key="option"
+              type="button"
+              class="settings__choice"
+              :class="{ 'settings__choice--on': row.value === option }"
+              :aria-pressed="row.value === option"
+              :disabled="savingKey !== null"
+              @click="setSecurity(row.key, option)"
+            >
+              {{ durationLabel(option) }}
+            </button>
+          </div>
+        </div>
+
+        <div class="settings__master">
+          <p class="settings__master-text">
+            Смена мастер-пароля перешифровывает хранилище на этом устройстве и требует подтверждения
+            на остальных — они спросят новый пароль при следующей встрече.
+          </p>
+          <SyButton size="sm" data-test="master-password-open" @click="changingMaster = true">
+            Сменить мастер-пароль
+          </SyButton>
+        </div>
+      </section>
+
+      <!-- Генератор -->
+      <section v-else-if="tab === 'generator'" class="settings__pane" data-test="pane-generator">
         <div class="settings__intro">
           <h2 class="settings__pane-title">Профиль генератора</h2>
           <p class="settings__pane-text">
@@ -168,37 +339,58 @@ async function copyExample(): Promise<void> {
         <p v-else-if="profile.loading.value" class="settings__pane-text">Загружаем правила…</p>
       </section>
 
-      <section class="settings__pane">
-        <div class="settings__intro">
-          <h2 class="settings__pane-title">Данные</h2>
-          <p class="settings__pane-text">
-            Три действия с разной ценой ошибки, поэтому и выглядят они по-разному. Опасное не
-            спрятано, но и не соседствует с безобидным.
-          </p>
+      <!-- Данные -->
+      <section v-else class="settings__pane" data-test="pane-data">
+        <div class="settings__data-row">
+          <div class="settings__data-text">
+            <span class="settings__data-title">Импорт из другого менеджера</span>
+            <span class="settings__data-body">
+              Файл читается на этом устройстве и никуда не отправляется. После импорта его стоит
+              удалить — внутри пароли открытым текстом.
+            </span>
+          </div>
+          <SyButton variant="primary" size="sm" data-test="open-import" @click="importing = true">
+            Выбрать файл
+          </SyButton>
         </div>
 
-        <ul class="settings__data">
-          <li
-            v-for="row in dataRows"
-            :key="row.title"
-            class="settings__data-row"
-            :class="{ 'settings__data-row--danger': row.danger }"
-          >
-            <div class="settings__data-text">
-              <span class="settings__data-head">
-                <span class="settings__data-title">{{ row.title }}</span>
-                <span class="settings__data-tag">{{ row.tag }}</span>
-              </span>
-              <span class="settings__data-body">{{ row.body }}</span>
-            </div>
+        <div class="settings__data-row">
+          <div class="settings__data-text">
+            <span class="settings__data-title">Зашифрованный бэкап</span>
+            <span class="settings__data-body">
+              Один файл, который открывается только вашим мастер-паролем. Подходит для флешки в
+              ящике стола.
+            </span>
+          </div>
+          <SyButton size="sm" data-test="open-backup" @click="backing = true">
+            Создать бэкап
+          </SyButton>
+        </div>
 
-            <RouterLink class="settings__data-link" :to="{ name: 'data', query: { tab: row.tab } }">
-              {{ row.action }}
-            </RouterLink>
-          </li>
-        </ul>
+        <div class="settings__data-row settings__data-row--danger">
+          <div class="settings__data-text">
+            <span class="settings__data-title">Экспорт в CSV</span>
+            <span class="settings__data-body">
+              Файл не шифруется: пароли внутри читаются как обычный текст. Нужен только для переезда
+              в другой менеджер.
+            </span>
+          </div>
+          <SyButton variant="danger" size="sm" data-test="open-csv" @click="exporting = true">
+            Экспортировать CSV
+          </SyButton>
+        </div>
+
+        <p class="settings__data-note">
+          Ни импорт, ни экспорт не обращаются к сети. Единственный канал, по которому данные покидают
+          это устройство, — прямая синхронизация с вашими же устройствами в одной локальной сети.
+        </p>
       </section>
     </div>
+
+    <MasterPasswordModal :open="changingMaster" @close="changingMaster = false" />
+    <ImportModal :open="importing" @close="importing = false" @imported="onImported" />
+    <BackupModal :open="backing" @close="backing = false" />
+    <CsvExportModal :open="exporting" @close="exporting = false" />
   </main>
 </template>
 
@@ -219,22 +411,62 @@ async function copyExample(): Promise<void> {
 
 .settings__header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sy-space-5);
-  padding: var(--sy-space-5) var(--sy-space-6);
+  flex-direction: column;
+  gap: var(--sy-space-6);
+  padding: var(--sy-space-6) var(--sy-space-8) 0;
   border-bottom: 1px solid var(--sy-border);
   background: var(--sy-bg-0);
 }
 
 .settings__brand {
   display: flex;
-  align-items: baseline;
-  gap: var(--sy-space-6);
+  flex-direction: column;
+  gap: var(--sy-space-1);
 }
 
 .settings__title {
-  font-size: var(--sy-text-body-strong);
+  font-size: 22px;
+  font-weight: var(--sy-weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.settings__lead {
+  font-size: var(--sy-text-body);
+  color: var(--sy-text-2);
+  text-wrap: pretty;
+}
+
+/* Вкладки: подчёркивание, а не кнопки — это навигация внутри экрана. */
+.settings__tabs {
+  display: flex;
+  gap: var(--sy-space-2);
+}
+
+.settings__tab {
+  height: 38px;
+  padding: 0 var(--sy-space-5);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--sy-text-2);
+  font-family: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: color var(--sy-transition);
+}
+
+.settings__tab:hover {
+  color: var(--sy-text);
+}
+
+.settings__tab:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+.settings__tab--on {
+  border-bottom-color: var(--sy-accent);
+  color: var(--sy-text);
   font-weight: var(--sy-weight-semibold);
 }
 
@@ -242,15 +474,14 @@ async function copyExample(): Promise<void> {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: var(--sy-space-9) var(--sy-space-8);
+  padding: var(--sy-space-8);
 }
 
 .settings__pane {
   display: flex;
   flex-direction: column;
-  gap: var(--sy-space-8);
-  max-width: 720px;
-  margin: 0 auto;
+  gap: var(--sy-space-5);
+  max-width: 820px;
 }
 
 .settings__intro {
@@ -263,21 +494,117 @@ async function copyExample(): Promise<void> {
   font-size: var(--sy-text-h2);
   line-height: var(--sy-text-h2-lh);
   font-weight: var(--sy-weight-semibold);
-  letter-spacing: -0.015em;
+  letter-spacing: -0.01em;
 }
 
 .settings__pane-text {
   font-size: var(--sy-text-body);
-  line-height: 1.6;
+  line-height: 1.55;
   color: var(--sy-text-2);
   text-wrap: pretty;
 }
 
+/* Безопасность */
+
+.settings__option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sy-space-5) var(--sy-space-7);
+  padding: var(--sy-space-6);
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius);
+  background: var(--sy-surface);
+}
+
+.settings__option-text {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings__option-name {
+  font-size: 14.5px;
+  font-weight: var(--sy-weight-medium);
+}
+
+.settings__option-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
+}
+
+.settings__choices {
+  flex: none;
+  display: flex;
+  gap: var(--sy-space-2);
+}
+
+.settings__choice {
+  height: 32px;
+  padding: 0 var(--sy-space-4);
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius-xs);
+  background: var(--sy-bg-1);
+  color: var(--sy-text-3);
+  font-family: var(--sy-font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--sy-transition),
+    color var(--sy-transition);
+}
+
+.settings__choice:hover:not(:disabled) {
+  border-color: var(--sy-border-strong);
+  color: var(--sy-text-2);
+}
+
+.settings__choice:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+.settings__choice:disabled {
+  cursor: progress;
+}
+
+.settings__choice--on {
+  border-color: var(--sy-accent-border);
+  background: var(--sy-accent-quiet);
+  color: var(--sy-accent);
+}
+
+.settings__master {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sy-space-6);
+  padding: var(--sy-space-6);
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius);
+  background: var(--sy-bg-0);
+}
+
+.settings__master-text {
+  flex: 1;
+  min-width: 260px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
+}
+
+/* Генератор */
+
 .settings__preview {
   display: flex;
   flex-direction: column;
-  gap: var(--sy-space-5);
-  padding: var(--sy-space-7);
+  gap: var(--sy-space-4);
+  padding: var(--sy-space-6);
   border: 1px solid var(--sy-accent-border);
   border-radius: var(--sy-radius);
   background: var(--sy-accent-quiet);
@@ -285,128 +612,97 @@ async function copyExample(): Promise<void> {
 
 .settings__preview-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: var(--sy-space-6);
+  gap: var(--sy-space-5);
 }
 
 .settings__preview-label {
   font-family: var(--sy-font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: var(--sy-text-label);
+  letter-spacing: var(--sy-tracking-label);
   text-transform: uppercase;
-  color: var(--sy-accent);
+  color: var(--sy-text-3);
 }
 
 .settings__preview-entropy {
   font-family: var(--sy-font-mono);
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--sy-text-2);
 }
 
 .settings__example {
   font-family: var(--sy-font-mono);
-  font-size: 22px;
-  line-height: 1.35;
-  word-break: break-all;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
 }
 
 .settings__preview-actions {
   display: flex;
   align-items: center;
-  gap: var(--sy-space-3);
+  gap: var(--sy-space-4);
+  flex-wrap: wrap;
 }
 
 .settings__preview-note {
-  margin-left: auto;
   font-family: var(--sy-font-mono);
   font-size: 10.5px;
   color: var(--sy-text-3);
 }
 
-.settings__error {
-  font-size: var(--sy-text-small);
-  color: var(--sy-danger);
-}
-
-.settings__data {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sy-space-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
+/* Данные */
 
 .settings__data-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: var(--sy-space-6);
-  padding: var(--sy-space-6) var(--sy-space-7);
+  padding: var(--sy-space-6);
   border: 1px solid var(--sy-border);
   border-radius: var(--sy-radius);
-  background: var(--sy-bg-0);
+  background: var(--sy-surface);
 }
 
+/* Опасное не спрятано, но и не выглядит как безобидное. */
 .settings__data-row--danger {
   border-color: var(--sy-danger);
   background: var(--sy-danger-quiet);
 }
 
-.settings__data-head {
+.settings__data-text {
+  flex: 1;
+  min-width: 260px;
   display: flex;
-  align-items: center;
-  gap: var(--sy-space-4);
+  flex-direction: column;
+  gap: var(--sy-space-2);
 }
 
 .settings__data-title {
-  font-size: var(--sy-text-body);
+  font-size: 15px;
   font-weight: var(--sy-weight-semibold);
 }
 
-.settings__data-tag {
-  padding: 2px var(--sy-space-4);
-  border: 1px solid var(--sy-accent-border);
-  border-radius: var(--sy-radius-pill);
-  font-family: var(--sy-font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--sy-accent);
-}
-
-.settings__data-row--danger .settings__data-tag {
-  border-color: var(--sy-danger);
-  color: var(--sy-danger);
-}
-
 .settings__data-body {
-  display: block;
-  padding-top: var(--sy-space-1);
+  font-size: var(--sy-text-body);
+  line-height: 1.55;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
+}
+
+.settings__data-note {
+  padding: var(--sy-space-6);
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius);
+  background: var(--sy-bg-0);
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--sy-text-2);
   text-wrap: pretty;
 }
 
-.settings__data-link {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  height: var(--sy-control-height-sm);
-  padding: 0 var(--sy-space-6);
-  border: 1px solid var(--sy-border-strong);
-  border-radius: var(--sy-radius-sm);
-  background: var(--sy-surface);
-  font-size: var(--sy-text-body);
-  color: var(--sy-text);
-  text-decoration: none;
-}
-
-.settings__data-row--danger .settings__data-link {
-  border-color: var(--sy-danger);
-  background: transparent;
+.settings__error {
+  font-size: var(--sy-text-small);
   color: var(--sy-danger);
 }
 </style>
