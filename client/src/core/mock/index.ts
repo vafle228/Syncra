@@ -5,9 +5,16 @@ import type {
   DeviceId,
   EventMap,
   EventName,
+  ExportFile,
   GeneratePasswordsResponse,
   GeneratorProfile,
   GetConflictSecretResponse,
+  ImportOptions,
+  ImportPreview,
+  ImportPreviewRow,
+  ImportResult,
+  ImportSessionId,
+  ImportSource,
   InitVaultResponse,
   IsoDateTime,
   ListRecordsRequest,
@@ -21,6 +28,7 @@ import type {
   RecordMeta,
   RecordPatch,
   RecordSecrets,
+  RestoreBackupResult,
   SecretField,
   SyncStatus,
   UnlockResponse,
@@ -30,7 +38,13 @@ import type {
   VaultPatch,
   VaultStatus,
 } from '../contract'
-import { MASTER_PASSWORD_MIN_LENGTH, VAULT_COLORS, VAULT_NAME_MAX_LENGTH } from '../contract'
+import {
+  IMPORT_PREVIEW_ROWS,
+  IMPORT_SOURCES,
+  MASTER_PASSWORD_MIN_LENGTH,
+  VAULT_COLORS,
+  VAULT_NAME_MAX_LENGTH,
+} from '../contract'
 import { CoreError } from '../errors'
 import type { CoreClient, Unsubscribe } from '../ipc'
 import { buildConflict, type MockConflictEntry } from './conflicts'
@@ -63,8 +77,19 @@ import {
   type MockSeedEntry,
 } from './seed'
 import { initialSyncStatus, SYNC_SIMULATION_STEP_MS } from './sync'
+import {
+  countReusedPasswords,
+  createImportFile,
+  exportLocation,
+  exportSize,
+  importHost,
+  importRowStatus,
+  importVaultName,
+  type MockImportEntry,
+} from './transfer'
 
 export type { MockConflictEntry } from './conflicts'
+export { importHost, importVaultName } from './transfer'
 export {
   createVaultSeed,
   MOCK_DEVICE_LAPTOP,
@@ -155,6 +180,13 @@ export interface MockCoreControl {
    * которое приходит «с той стороны», приходится вызывать руками.
    */
   pairedByPeer(name?: string): PairingResult
+
+  /**
+   * Следующий выбор файла (импорт, восстановление из бэкапа) человек «отменит»
+   * — команда вернёт `null`. Настоящее окно выбора открывает ядро, и другого
+   * способа проверить эту ветку у UI нет.
+   */
+  cancelNextFilePick(): void
 
   /** Остановить таймеры фейк-ядра. Нужно тестам и горячей перезагрузке. */
   dispose(): void
@@ -248,6 +280,21 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   let sync: SyncStatus = initialSyncStatus()
   /** Приехавшие версии, разошедшиеся с местными (§5.5). */
   let conflicts: MockConflictEntry[] = []
+
+  // Экспорт и импорт (F12, §6.2).
+  /** Файлы, которые ядро создало и ещё не удалило: только их можно удалить. */
+  let exportedFiles: ExportFile[] = []
+  /**
+   * Разобранные файлы, ждущие согласия человека. Здесь лежат чужие пароли
+   * открытым текстом — ровно поэтому они и лежат ЗДЕСЬ, а не в UI, и исчезают
+   * вместе с открытым хранилищем.
+   */
+  const importSessions = new Map<
+    ImportSessionId,
+    { source: ImportSource; file_name: string; entries: MockImportEntry[] }
+  >()
+  /** Ручка тестов: следующий выбор файла человек «отменит». */
+  let cancelNextPick = false
   let simulation: ReturnType<typeof setInterval> | null = null
   let simulationStep = 0
 
@@ -272,6 +319,8 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     conflicts = []
     sync = initialSyncStatus()
     forgetPairing()
+    forgetImports()
+    exportedFiles = []
     // Свежесозданное хранилище пустое: сид — это «данные, которые уже были».
     if (!initialized) return
 
@@ -499,6 +548,10 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     // Незавершённое сопряжение не переживает замок: код на экране даёт право
     // забрать копию хранилища, а закрытое хранилище такого права не выдаёт.
     forgetPairing()
+    // Разобранный, но не подтверждённый импорт — тоже: это чужие пароли,
+    // которые ещё никуда не легли. Созданные файлы при этом остаются на диске:
+    // замок не умеет их стереть, и делать вид, что умеет, не будет.
+    forgetImports()
     // Закрытое хранилище не синхронизируется: связи с пирами больше нет.
     // `pending_records` при этом остаются — изменения никуда не делись и
     // поедут, когда хранилище откроют; конфликты тоже ждут в хранилище.
@@ -515,8 +568,94 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     handshakes.clear()
   }
 
+  /**
+   * Забыть разобранные файлы. В них лежат чужие пароли открытым текстом, и
+   * закрытое хранилище — не то место, где им можно продолжать лежать.
+   */
+  function forgetImports(): void {
+    importSessions.clear()
+  }
+
   function expired(at: IsoDateTime): boolean {
     return Date.parse(at) <= now().getTime()
+  }
+
+  // -------------------------------------------------------------------------
+  // Экспорт / импорт / бэкап (F12, §6.2)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Экспорт требует мастер-пароль, даже когда хранилище открыто (§3.10 макета).
+   * Открытая программа и файл со всеми паролями на диске — поступки разной
+   * цены, и второй подтверждается отдельно.
+   */
+  function requireMasterPassword(input: string): void {
+    if (input !== masterPassword) {
+      throw new CoreError('INVALID_MASTER_PASSWORD', 'Неверный мастер-пароль.')
+    }
+  }
+
+  function liveRecords(): RecordMeta[] {
+    return [...meta.values()].filter((record) => record.deleted_at === null)
+  }
+
+  function registerExport(kind: 'csv' | 'backup', records: number): ExportFile {
+    const at = now()
+    const { path, file_name } = exportLocation(kind, at)
+    const file: ExportFile = {
+      path,
+      file_name,
+      size_bytes: exportSize(kind, records),
+      record_count: records,
+      created_at: at.toISOString(),
+      encrypted: kind === 'backup',
+    }
+
+    // Повторный экспорт в тот же день перезаписывает файл, а не плодит второй.
+    exportedFiles = [...exportedFiles.filter((item) => item.path !== path), file]
+    return { ...file }
+  }
+
+  /**
+   * Пары «адрес + логин», которые в хранилище уже есть. По ним считается
+   * дубликат при импорте — по адресу и логину (§4.4), а не по имени сервиса.
+   */
+  function knownPairs(): Set<string> {
+    const pairs = new Set<string>()
+    for (const record of liveRecords()) {
+      const login = record.login.trim().toLowerCase()
+      for (const url of record.urls) pairs.add(`${importHost(url)} ${login}`)
+    }
+    return pairs
+  }
+
+  /**
+   * Секция под импорт. Отдельная намеренно (§3.10 макета: «разберёте потом, не
+   * смешивая с текущим»): 300 чужих записей, высыпанных в «Личное», — это не
+   * перенос, а беспорядок. Второй импорт в тот же день ложится туда же.
+   */
+  function importVault(): Vault {
+    const name = importVaultName(now())
+    const existing = vaults.find((vault) => vault.name === name)
+    if (existing) return existing
+
+    const vault: Vault = {
+      vault_id: crypto.randomUUID(),
+      name,
+      color: 'mint',
+      // Импортированное синхронизируется, как и любая новая секция.
+      sync: true,
+      is_default: false,
+      created_at: timestamp(),
+    }
+    vaults = [...vaults, vault]
+    return vault
+  }
+
+  /** `figma.com` → `Figma`. Имя сервиса — подпись для человека, не ключ (§4.1). */
+  function serviceNameFromHost(host: string): string {
+    const label = host.split('.')[0] ?? host
+    return label === '' ? host : label[0]!.toUpperCase() + label.slice(1)
   }
 
   loadSeed()
@@ -1091,6 +1230,192 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       return { local: currentSecrets[field], remote: entry.secrets[field] }
     },
 
+    // -------------------------------------------------------------------------
+    // Экспорт / импорт / бэкап (F12, §6.2)
+    //
+    // Фейк-ядро не пишет файлов и не шифрует: настоящие сериализация и крипта
+    // живут в Rust. Здесь важно другое — что через границу IPC не проходит ни
+    // одного пароля НИ В ОДНУ сторону, и это можно проверить тестом.
+    // -------------------------------------------------------------------------
+
+    async exportCsv(masterPasswordInput: string): Promise<ExportFile> {
+      await enter({ requiresUnlock: true })
+      requireMasterPassword(masterPasswordInput)
+      // Уезжает всё живое, включая локальные секции: это файл для переезда,
+      // а не синхронизация — «остаётся на устройстве» здесь ни при чём.
+      return registerExport('csv', liveRecords().length)
+    },
+
+    async exportBackup(masterPasswordInput: string): Promise<ExportFile> {
+      await enter({ requiresUnlock: true })
+      requireMasterPassword(masterPasswordInput)
+      return registerExport('backup', liveRecords().length)
+    },
+
+    async deleteExport(path: string): Promise<void> {
+      await enter({ requiresUnlock: true })
+
+      if (!exportedFiles.some((file) => file.path === path)) {
+        throw new CoreError('NOT_FOUND', 'Этот файл создан не здесь — удалить его отсюда нельзя.')
+      }
+      exportedFiles = exportedFiles.filter((file) => file.path !== path)
+    },
+
+    async restoreBackup(masterPasswordInput: string): Promise<RestoreBackupResult | null> {
+      // Восстанавливаются на чистом устройстве, поэтому ни замка, ни хранилища
+      // здесь ещё нет.
+      await enter({ requiresUnlock: false, requiresInit: false })
+
+      if (initialized) {
+        throw new CoreError(
+          'ALREADY_INITIALIZED',
+          'На этом устройстве уже есть хранилище. Восстановление возможно только на чистом.',
+        )
+      }
+      if (cancelNextPick) {
+        cancelNextPick = false
+        return null
+      }
+      // Фейк-ядро изображает файл бэкапа: он закрыт тем же дев-паролем.
+      // Настоящее ядро здесь расшифровывает выбранный файл.
+      if (masterPasswordInput !== (options.masterPassword ?? MOCK_MASTER_PASSWORD)) {
+        throw new CoreError('INVALID_MASTER_PASSWORD', 'Этот бэкап закрыт другим мастер-паролем.')
+      }
+
+      masterPassword = masterPasswordInput
+      initialized = true
+      // Содержимое файла — то же, что лежало бы в хранилище.
+      loadSeed()
+
+      const restoredAt = timestamp()
+      return {
+        file_name: exportLocation('backup', now()).file_name,
+        records: liveRecords().length,
+        vaults: vaults.length,
+        initialized_at: restoredAt,
+        unlocked_at: doUnlock(),
+      }
+    },
+
+    async beginImport(source: ImportSource): Promise<ImportPreview | null> {
+      await enter({ requiresUnlock: true })
+
+      if (!IMPORT_SOURCES.includes(source)) {
+        throw new CoreError('VALIDATION', 'Неизвестный источник импорта.')
+      }
+      if (cancelNextPick) {
+        cancelNextPick = false
+        return null
+      }
+
+      const file = createImportFile(source)
+      const known = knownPairs()
+      const statuses = file.entries.map((entry) =>
+        importRowStatus(entry, (host, login) => known.has(`${host} ${login}`)),
+      )
+
+      const sessionId = crypto.randomUUID()
+      // Разобранные строки остаются ЗДЕСЬ до подтверждения.
+      importSessions.set(sessionId, {
+        source,
+        file_name: file.file_name,
+        entries: file.entries,
+      })
+
+      const rows: ImportPreviewRow[] = file.entries
+        .slice(0, IMPORT_PREVIEW_ROWS)
+        .map((entry, index) => ({
+          site: entry.site,
+          login: entry.login,
+          // Пароля в строке предпросмотра нет и быть не может.
+          status: statuses[index] ?? 'new',
+        }))
+
+      return {
+        session_id: sessionId,
+        source,
+        file_name: file.file_name,
+        total_rows: file.entries.length,
+        new_count: statuses.filter((status) => status === 'new').length,
+        duplicate_count: statuses.filter((status) => status === 'duplicate').length,
+        no_password_count: statuses.filter((status) => status === 'no_password').length,
+        rows,
+        target_vault_name: importVaultName(now()),
+      }
+    },
+
+    async commitImport(sessionId: ImportSessionId, importOptions: ImportOptions) {
+      await enter({ requiresUnlock: true })
+
+      const session = importSessions.get(sessionId)
+      if (!session) {
+        throw new CoreError('NOT_FOUND', 'Разобранный файл не найден. Выберите его заново.')
+      }
+      importSessions.delete(sessionId)
+
+      const known = knownPairs()
+      const vault = importVault()
+      const importedAt = timestamp()
+
+      const taken: MockImportEntry[] = []
+      let skipped = 0
+
+      for (const entry of session.entries) {
+        const status = importRowStatus(entry, (host, login) => known.has(`${host} ${login}`))
+        // Строка без пароля не запись: заводить «пустой» пароль хуже, чем не
+        // заводить ничего — он молча притворится рабочим.
+        if (status === 'no_password') continue
+        if (status === 'duplicate' && importOptions.skip_duplicates) {
+          skipped += 1
+          continue
+        }
+
+        const host = importHost(entry.site)
+        const entrySecrets: RecordSecrets = {
+          password: entry.password,
+          notes: entry.notes,
+          totp_secret: entry.totp_secret,
+        }
+        const record: RecordMeta = {
+          record_id: crypto.randomUUID(),
+          vault_id: vault.vault_id,
+          service_name: serviceNameFromHost(host),
+          urls: [host],
+          login: entry.login,
+          account_label: null,
+          ...secretFlags(entrySecrets),
+          version: 1,
+          created_at: importedAt,
+          updated_at: importedAt,
+          password_updated_at: importedAt,
+          deleted_at: null,
+        }
+
+        meta.set(record.record_id, record)
+        secrets.set(record.record_id, entrySecrets)
+        // Импортированные записи — такие же местные изменения: их ещё надо
+        // довезти до второго устройства (F10).
+        markPending(record)
+        taken.push(entry)
+      }
+
+      return {
+        imported: taken.length,
+        skipped,
+        vault: cloneVault(vault),
+        // Настоящее ядро здесь правда удаляет разобранный файл. Фейк-ядро его
+        // не создавало — но обещание §3.10 отражает честно.
+        source_file_deleted: true,
+        reused_passwords: importOptions.flag_reused ? countReusedPasswords(taken) : 0,
+      } satisfies ImportResult
+    },
+
+    async cancelImport(sessionId: ImportSessionId): Promise<void> {
+      await enter({ requiresUnlock: true })
+      // Идемпотентно, как и `cancelPairing`: по «Отмене» можно нажать дважды.
+      importSessions.delete(sessionId)
+    },
+
     on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe {
       const set = handlers.get(event) ?? new Set()
       handlers.set(event, set)
@@ -1160,10 +1485,14 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
         emit('device_paired', result)
         return result
       },
+      cancelNextFilePick() {
+        cancelNextPick = true
+      },
       dispose() {
         stopSimulation()
       },
       reset() {
+        cancelNextPick = false
         masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
         initialized = options.initialized !== false
         generatorProfile = cloneProfile(options.generatorProfile ?? DEFAULT_GENERATOR_PROFILE)

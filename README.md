@@ -1,12 +1,5 @@
-<!--
-  ┌──────────────────────────────────────────────────────────────┐
-  │  ЛОГОТИП: положи файл в .github/assets/logo.png (или .svg)   │
-  │  Рекомендуемый размер: 512×512, прозрачный фон.               │
-  │  Пока файла нет — GitHub покажет alt-текст «Syncra».          │
-  └──────────────────────────────────────────────────────────────┘
--->
 <p align="center">
-  <img src=".github/assets/logo.png" alt="Syncra" width="128" height="128">
+  <img src=".github/assets/logo.png" alt="Syncra" width="1280" height="720">
 </p>
 
 <h1 align="center">Syncra</h1>

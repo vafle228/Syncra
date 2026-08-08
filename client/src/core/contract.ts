@@ -25,6 +25,11 @@
  *
  * Правило обращения общее для всех трёх: не в Pinia, не в localStorage, не в
  * логи; значение живёт в области видимости компонента, пока оно на экране.
+ *
+ * Их по-прежнему три и после F12: экспорт (CSV и бэкап) файл СОБИРАЕТ И ПИШЕТ
+ * сам, а UI получает только путь к нему — см. `ExportFile`. Импорт устроен
+ * зеркально: разобранные чужие пароли остаются в ядре до подтверждения, через
+ * границу идут метаданные предпросмотра.
  */
 
 export type RecordId = string
@@ -734,6 +739,204 @@ export interface GetConflictSecretResponse {
   remote: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Экспорт / импорт / бэкап (F12, §6.2)
+// ---------------------------------------------------------------------------
+
+export type ImportSessionId = string
+
+/**
+ * Файл, который ядро СОЗДАЛО на диске.
+ *
+ * Содержимого здесь нет — только след файла: где лежит, сколько весит, что
+ * внутри числом. И это главное решение всего F12: ни CSV, ни бэкап не
+ * пересекают границу IPC. Файл целиком собирает и пишет ядро, UI получает путь.
+ *
+ * Иначе экспорт стал бы четвёртой командой, отдающей открытый текст, — причём
+ * не одного поля по нажатию, а ВСЕХ паролей сразу, да ещё и одной строкой в
+ * куче JS, которую никто не контролирует. Ровно этого Закон №1 не допускает,
+ * и обходить его ради кнопки «сохранить» нельзя.
+ *
+ * Куда положить файл, решает тоже ядро (папка загрузок / бэкапов): выбор пути
+ * — это системный диалог, а он живёт на той стороне вместе с файловой
+ * системой. `path` в ответе нужен, чтобы человек нашёл файл и мог его удалить.
+ */
+export interface ExportFile {
+  /** Полный путь — его показывают пользователю: он пойдёт искать файл. */
+  path: string
+  file_name: string
+  size_bytes: number
+  /** Сколько записей попало в файл. */
+  record_count: number
+  created_at: IsoDateTime
+  /**
+   * Закрыт ли файл мастер-паролем. `false` — открытый текст (CSV), и тогда UI
+   * обязан продолжать говорить об этом после экспорта, а не только до него.
+   */
+  encrypted: boolean
+}
+
+/**
+ * CSV-экспорт (§6.2) — расшифрованные данные для переезда в другой менеджер.
+ *
+ * Мастер-пароль обязателен, даже если хранилище уже открыто: одно дело —
+ * открытая программа на своём компьютере, другое — файл со всеми паролями
+ * открытым текстом. Это разные по цене поступки, и второй подтверждается
+ * отдельно.
+ */
+export interface ExportCsvRequest {
+  master_password: string
+}
+
+export type ExportCsvResponse = ExportFile
+
+/** Зашифрованный бэкап (§6.2): хранилище целиком под тем же мастер-паролем. */
+export interface ExportBackupRequest {
+  master_password: string
+}
+
+export type ExportBackupResponse = ExportFile
+
+/**
+ * Удалить созданный экспорт («Удалить файл сейчас» из макета §3.10).
+ *
+ * Ядро удаляет ТОЛЬКО те файлы, которые само же и создало в этом сеансе:
+ * команда, которой можно передать произвольный путь, была бы способом стереть
+ * с диска что угодно чужими руками. Незнакомый путь — `NOT_FOUND`.
+ */
+export interface DeleteExportRequest {
+  path: string
+}
+
+/**
+ * Восстановление из зашифрованного бэкапа (§6.3, резервный путь).
+ *
+ * Работает только на устройстве БЕЗ хранилища: восстановление поверх живого
+ * хранилища — это слияние двух историй, то есть та же задача, что и синхронизация
+ * с конфликтами, а молча перезаписать чужие записи файлом с флешки нельзя.
+ * На созданном хранилище ядро отвечает `ALREADY_INITIALIZED`.
+ *
+ * Пароль здесь — от ФАЙЛА, а не от устройства: бэкап открывается тем
+ * мастер-паролем, который был на момент его создания. Он же становится
+ * мастер-паролем восстановленного хранилища.
+ */
+export interface RestoreBackupRequest {
+  master_password: string
+}
+
+/**
+ * Итог восстановления. `null` возвращается, когда человек закрыл окно выбора
+ * файла: отказ от выбора — это не ошибка, и ошибкой его показывать не надо.
+ */
+export interface RestoreBackupResult {
+  file_name: string
+  /** Сколько записей и секций приехало — числа из файла, а не из UI. */
+  records: number
+  vaults: number
+  initialized_at: IsoDateTime
+  /** Восстановленное хранилище сразу открыто: пароль только что вводили. */
+  unlocked_at: IsoDateTime
+}
+
+export type RestoreBackupResponse = RestoreBackupResult | null
+
+/**
+ * Откуда переносим (§3.10 макета). На проводе — только имя источника: как
+ * добыть из него файл, объясняет UI (это инструкции про чужие программы,
+ * ядру о них знать незачем), а как разобрать — знает ядро.
+ */
+export type ImportSource = 'chrome' | 'firefox' | '1password' | 'bitwarden' | 'keepass' | 'csv'
+
+export const IMPORT_SOURCES = [
+  'chrome',
+  'firefox',
+  '1password',
+  'bitwarden',
+  'keepass',
+  'csv',
+] as const
+
+/** Что будет со строкой файла: новая запись, такая уже есть, пароля нет. */
+export type ImportRowStatus = 'new' | 'duplicate' | 'no_password'
+
+/**
+ * Строка предпросмотра. Пароля здесь НЕТ — и это то же самое правило, что у
+ * `RecordMeta`: показать, что попадёт внутрь, можно и нужно, а выкладывать при
+ * этом на экран сотни чужих паролей — нет. В макете это сказано прямым текстом:
+ * «прочитан локально · пароли пока не показываем».
+ */
+export interface ImportPreviewRow {
+  site: string
+  login: string
+  status: ImportRowStatus
+}
+
+/**
+ * Разобранный файл, ждущий согласия человека.
+ *
+ * Разобранные строки (вместе с паролями) остаются В ЯДРЕ до `commit_import` —
+ * как и ключ сеанса при сопряжении, их незачем гонять через UI. Отказ от
+ * импорта (`cancel_import`) заставляет ядро их забыть.
+ */
+export interface ImportPreview {
+  session_id: ImportSessionId
+  source: ImportSource
+  file_name: string
+  total_rows: number
+  new_count: number
+  duplicate_count: number
+  no_password_count: number
+  /** Первые строки файла — образец, а не весь файл (`IMPORT_PREVIEW_ROWS`). */
+  rows: ImportPreviewRow[]
+  /** Имя секции, которую ядро заведёт под этот импорт. */
+  target_vault_name: string
+}
+
+/** Сколько строк показывает предпросмотр. Политика ЯДРА, здесь — ради текста «и ещё N». */
+export const IMPORT_PREVIEW_ROWS = 8
+
+export interface ImportOptions {
+  /** Совпал сайт и логин — оставить то, что уже есть в Syncra. */
+  skip_duplicates: boolean
+  /**
+   * Посчитать пароли, повторяющиеся на разных сайтах. Импорт не блокирует:
+   * это наследство прошлого менеджера, а не повод не переезжать.
+   */
+  flag_reused: boolean
+}
+
+export interface BeginImportRequest {
+  source: ImportSource
+}
+
+/** `null` — человек закрыл окно выбора файла. Это не ошибка. */
+export type BeginImportResponse = ImportPreview | null
+
+export interface CommitImportRequest {
+  session_id: ImportSessionId
+  options: ImportOptions
+}
+
+export interface ImportResult {
+  imported: number
+  skipped: number
+  /** Куда всё легло: ядро заводит под импорт отдельную секцию. */
+  vault: Vault
+  /**
+   * Исходный файл удалён с диска. Обещание §3.10 макета: «файл разбирается
+   * прямо на этом компьютере и удаляется сразу после импорта». Флаг здесь
+   * потому, что удалить не всегда удаётся (файл на флешке, права), а обещание
+   * должно быть проверяемым, а не декларативным.
+   */
+  source_file_deleted: boolean
+  /** Сколько импортированных паролей повторяется. `0`, если не просили считать. */
+  reused_passwords: number
+}
+
+export interface CancelImportRequest {
+  session_id: ImportSessionId
+}
+
 /**
  * Карта команд: имя метода клиента → форма запроса/ответа.
  * Служит единым источником истины для `ipc.ts` и мок-ядра.
@@ -799,6 +1002,22 @@ export interface CommandMap {
   resolveConflict: { request: ResolveConflictRequest; response: ResolveConflictResponse }
   /** Открыть одно секретное поле обеих версий — разово, по нажатию. */
   getConflictSecret: { request: GetConflictSecretRequest; response: GetConflictSecretResponse }
+  /**
+   * CSV и бэкап (F12, §6.2). Файл собирает и пишет ядро — через границу идёт
+   * только след файла на диске, никогда его содержимое.
+   */
+  exportCsv: { request: ExportCsvRequest; response: ExportCsvResponse }
+  exportBackup: { request: ExportBackupRequest; response: ExportBackupResponse }
+  /** Удалить созданный экспорт. Ядро удаляет только свои файлы. */
+  deleteExport: { request: DeleteExportRequest; response: null }
+  /** Восстановление из бэкапа — только на устройстве без хранилища (§6.3). */
+  restoreBackup: { request: RestoreBackupRequest; response: RestoreBackupResponse }
+  /** Разобрать файл чужого менеджера и показать, что попадёт внутрь. */
+  beginImport: { request: BeginImportRequest; response: BeginImportResponse }
+  /** Согласие получено — заводим записи. */
+  commitImport: { request: CommitImportRequest; response: ImportResult }
+  /** Передумали: ядро забывает разобранные строки вместе с их паролями. */
+  cancelImport: { request: CancelImportRequest; response: null }
 }
 
 export type CommandName = keyof CommandMap
@@ -834,6 +1053,13 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   listConflicts: 'list_conflicts',
   resolveConflict: 'resolve_conflict',
   getConflictSecret: 'get_conflict_secret',
+  exportCsv: 'export_csv',
+  exportBackup: 'export_backup',
+  deleteExport: 'delete_export',
+  restoreBackup: 'restore_backup',
+  beginImport: 'begin_import',
+  commitImport: 'commit_import',
+  cancelImport: 'cancel_import',
 }
 
 // ---------------------------------------------------------------------------

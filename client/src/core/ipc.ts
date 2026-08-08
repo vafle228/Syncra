@@ -11,9 +11,15 @@ import {
   type DeviceId,
   type EventMap,
   type EventName,
+  type ExportFile,
   type GeneratePasswordsResponse,
   type GeneratorProfile,
   type GetConflictSecretResponse,
+  type ImportOptions,
+  type ImportPreview,
+  type ImportResult,
+  type ImportSessionId,
+  type ImportSource,
   type InitVaultResponse,
   type ListRecordsRequest,
   type PairingHandshake,
@@ -26,6 +32,7 @@ import {
   type RecordMeta,
   type RecordPatch,
   type RecordSecrets,
+  type RestoreBackupResult,
   type SecretField,
   type SyncStatus,
   type UnlockResponse,
@@ -195,6 +202,47 @@ export interface CoreClient {
    */
   getConflictSecret(recordId: RecordId, field: SecretField): Promise<GetConflictSecretResponse>
 
+  /**
+   * CSV-экспорт: расшифрованные данные для переезда (F12, §6.2).
+   *
+   * Файл собирает и пишет ЯДРО — сюда возвращается только след на диске.
+   * Содержимое через эту границу не идёт: иначе все пароли хранилища оказались
+   * бы одной строкой в JS, чего Закон №1 не допускает даже «на секунду».
+   * Мастер-пароль обязателен, даже если хранилище открыто.
+   */
+  exportCsv(masterPassword: string): Promise<ExportFile>
+
+  /** Зашифрованный бэкап хранилища целиком (§6.2). Крипта — в ядре. */
+  exportBackup(masterPassword: string): Promise<ExportFile>
+
+  /**
+   * Удалить созданный экспорт («Удалить файл сейчас»). Ядро удаляет только те
+   * файлы, которые само создало: произвольный путь сюда передать нельзя.
+   */
+  deleteExport(path: string): Promise<void>
+
+  /**
+   * Восстановить хранилище из бэкапа (§6.3). Только на устройстве без
+   * хранилища: поверх живого это было бы слияние двух историй.
+   * `null` — человек закрыл окно выбора файла.
+   */
+  restoreBackup(masterPassword: string): Promise<RestoreBackupResult | null>
+
+  /**
+   * Разобрать файл чужого менеджера и показать, что попадёт внутрь (F12).
+   *
+   * Файл выбирает, читает и разбирает ядро — прямо на этом компьютере.
+   * Разобранные строки остаются у него до `commitImport`; сюда приходят
+   * метаданные предпросмотра без паролей. `null` — окно выбора закрыли.
+   */
+  beginImport(source: ImportSource): Promise<ImportPreview | null>
+
+  /** Согласие получено: завести записи из разобранного файла. */
+  commitImport(sessionId: ImportSessionId, options: ImportOptions): Promise<ImportResult>
+
+  /** Передумали: ядро забывает разобранные строки вместе с их паролями. */
+  cancelImport(sessionId: ImportSessionId): Promise<void>
+
   /** Подписка на событие ядра. */
   on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe
 }
@@ -250,6 +298,17 @@ export function createTauriCoreClient(): CoreClient {
     resolveConflict: (recordId, side) => call('resolveConflict', { record_id: recordId, side }),
     getConflictSecret: (recordId, field) =>
       call('getConflictSecret', { record_id: recordId, field }),
+    exportCsv: (masterPassword) => call('exportCsv', { master_password: masterPassword }),
+    exportBackup: (masterPassword) => call('exportBackup', { master_password: masterPassword }),
+    deleteExport: async (path) => {
+      await call('deleteExport', { path })
+    },
+    restoreBackup: (masterPassword) => call('restoreBackup', { master_password: masterPassword }),
+    beginImport: (source) => call('beginImport', { source }),
+    commitImport: (sessionId, options) => call('commitImport', { session_id: sessionId, options }),
+    cancelImport: async (sessionId) => {
+      await call('cancelImport', { session_id: sessionId })
+    },
 
     on: (event, handler) => {
       let cancelled = false

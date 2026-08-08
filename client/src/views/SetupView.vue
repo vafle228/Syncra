@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import { SyButton, SyInput, SyThemeToggle } from '@/components/ui'
 import { usePasswordStrength } from '@/composables/usePasswordStrength'
+import type { RestoreBackupResult } from '@/core/contract'
 import { useVaultStore } from '@/stores/useVaultStore'
 
 /**
@@ -15,13 +16,24 @@ import { useVaultStore } from '@/stores/useVaultStore'
  *
  * Ветка «у меня уже есть Syncra на другом устройстве» ведёт в pairing — это F8,
  * здесь она обозначена как недоступная, а не притворяется работающей.
+ *
+ * Вторая ветка — восстановление из зашифрованного бэкапа (F12, §6.3). Она
+ * стоит именно ЗДЕСЬ, а не в настройках: бэкап нужен, когда устройств не
+ * осталось, то есть на чистой машине. Поверх живого хранилища ядро его не
+ * принимает — это было бы слияние двух историй, а не восстановление.
  */
 
 const router = useRouter()
 const vault = useVaultStore()
 
-const step = ref<0 | 1 | 2>(0)
+/** 0–2 — создание хранилища; 3–4 — восстановление из бэкапа. */
+const step = ref<0 | 1 | 2 | 3 | 4>(0)
 const masterPassword = ref('')
+/** Пароль от ФАЙЛА бэкапа: он мог быть другим, чем нынешний. */
+const restorePassword = ref('')
+const restored = ref<RestoreBackupResult | null>(null)
+/** Окно выбора файла закрыли, ничего не выбрав. Это не ошибка. */
+const pickCancelled = ref(false)
 const { level, label, acceptable } = usePasswordStrength(masterPassword)
 
 const promises = [
@@ -60,6 +72,35 @@ async function create(): Promise<void> {
 function enter(): void {
   void router.push({ name: 'home' })
 }
+
+function goRestore(): void {
+  vault.clearError()
+  pickCancelled.value = false
+  step.value = 3
+}
+
+/** Выбрать файл бэкапа и открыть его. Файл выбирает и расшифровывает ядро. */
+async function restore(): Promise<void> {
+  if (restorePassword.value === '' || vault.busy) return
+
+  const attempt = restorePassword.value
+  // Пароль ушёл в ядро — в компоненте он больше не нужен.
+  restorePassword.value = ''
+  pickCancelled.value = false
+
+  try {
+    const result = await vault.restoreBackup(attempt)
+    if (result === null) {
+      pickCancelled.value = true
+      return
+    }
+    restored.value = result
+    step.value = 4
+  } catch {
+    // Сообщение ядра уже в `vault.error`; ничего не логируем.
+    step.value = 3
+  }
+}
 </script>
 
 <template>
@@ -70,7 +111,7 @@ function enter(): void {
     </div>
 
     <div class="setup__body">
-      <nav class="setup__steps" aria-label="Шаги создания хранилища">
+      <nav v-if="step <= 2" class="setup__steps" aria-label="Шаги создания хранилища">
         <span class="setup__steps-caption">Шаги</span>
         <span
           v-for="(name, index) in ['Как это работает', 'Мастер-пароль', 'Готово']"
@@ -88,8 +129,23 @@ function enter(): void {
         <span class="setup__steps-foot">
           <span class="setup__steps-caption">Уже пользуетесь Syncra?</span>
           <span class="setup__steps-hint">
-            Создайте хранилище здесь и познакомьте устройства по QR — на экране «Устройства».
-            Перенос уже существующего хранилища на чистое устройство появится позже.
+            Создайте хранилище здесь и познакомьте устройства по QR — на экране «Устройства». А если
+            устройств не осталось, но есть зашифрованный бэкап, — восстановите хранилище из него.
+          </span>
+        </span>
+      </nav>
+
+      <nav v-else class="setup__steps" aria-label="Восстановление из бэкапа">
+        <span class="setup__steps-caption">Восстановление</span>
+        <span class="setup__steps-hint">
+          Бэкап открывается тем мастер-паролем, который был на момент его создания. Файл
+          расшифровывается здесь же, на этом компьютере: в сеть не уходит ни байта.
+        </span>
+
+        <span class="setup__steps-foot">
+          <span class="setup__steps-caption">Передумали?</span>
+          <span class="setup__steps-hint">
+            Хранилище можно создать с нуля — записи из бэкапа тогда останутся в файле.
           </span>
         </span>
       </nav>
@@ -113,6 +169,7 @@ function enter(): void {
 
         <div class="setup__actions">
           <SyButton variant="primary" size="lg" @click="step = 1">Создать хранилище</SyButton>
+          <SyButton size="lg" @click="goRestore">Восстановить из бэкапа</SyButton>
         </div>
       </section>
 
@@ -171,6 +228,89 @@ function enter(): void {
             Создать хранилище
           </SyButton>
           <SyButton size="lg" :disabled="vault.busy" @click="step = 0">Назад</SyButton>
+        </div>
+      </section>
+
+      <section v-else-if="step === 3" class="setup__pane">
+        <h1 class="setup__title">Восстановим из зашифрованного бэкапа</h1>
+        <p class="setup__lead">
+          Это файл .syncra, который вы сохранили на флешку или во внешний диск. Внутри — то же
+          хранилище целиком; открывается он мастер-паролем, который был на момент сохранения.
+        </p>
+
+        <div class="setup__field">
+          <SyInput
+            v-model="restorePassword"
+            label="Мастер-пароль от бэкапа"
+            type="password"
+            autocomplete="current-password"
+            autofocus
+            hint="Дальше Syncra откроет окно выбора файла — сам файл не покидает компьютер."
+            :error="vault.error"
+            @submit="restore"
+          />
+        </div>
+
+        <p v-if="pickCancelled" class="setup__lead">Файл не выбран — ничего не изменилось.</p>
+
+        <div class="setup__warning">
+          <span class="setup__warning-dot" aria-hidden="true" />
+          <span>
+            <span class="setup__warning-title">Бэкап — не синхронизация</span>
+            <span class="setup__warning-body">
+              Записи в файле такие, какими были в момент сохранения: всё, что менялось после,
+              осталось на потерянных устройствах. Восстановление возможно только на устройстве без
+              хранилища.
+            </span>
+          </span>
+        </div>
+
+        <div class="setup__actions">
+          <SyButton
+            variant="primary"
+            size="lg"
+            :disabled="restorePassword === '' || vault.busy"
+            :loading="vault.busy"
+            @click="restore"
+          >
+            Выбрать файл и восстановить
+          </SyButton>
+          <SyButton size="lg" :disabled="vault.busy" @click="step = 0">Назад</SyButton>
+        </div>
+      </section>
+
+      <section v-else-if="step === 4" class="setup__pane">
+        <h1 class="setup__title">Хранилище восстановлено</h1>
+        <p class="setup__lead">
+          Из файла {{ restored?.file_name }} приехало {{ restored?.records }} записей в
+          {{ restored?.vaults }} секциях. Мастер-пароль у хранилища теперь тот же, что был у бэкапа.
+        </p>
+
+        <ul class="setup__promises">
+          <li class="setup__promise">
+            <span class="setup__promise-dot" aria-hidden="true" />
+            <span>
+              <span class="setup__promise-title">Проверьте, чего не хватает</span>
+              <span class="setup__promise-body">
+                Всё, что менялось после сохранения файла, в него не попало. Такие записи придётся
+                завести заново — сама Syncra их взять неоткуда.
+              </span>
+            </span>
+          </li>
+          <li class="setup__promise">
+            <span class="setup__promise-dot" aria-hidden="true" />
+            <span>
+              <span class="setup__promise-title">Файл бэкапа остаётся на месте</span>
+              <span class="setup__promise-body">
+                Мы его не трогаем и не удаляем: пока вы не убедились, что всё на месте, второй копии
+                терять не стоит.
+              </span>
+            </span>
+          </li>
+        </ul>
+
+        <div class="setup__actions">
+          <SyButton variant="primary" size="lg" @click="enter">Открыть Syncra</SyButton>
         </div>
       </section>
 

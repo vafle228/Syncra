@@ -30,6 +30,12 @@ export const routes = [
     component: () => import('@/views/SectionsView.vue'),
   },
   {
+    path: '/data',
+    name: 'data',
+    // Импорт и экспорт — редкий экран, грузится лениво (F12, §6.2).
+    component: () => import('@/views/DataView.vue'),
+  },
+  {
     path: '/devices',
     name: 'devices',
     // Сопряжение по QR — редкий экран, грузится лениво (F8, §2.2).

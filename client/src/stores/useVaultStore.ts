@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import type { IsoDateTime } from '@/core/contract'
+import type { IsoDateTime, RestoreBackupResult } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useCore, type Unsubscribe } from '@/core/ipc'
 
@@ -147,6 +147,33 @@ export const useVaultStore = defineStore('vault', () => {
     }
   }
 
+  /**
+   * Восстановить хранилище из зашифрованного бэкапа (F12, §6.3).
+   *
+   * Резервный путь на случай «потеряли все устройства», поэтому он живёт рядом
+   * с первым запуском: ядро принимает его только на устройстве без хранилища.
+   * `null` — человек закрыл окно выбора файла; это не ошибка и показывать её
+   * не надо. Пароль от файла проходит транзитом и в состоянии не остаётся.
+   */
+  async function restoreBackup(masterPassword: string): Promise<RestoreBackupResult | null> {
+    watchCore()
+    busy.value = true
+    error.value = null
+    try {
+      const result = await useCore().restoreBackup(masterPassword)
+      if (result === null) return null
+
+      status.value = 'unlocked'
+      unlockedAt.value = result.unlocked_at
+      lockReason.value = null
+      return result
+    } catch (cause) {
+      applyError(cause)
+    } finally {
+      busy.value = false
+    }
+  }
+
   async function lock(): Promise<void> {
     watchCore()
     busy.value = true
@@ -185,6 +212,7 @@ export const useVaultStore = defineStore('vault', () => {
     ensureStatus,
     unlock,
     initVault,
+    restoreBackup,
     lock,
     clearError,
     dispose,

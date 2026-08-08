@@ -15,10 +15,9 @@ import { useToastStore } from '@/stores/useToastStore'
 /**
  * Настройки (F6, §3.11 макета).
  *
- * Пока здесь одна секция — профиль генератора. Экран сделан так, чтобы к нему
- * приставлялись следующие: секции хранилища — F7, данные и бэкапы — F12.
- * Пустых заглушек под них не рисуем: настройка, которая ничего не делает,
- * хуже отсутствующей.
+ * Две секции: профиль генератора (F6) и данные (F12) — вход в импорт, бэкап и
+ * CSV-экспорт. Сами потоки живут на `/data`: здесь у каждого только честный
+ * ценник, и опасное помечено словами, а не одним цветом.
  *
  * ЗАКОН №1: профиль — это правила, а не секрет, и он спокойно живёт в сторе.
  * Пароль-пример рядом с ним — уже пароль: он приходит разово из ядра, лежит в
@@ -29,6 +28,38 @@ const profile = useGeneratorProfileDraft()
 const preview = usePasswordGenerator()
 const clipboard = useClipboard()
 const toast = useToastStore()
+
+/**
+ * Данные (F12, §3.11 макета). Сами потоки живут на `/data` — здесь только
+ * вход в них и честный ценник у каждого: «безопасно» и «открытый текст»
+ * стоят рядом, но выглядят по-разному.
+ */
+const dataRows = [
+  {
+    title: 'Импорт из другого менеджера',
+    tag: 'безопасно',
+    body: 'Файл читается локально и удаляется сразу после разбора.',
+    action: 'Открыть импорт',
+    tab: 'import',
+    danger: false,
+  },
+  {
+    title: 'Зашифрованный бэкап',
+    tag: 'безопасно',
+    body: 'Копия хранилища под мастер-паролем — можно хранить где угодно.',
+    action: 'Сделать бэкап',
+    tab: 'export',
+    danger: false,
+  },
+  {
+    title: 'Экспорт в CSV',
+    tag: 'открытый текст',
+    body: 'Пароли без шифрования. Только для переезда, с удалением файла сразу после.',
+    action: 'Открыть экспорт',
+    tab: 'export',
+    danger: true,
+  },
+]
 
 /** Пример — ровно один: это не выбор варианта, а иллюстрация правил. */
 function reroll(): void {
@@ -133,6 +164,37 @@ async function copyExample(): Promise<void> {
           @save="save"
         />
         <p v-else-if="profile.loading.value" class="settings__pane-text">Загружаем правила…</p>
+      </section>
+
+      <section class="settings__pane">
+        <div class="settings__intro">
+          <h2 class="settings__pane-title">Данные</h2>
+          <p class="settings__pane-text">
+            Три действия с разной ценой ошибки, поэтому и выглядят они по-разному. Опасное не
+            спрятано, но и не соседствует с безобидным.
+          </p>
+        </div>
+
+        <ul class="settings__data">
+          <li
+            v-for="row in dataRows"
+            :key="row.title"
+            class="settings__data-row"
+            :class="{ 'settings__data-row--danger': row.danger }"
+          >
+            <div class="settings__data-text">
+              <span class="settings__data-head">
+                <span class="settings__data-title">{{ row.title }}</span>
+                <span class="settings__data-tag">{{ row.tag }}</span>
+              </span>
+              <span class="settings__data-body">{{ row.body }}</span>
+            </div>
+
+            <RouterLink class="settings__data-link" :to="{ name: 'data', query: { tab: row.tab } }">
+              {{ row.action }}
+            </RouterLink>
+          </li>
+        </ul>
       </section>
     </div>
   </main>
@@ -265,6 +327,87 @@ async function copyExample(): Promise<void> {
 
 .settings__error {
   font-size: var(--sy-text-small);
+  color: var(--sy-danger);
+}
+
+.settings__data {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sy-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings__data-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sy-space-6);
+  padding: var(--sy-space-6) var(--sy-space-7);
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius);
+  background: var(--sy-bg-0);
+}
+
+.settings__data-row--danger {
+  border-color: var(--sy-danger);
+  background: var(--sy-danger-quiet);
+}
+
+.settings__data-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sy-space-4);
+}
+
+.settings__data-title {
+  font-size: var(--sy-text-body);
+  font-weight: var(--sy-weight-semibold);
+}
+
+.settings__data-tag {
+  padding: 2px var(--sy-space-4);
+  border: 1px solid var(--sy-accent-border);
+  border-radius: var(--sy-radius-pill);
+  font-family: var(--sy-font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sy-accent);
+}
+
+.settings__data-row--danger .settings__data-tag {
+  border-color: var(--sy-danger);
+  color: var(--sy-danger);
+}
+
+.settings__data-body {
+  display: block;
+  padding-top: var(--sy-space-1);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
+}
+
+.settings__data-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: var(--sy-control-height-sm);
+  padding: 0 var(--sy-space-6);
+  border: 1px solid var(--sy-border-strong);
+  border-radius: var(--sy-radius-sm);
+  background: var(--sy-surface);
+  font-size: var(--sy-text-body);
+  color: var(--sy-text);
+  text-decoration: none;
+}
+
+.settings__data-row--danger .settings__data-link {
+  border-color: var(--sy-danger);
+  background: transparent;
   color: var(--sy-danger);
 }
 </style>

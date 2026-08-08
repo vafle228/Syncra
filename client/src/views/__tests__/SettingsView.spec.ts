@@ -154,3 +154,20 @@ describe('SettingsView', () => {
     wrapper.unmount()
   })
 })
+
+describe('SettingsView · данные (F12)', () => {
+  it('ставит ценник у каждого действия, а не прячет опасное', async () => {
+    const wrapper = await mountView()
+    const rows = wrapper.findAll('.settings__data-row')
+
+    expect(rows).toHaveLength(3)
+    expect(rows[0]!.text()).toContain('Импорт из другого менеджера')
+    expect(rows[1]!.text()).toContain('Зашифрованный бэкап')
+    // Опасное на виду и помечено словами, а не только цветом.
+    expect(rows[2]!.text()).toContain('Экспорт в CSV')
+    expect(rows[2]!.text()).toContain('открытый текст')
+    expect(rows[2]!.classes()).toContain('settings__data-row--danger')
+
+    wrapper.unmount()
+  })
+})
