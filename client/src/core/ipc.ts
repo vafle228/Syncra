@@ -6,6 +6,8 @@ import {
   EVENT_NAMES,
   type CommandMap,
   type CommandName,
+  type Device,
+  type DeviceId,
   type EventMap,
   type EventName,
   type GeneratePasswordsResponse,
@@ -141,6 +143,21 @@ export interface CoreClient {
   /** Слова не совпали или передумали — закрыть сеанс, ключ не запоминать. */
   cancelPairing(sessionId: PairingSessionId): Promise<void>
 
+  /**
+   * Доверенные устройства (F9, §2.3). Отозванные тоже здесь — с `revoked_at`:
+   * отзыв это факт истории хранилища, а не удаление строки из списка.
+   */
+  listDevices(): Promise<Device[]>
+
+  /**
+   * Отозвать доступ у устройства (§2.3).
+   *
+   * Отзыв отрезает устройство от БУДУЩИХ синхронизаций. Реплику, которую оно
+   * уже скачало, он не стирает и стереть не может — это принятое ограничение
+   * (§2.3), и UI обязан сказать об этом до нажатия, а не после.
+   */
+  revokeDevice(deviceId: DeviceId): Promise<Device>
+
   /** Подписка на событие ядра. */
   on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe
 }
@@ -188,6 +205,8 @@ export function createTauriCoreClient(): CoreClient {
     cancelPairing: async (sessionId) => {
       await call('cancelPairing', { session_id: sessionId })
     },
+    listDevices: () => call('listDevices', {}),
+    revokeDevice: (deviceId) => call('revokeDevice', { device_id: deviceId }),
 
     on: (event, handler) => {
       let cancelled = false

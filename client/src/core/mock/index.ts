@@ -1,6 +1,7 @@
 import type {
   CoreErrorCode,
   Device,
+  DeviceId,
   EventMap,
   EventName,
   GeneratePasswordsResponse,
@@ -45,6 +46,7 @@ import {
   unreadableCode,
 } from './pairing'
 import {
+  createDeviceSeed,
   createInitialVault,
   createSeed,
   createVaultSeed,
@@ -52,7 +54,14 @@ import {
   type MockSeedEntry,
 } from './seed'
 
-export { createVaultSeed, MOCK_MASTER_PASSWORD, MOCK_VAULT_PERSONAL, MOCK_VAULT_WORK } from './seed'
+export {
+  createVaultSeed,
+  MOCK_DEVICE_LAPTOP,
+  MOCK_DEVICE_PHONE,
+  MOCK_MASTER_PASSWORD,
+  MOCK_VAULT_PERSONAL,
+  MOCK_VAULT_WORK,
+} from './seed'
 export { DEFAULT_GENERATOR_PROFILE } from './generator'
 export {
   FINGERPRINT_WORD_COUNT,
@@ -79,6 +88,8 @@ export interface MockCoreOptions {
   seed?: MockSeedEntry[]
   /** Секции, с которыми стартует хранилище (F7). */
   vaults?: Vault[]
+  /** Доверенные устройства, с которыми стартует хранилище (F9). */
+  devices?: Device[]
   /** Источник времени — для детерминированных тестов. */
   now?: () => Date
   /** Начинать разблокированным (удобно для UI-тестов, минующих экран входа). */
@@ -126,6 +137,10 @@ function cloneSecrets(secrets: RecordSecrets): RecordSecrets {
 
 function cloneVault(vault: Vault): Vault {
   return { ...vault }
+}
+
+function cloneDevice(device: Device): Device {
+  return { ...device }
 }
 
 /**
@@ -179,7 +194,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   const retiredCodes = new Set<string>()
   /** Прочитанные коды, ждущие сверки слов человеком. */
   const handshakes = new Map<PairingSessionId, PairingHandshake>()
-  /** Доверенные устройства. Полноценный список и отзыв — F9 (§2.3). */
+  /** Доверенные устройства, включая отозванные (F9, §2.3). */
   let devices: Device[] = []
 
   let masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
@@ -204,8 +219,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     // Свежесозданное хранилище пустое: сид — это «данные, которые уже были».
     if (!initialized) return
 
-    // Одно устройство — это самое. Сопряжённых нет: их заводит пользователь.
-    devices = [createThisDevice(timestamp())]
+    devices = (options.devices ?? createDeviceSeed(now())).map(cloneDevice)
     vaults = (options.vaults ?? createVaultSeed()).map(cloneVault)
     for (const entry of options.seed ?? createSeed()) {
       const alive = entry.meta.deleted_at === null
@@ -724,6 +738,44 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       // Идемпотентно: отменять уже отменённое — не ошибка, а норма для кнопки
       // «Отмена», по которой можно нажать дважды.
       handshakes.delete(sessionId)
+    },
+
+    // -------------------------------------------------------------------------
+    // Доверенные устройства и отзыв (F9, §2.3)
+    // -------------------------------------------------------------------------
+
+    async listDevices(): Promise<Device[]> {
+      // Список доверенных устройств — содержимое хранилища: на закрытом
+      // хранилище рассказывать, что у владельца ещё есть телефон, незачем.
+      await enter({ requiresUnlock: true })
+      // Отозванные из списка не исчезают: отзыв — факт истории, а не удаление.
+      return devices.map(cloneDevice)
+    },
+
+    async revokeDevice(deviceId: DeviceId): Promise<Device> {
+      await enter({ requiresUnlock: true })
+
+      const found = devices.find((device) => device.device_id === deviceId)
+      if (!found) throw new CoreError('NOT_FOUND', 'Устройство не найдено.')
+
+      if (found.is_this_device) {
+        throw new CoreError(
+          'VALIDATION',
+          'Нельзя отозвать устройство, на котором вы сейчас работаете.',
+        )
+      }
+
+      // Идемпотентно, и `revoked_at` не переписывается: момент отзыва — факт,
+      // от которого считается, что устройство успело догнать, а что нет.
+      if (found.revoked_at !== null) return cloneDevice(found)
+
+      const next: Device = { ...found, revoked_at: timestamp() }
+      devices = devices.map((device) => (device.device_id === deviceId ? next : device))
+
+      // Настоящее ядро здесь ещё и рассылает revoke-запись по сети доверия
+      // (§2.3). Фейк-ядру рассылать некуда — и притворяться, что оно это
+      // сделало, оно не будет.
+      return cloneDevice(next)
     },
 
     on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe {

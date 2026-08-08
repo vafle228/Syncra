@@ -1,4 +1,5 @@
-import type { RecordMeta, RecordSecrets, Vault } from '../contract'
+import type { Device, RecordMeta, RecordSecrets, Vault } from '../contract'
+import { createThisDevice } from './pairing'
 
 /**
  * Одна запись фейк-ядра: метаданные + секреты живут раздельно, как в ядре.
@@ -61,6 +62,50 @@ export function createInitialVault(createdAt: string): Vault {
     is_default: true,
     created_at: createdAt,
   }
+}
+
+export const MOCK_DEVICE_PHONE = 'device-phone'
+export const MOCK_DEVICE_LAPTOP = 'device-laptop'
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Устройства фейк-хранилища (F9, §2.3).
+ *
+ * Даты считаются ОТ текущего времени, а не зашиты константами, как у записей.
+ * Причина: список устройств почти целиком про «когда виделись в последний раз»,
+ * и зашитая дата через месяц разработки превратила бы каждое устройство в
+ * давно пропавшее. «Не появлялся 41 день» должно оставаться свойством
+ * конкретного устройства, а не побочным эффектом того, что сегодня за день.
+ */
+export function createDeviceSeed(now: Date): Device[] {
+  const at = (days: number, ms = 0): string =>
+    new Date(now.getTime() - days * DAY_MS - ms).toISOString()
+
+  return [
+    createThisDevice(at(627)),
+    {
+      device_id: MOCK_DEVICE_PHONE,
+      name: 'iPhone 14',
+      kind: 'mobile',
+      is_this_device: false,
+      paired_at: at(627),
+      last_seen_at: at(0, 6 * 60 * 1000),
+      revoked_at: null,
+    },
+    {
+      // Устройство, которое давно не выходило на связь. Без него не увидеть,
+      // как выглядит предупреждение — а это ровно тот случай, ради которого
+      // §2.3 и существует: «ноутбук пропал, и я это заметил по списку».
+      device_id: MOCK_DEVICE_LAPTOP,
+      name: 'ThinkPad X1',
+      kind: 'desktop',
+      is_this_device: false,
+      paired_at: at(1003),
+      last_seen_at: at(41),
+      revoked_at: null,
+    },
+  ]
 }
 
 /**

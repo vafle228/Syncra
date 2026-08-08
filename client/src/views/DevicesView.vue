@@ -2,11 +2,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import TrustedDevices from '@/components/devices/TrustedDevices.vue'
 import PairingQr from '@/components/pairing/PairingQr.vue'
 import PairingScanBox from '@/components/pairing/PairingScanBox.vue'
 import { SyButton, SyThemeToggle } from '@/components/ui'
 import { pluralize, RECORD_FORMS } from '@/composables/plural'
 import { formatManualCode, usePairingOffer, usePairingScan } from '@/composables/usePairing'
+import type { Device } from '@/core/contract'
+import { useDevicesStore } from '@/stores/useDevicesStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useToastStore } from '@/stores/useToastStore'
 
@@ -21,6 +24,10 @@ import { useToastStore } from '@/stores/useToastStore'
  *     встал (§2.2), — поэтому шаг нельзя ни пропустить, ни «подтвердить за
  *     пользователя».
  *
+ * В подвале — список доверенных устройств и отзыв (F9, §2.3): он стоит здесь же,
+ * потому что «кто имеет доступ» и «дать доступ ещё одному» — один вопрос, и
+ * разносить их по разным экранам значило бы прятать половину ответа.
+ *
  * ЗАКОН №1: код сопряжения живёт в области видимости этого экрана (composable),
  * а не в Pinia и не в localStorage: тот, кто его прочитал, получает право
  * забрать копию хранилища. Уход с экрана и блокировка хранилища его стирают.
@@ -28,6 +35,7 @@ import { useToastStore } from '@/stores/useToastStore'
 
 const router = useRouter()
 const sections = useSectionsStore()
+const devices = useDevicesStore()
 const toast = useToastStore()
 
 const offer = usePairingOffer()
@@ -62,12 +70,30 @@ async function submitScanned(payload: string): Promise<void> {
 
 async function confirm(): Promise<void> {
   const peer = scan.handshake.value?.peer_name ?? 'Устройство'
-  if (await scan.confirm()) toast.push(`«${peer}» теперь доверенное устройство`, 'success')
+  if (await scan.confirm()) {
+    toast.push(`«${peer}» теперь доверенное устройство`, 'success')
+    // Список в подвале держит ядро, а не экран успеха: перечитываем, чтобы
+    // новое устройство появилось в нём сразу.
+    void devices.load()
+  }
 }
 
 function pairAnother(): void {
   scan.reset()
   showCode()
+}
+
+/**
+ * «Сопрячь заново» у отозванного устройства (§2.3).
+ *
+ * Отменить отзыв нельзя, и команды для этого нет намеренно: устройство,
+ * отрезанное по старому ключу, возвращается только через новое знакомство —
+ * иначе отзыв не значил бы ничего. Поэтому кнопка ведёт ровно туда же, куда
+ * ведёт добавление любого устройства: к показу кода.
+ */
+function repair(device: Device): void {
+  pairAnother()
+  toast.push(`Покажите этот код на «${device.name}»: старый ключ больше не действует`, 'neutral')
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +326,8 @@ function formatDuration(ms: number): string {
           </template>
         </div>
       </div>
+
+      <TrustedDevices @repair="repair" />
     </div>
   </main>
 </template>

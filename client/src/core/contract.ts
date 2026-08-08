@@ -436,7 +436,7 @@ export interface Device {
   paired_at: IsoDateTime
   /** Когда устройство последний раз выходило на связь. `null` — ни разу. */
   last_seen_at: IsoDateTime | null
-  /** Отзыв доступа (§2.3). `null` у действующих устройств. Наполняется в F9. */
+  /** Отзыв доступа (§2.3). `null` у действующих устройств. */
   revoked_at: IsoDateTime | null
 }
 
@@ -533,6 +533,43 @@ export interface CancelPairingRequest {
   session_id: PairingSessionId
 }
 
+// ---------------------------------------------------------------------------
+// Доверенные устройства и отзыв (F9, §2.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Список доверенных устройств.
+ *
+ * Отозванные устройства из списка НЕ исчезают: отзыв — это факт истории
+ * хранилища, а не удаление строки. Человек, который отозвал украденный ноутбук,
+ * должен видеть, что он отозван, а не то, что его никогда не было. Отличить их
+ * можно по `revoked_at`.
+ */
+export type ListDevicesRequest = Record<string, never>
+export type ListDevicesResponse = Device[]
+
+/**
+ * Отозвать доступ у устройства (§2.3).
+ *
+ * Что отзыв делает и чего НЕ делает — важно не перепутать, и UI обязан говорить
+ * об этом прямо: отозванное устройство перестаёт получать обновления и не может
+ * сопрячься по старому ключу, но полная реплика хранилища, которую оно уже
+ * скачало, остаётся у него на диске. Настоящая защита при краже — шифрование
+ * at-rest (§3.1); отзыв отрезает только от будущего.
+ *
+ * Себя отозвать нельзя: устройство, на котором открыт UI, — единственное, что
+ * у пользователя точно есть в руках. Ядро отвечает `VALIDATION`.
+ */
+export interface RevokeDeviceRequest {
+  device_id: DeviceId
+}
+
+/**
+ * Изменилось ровно одно устройство — его и возвращаем. Возвращать весь список
+ * незачем: в отличие от `set_default_vault`, отзыв не трогает соседей.
+ */
+export type RevokeDeviceResponse = Device
+
 /**
  * Карта команд: имя метода клиента → форма запроса/ответа.
  * Служит единым источником истины для `ipc.ts` и мок-ядра.
@@ -578,6 +615,13 @@ export interface CommandMap {
   confirmPairing: { request: ConfirmPairingRequest; response: ConfirmPairingResponse }
   /** Слова не совпали или передумали: сеанс закрывается, ключ не запоминается. */
   cancelPairing: { request: CancelPairingRequest; response: null }
+  /** Доверенные устройства, включая отозванные (F9, §2.3). */
+  listDevices: { request: ListDevicesRequest; response: ListDevicesResponse }
+  /**
+   * Отзыв доступа. Идемпотентен: повторный отзыв возвращает то же устройство с
+   * прежним `revoked_at` — момент отзыва это факт, и переписывать его нельзя.
+   */
+  revokeDevice: { request: RevokeDeviceRequest; response: RevokeDeviceResponse }
 }
 
 export type CommandName = keyof CommandMap
@@ -606,6 +650,8 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   submitPairedKey: 'submit_paired_key',
   confirmPairing: 'confirm_pairing',
   cancelPairing: 'cancel_pairing',
+  listDevices: 'list_devices',
+  revokeDevice: 'revoke_device',
 }
 
 // ---------------------------------------------------------------------------

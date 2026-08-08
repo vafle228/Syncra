@@ -3,15 +3,16 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import { createMockCoreClient, MOCK_DEVICE_LAPTOP, type MockCoreClient } from '@/core/mock'
 import DevicesView from '../DevicesView.vue'
 
 /**
- * Экран сопряжения (F8, §3.6 макета).
+ * Экран сопряжения и доверенных устройств (F8 + F9, §3.6 макета).
  *
  * Проверяем ровно то, ради чего экран существует: код рисуется из ответа ядра,
- * прочитанный код доезжает до ядра, а слова-отпечаток сверяет человек — до его
- * подтверждения ничего не сопряжено.
+ * прочитанный код доезжает до ядра, слова-отпечаток сверяет человек — до его
+ * подтверждения ничего не сопряжено, — а отзыв доступа спрашивает подтверждения
+ * и честно говорит, чего он НЕ делает (§2.3).
  */
 
 const push = vi.fn()
@@ -198,6 +199,155 @@ describe('DevicesView · чтение чужого кода', () => {
   })
 })
 
+describe('DevicesView · доверенные устройства и отзыв (F9, §2.3)', () => {
+  /** Карточка устройства по его имени: кнопки в списке повторяются. */
+  function card(wrapper: View, name: string) {
+    const found = wrapper
+      .findAll('.trusted__card')
+      .find((node) => node.find('.trusted__name').text() === name)
+    if (!found) throw new Error(`Карточка устройства «${name}» не найдена`)
+    return found
+  }
+
+  function cardButton(wrapper: View, name: string, text: string) {
+    const found = card(wrapper, name)
+      .findAll('button')
+      .find((node) => node.text() === text)
+    if (!found) throw new Error(`Кнопка «${text}» у устройства «${name}» не найдена`)
+    return found
+  }
+
+  it('показывает список из ядра и не предлагает отозвать самого себя', async () => {
+    const wrapper = await mountDevices()
+
+    const names = wrapper.findAll('.trusted__name').map((node) => node.text())
+    expect(names).toContain('Этот компьютер')
+    expect(names).toContain('iPhone 14')
+
+    expect(card(wrapper, 'Этот компьютер').text()).toContain('это устройство')
+    expect(
+      card(wrapper, 'Этот компьютер')
+        .findAll('button')
+        .some((node) => node.text() === 'Отозвать'),
+    ).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('помечает устройство, которое давно не выходило на связь', async () => {
+    const wrapper = await mountDevices()
+
+    expect(card(wrapper, 'ThinkPad X1').text()).toContain('давно не появлялся')
+    expect(card(wrapper, 'ThinkPad X1').text()).toContain('не появлялся 41 день')
+    expect(card(wrapper, 'iPhone 14').text()).not.toContain('давно не появлялся')
+
+    wrapper.unmount()
+  })
+
+  it('«Отозвать» сначала спрашивает и честно говорит, чего отзыв НЕ делает', async () => {
+    const wrapper = await mountDevices()
+
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
+
+    const confirm = card(wrapper, 'ThinkPad X1')
+    expect(confirm.text()).toContain('Отозвать доступ у «ThinkPad X1»?')
+    // Формулировка из макета: реплику на украденном устройстве отзыв не стирает.
+    expect(confirm.text()).toContain('не сможет сопрячься по старому ключу')
+    expect(confirm.text()).toContain('остаются в его копии')
+    expect(confirm.text()).toContain('смените мастер-пароль')
+
+    // Ничего ещё не произошло: ядро списка не меняло.
+    expect((await core.listDevices()).every((device) => device.revoked_at === null)).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('«Оставить» закрывает подтверждение, ничего не отзывая', async () => {
+    const wrapper = await mountDevices()
+
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
+    await cardButton(wrapper, 'ThinkPad X1', 'Оставить').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.trusted__confirm').exists()).toBe(false)
+    expect((await core.listDevices()).every((device) => device.revoked_at === null)).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('«Отозвать доступ» доезжает до ядра и оставляет устройство в списке', async () => {
+    const wrapper = await mountDevices()
+
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать доступ').trigger('click')
+    await flushPromises()
+
+    const revoked = (await core.listDevices()).find(
+      (device) => device.device_id === MOCK_DEVICE_LAPTOP,
+    )
+    expect(revoked?.revoked_at).not.toBeNull()
+
+    // Отзыв — факт истории: устройство остаётся видимым, но помеченным.
+    const still = card(wrapper, 'ThinkPad X1')
+    expect(still.text()).toContain('доступ отозван')
+    expect(still.text()).toContain('копия на устройстве больше не обновляется')
+    expect(wrapper.find('.trusted__confirm').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('отказ ядра показывается у того устройства, на котором нажали', async () => {
+    const wrapper = await mountDevices()
+
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
+    core.control.failNext('INTERNAL', 'Ядро недоступно.')
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать доступ').trigger('click')
+    await flushPromises()
+
+    expect(card(wrapper, 'ThinkPad X1').text()).toContain('Ядро недоступно.')
+    // Список цел: отказ на одном устройстве не гасит остальные.
+    expect(card(wrapper, 'iPhone 14').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('«Сопрячь заново» ведёт к новому знакомству, а не отменяет отзыв', async () => {
+    const wrapper = await mountDevices()
+
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
+    await cardButton(wrapper, 'ThinkPad X1', 'Отозвать доступ').trigger('click')
+    await flushPromises()
+
+    // Уводим экран в состояние «сопряжение завершено», чтобы возврат к коду был виден.
+    await scan(wrapper)
+    await button(wrapper, 'Слова совпадают').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.qr__module').exists()).toBe(false)
+
+    await cardButton(wrapper, 'ThinkPad X1', 'Сопрячь заново').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.qr__module').exists()).toBe(true)
+    // Отзыв остался в силе: вернуть устройство можно только обменом ключами.
+    expect(card(wrapper, 'ThinkPad X1').text()).toContain('доступ отозван')
+
+    wrapper.unmount()
+  })
+
+  it('сопряжённое устройство появляется в списке сразу', async () => {
+    const wrapper = await mountDevices()
+    const before = wrapper.findAll('.trusted__card').length
+
+    await scan(wrapper)
+    await button(wrapper, 'Слова совпадают').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.trusted__card')).toHaveLength(before + 1)
+
+    wrapper.unmount()
+  })
+})
+
 describe('DevicesView · Закон №1', () => {
   it('код сопряжения не попадает в состояние Pinia', async () => {
     const pinia = createPinia()
@@ -221,6 +371,18 @@ describe('DevicesView · Закон №1', () => {
     await flushPromises()
 
     expect(wrapper.find('.qr__module').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('блокировка убирает и список устройств: он тоже содержимое хранилища', async () => {
+    const wrapper = await mountDevices()
+    expect(wrapper.findAll('.trusted__card').length).toBeGreaterThan(0)
+
+    core.control.forceLock('timeout')
+    await flushPromises()
+
+    expect(wrapper.findAll('.trusted__card')).toHaveLength(0)
 
     wrapper.unmount()
   })
