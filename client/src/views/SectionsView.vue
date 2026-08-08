@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import SectionEditor from '@/components/sections/SectionEditor.vue'
 import { SyButton, SyModal, SyToggle, vaultColorVar } from '@/components/ui'
@@ -25,6 +26,7 @@ import { useToastStore } from '@/stores/useToastStore'
  * уходит. Записи нужны только чтобы посчитать, сколько их в секции.
  */
 
+const router = useRouter()
 const sections = useSectionsStore()
 const list = useRecordsStore()
 const toast = useToastStore()
@@ -38,6 +40,21 @@ onMounted(() => {
 
 function count(vault: Vault): number {
   return list.countByVault.get(vault.vault_id) ?? 0
+}
+
+/** Подпись системной строки: сколько всего записей во всех секциях. */
+const allRecordsLine = computed(
+  () => `${pluralize(list.totalAll, RECORD_FORMS)} · во всех секциях сразу`,
+)
+
+/**
+ * Открыть секцию: поставить её фильтром и вернуться к паролям. Это то, ради
+ * чего секции вообще существуют, и требовать ради этого идти в сайдбар — лишний
+ * шаг ровно там, где человек уже смотрит на нужную секцию.
+ */
+function openSection(vault: Vault): void {
+  list.setVaultFilter(vault.vault_id)
+  void router.push({ name: 'home' })
 }
 
 /** Подпись под именем секции: сколько записей и куда они уезжают. */
@@ -233,6 +250,24 @@ async function confirmDelete(): Promise<void> {
       <p v-if="sections.error" class="sections-view__error" role="alert">{{ sections.error }}</p>
 
       <div class="sections-view__cards">
+        <!--
+          «Все записи» — не секция, а отсутствие фильтра. Строка стоит здесь,
+          чтобы список на экране совпадал со списком в сайдбаре: иначе человек
+          ищет глазами то, чего тут нет, и делает вывод, что секцию потерял.
+        -->
+        <div class="sections-view__card sections-view__card--system">
+          <span class="sections-view__badge" aria-hidden="true">
+            <span class="sections-view__badge-all" />
+          </span>
+          <div class="sections-view__card-text">
+            <div class="sections-view__card-title">
+              <span class="sections-view__name">Все записи</span>
+            </div>
+            <p class="sections-view__sub">{{ allRecordsLine }}</p>
+          </div>
+          <span class="sections-view__tag">системная</span>
+        </div>
+
         <template v-for="vault in sections.vaults" :key="vault.vault_id">
           <SectionEditor
             v-if="editing === vault.vault_id"
@@ -272,6 +307,7 @@ async function confirmDelete(): Promise<void> {
             />
 
             <div class="sections-view__card-actions">
+              <SyButton size="sm" @click="openSection(vault)">Открыть</SyButton>
               <SyButton
                 v-if="!vault.is_default"
                 size="sm"
@@ -448,14 +484,32 @@ async function confirmDelete(): Promise<void> {
   max-width: 880px;
 }
 
+/*
+ * `flex-wrap` обязателен: тумблер с подписью и четыре кнопки не помещаются в
+ * одну строку, когда экран стал правой панелью окна, а не страницей во всю
+ * ширину. Без переноса подпись тумблера налезала на его состояние.
+ */
 .sections-view__card {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sy-space-6);
+  gap: var(--sy-space-5) var(--sy-space-6);
   padding: var(--sy-space-5) var(--sy-space-6);
   border: 1px solid var(--sy-border);
   border-radius: var(--sy-radius);
   background: var(--sy-surface);
+}
+
+/* «Все записи» — фон окна, а не карточки: это строка-пояснение, не секция. */
+.sections-view__card--system {
+  background: var(--sy-bg-0);
+}
+
+.sections-view__badge-all {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--sy-text-3);
 }
 
 .sections-view__badge {
@@ -510,15 +564,32 @@ async function confirmDelete(): Promise<void> {
   color: var(--sy-text-2);
 }
 
+/*
+ * Тумблеру нужна вся его подпись целиком: «Синхронизировать · на всех
+ * устройствах» это обещание, а обрезанное обещание хуже отсутствующего.
+ */
 .sections-view__sync {
   flex: none;
-  width: 210px;
+  min-width: 250px;
+  margin-left: auto;
 }
 
+/*
+ * Кнопки всегда на отдельной строке. Иначе секция с четырьмя действиями
+ * переносила их, а секция с двумя — нет, и одинаковые карточки выглядели
+ * по-разному без всякой на то причины.
+ */
 .sections-view__card-actions {
-  flex: none;
+  flex-basis: 100%;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sy-space-3);
+  padding-top: var(--sy-space-4);
+  border-top: 1px solid var(--sy-border);
+}
+
+.sections-view__card-text {
+  min-width: 200px;
 }
 
 .sections-view__new {

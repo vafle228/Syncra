@@ -1,12 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createPinia, setActivePinia } from 'pinia'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 
 import { setCoreClient } from '@/core/ipc'
 import { createMockCoreClient, MOCK_VAULT_PERSONAL, MOCK_VAULT_WORK } from '@/core/mock'
 import type { MockCoreClient } from '@/core/mock'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
+import { mountWithRouter, waitForRoute } from '@/test/mountWithRouter'
 import SectionsView from '../SectionsView.vue'
 
 /**
@@ -16,27 +16,23 @@ import SectionsView from '../SectionsView.vue'
 
 let core: MockCoreClient
 
-beforeEach(() => {
-  setActivePinia(createPinia())
-  core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
-  setCoreClient(core)
-})
-
 afterEach(() => {
   setCoreClient(null)
 })
 
+/**
+ * Роутер здесь настоящий: с F13 «Открыть» правда уводит к паролям, и проверять
+ * это шпионом над `push` значило бы проверять не переход, а вызов.
+ */
 async function mountSections() {
-  // Роутер экрану не нужен: единственная ссылка — «Готово» обратно к паролям.
-  const wrapper = mount(SectionsView, {
-    attachTo: document.body,
-    global: { stubs: { RouterLink: true } },
-  })
+  core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
+  const harness = await mountWithRouter(SectionsView, { core, path: '/sections' })
   await flushPromises()
-  return wrapper
+  return harness
 }
 
-type View = Awaited<ReturnType<typeof mountSections>>
+type Harness = Awaited<ReturnType<typeof mountSections>>
+type View = Harness['wrapper']
 
 function card(wrapper: View, name: string) {
   const found = wrapper
@@ -54,9 +50,11 @@ function button(scope: ReturnType<View['find']>, text: string) {
 
 describe('SectionsView · список секций', () => {
   it('показывает секции из ядра с их состоянием', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
-    expect(wrapper.findAll('.sections-view__card')).toHaveLength(2)
+    // Три строки: системная «Все записи» и две настоящие секции.
+    expect(wrapper.findAll('.sections-view__card')).toHaveLength(3)
+    expect(wrapper.find('.sections-view__card--system').text()).toContain('Все записи')
     expect(card(wrapper, 'Личное').text()).toContain('по умолчанию')
     expect(card(wrapper, 'Личное').text()).toContain('синхронизируется')
     expect(card(wrapper, 'Рабочее').text()).toContain('остаётся на этом устройстве')
@@ -65,7 +63,7 @@ describe('SectionsView · список секций', () => {
   })
 
   it('считает записи в каждой секции', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     expect(card(wrapper, 'Личное').text()).toContain('3 записи')
     // Надгробие в «Рабочем» не считается за запись (§5.4).
@@ -75,7 +73,7 @@ describe('SectionsView · список секций', () => {
   })
 
   it('у секции по умолчанию нет кнопки удаления: записям нужно куда-то попадать', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     expect(
       card(wrapper, 'Личное')
@@ -92,7 +90,7 @@ describe('SectionsView · список секций', () => {
   })
 
   it('проговаривает, что локальная секция никуда не уезжает', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     expect(wrapper.text()).toContain('Локальная секция никуда не уезжает')
     expect(wrapper.text()).toContain('Удаление секции не удаляет записи')
@@ -103,7 +101,7 @@ describe('SectionsView · список секций', () => {
 
 describe('SectionsView · синхронизация (§4.2)', () => {
   it('тумблер доезжает до ядра и переживает перезагрузку экрана', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
     const toggle = card(wrapper, 'Рабочее').find('.sy-toggle__switch')
 
     expect(toggle.attributes('aria-checked')).toBe('false')
@@ -121,7 +119,7 @@ describe('SectionsView · синхронизация (§4.2)', () => {
   })
 
   it('показывает отказ ядра у той секции, на которой нажали', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
     core.control.failNext('INTERNAL', 'Ядро занято.')
 
     await card(wrapper, 'Рабочее').find('.sy-toggle__switch').trigger('click')
@@ -140,7 +138,7 @@ describe('SectionsView · синхронизация (§4.2)', () => {
 
 describe('SectionsView · создание и правка', () => {
   it('создаёт секцию сквозным путём: форма → ядро → список', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     await wrapper.find('.sections-view__new').trigger('click')
     await flushPromises()
@@ -166,7 +164,7 @@ describe('SectionsView · создание и правка', () => {
   })
 
   it('не создаёт секцию без имени', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     await wrapper.find('.sections-view__new').trigger('click')
     await wrapper.find('.section-editor').trigger('submit')
@@ -179,7 +177,7 @@ describe('SectionsView · создание и правка', () => {
   })
 
   it('переименовывает секцию на месте карточки', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     await button(card(wrapper, 'Рабочее'), 'Переименовать').trigger('click')
     await flushPromises()
@@ -198,7 +196,7 @@ describe('SectionsView · создание и правка', () => {
   })
 
   it('назначает секцию по умолчанию', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     await button(card(wrapper, 'Рабочее'), 'Сюда по умолчанию').trigger('click')
     await flushPromises()
@@ -215,7 +213,7 @@ describe('SectionsView · создание и правка', () => {
 
 describe('SectionsView · удаление', () => {
   it('обещает сохранить записи и правда их сохраняет', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
     const list = useRecordsStore()
     const before = list.totalAll
 
@@ -242,7 +240,7 @@ describe('SectionsView · удаление', () => {
   })
 
   it('снимает фильтр списка по удалённой секции', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
     const list = useRecordsStore()
     list.setVaultFilter(MOCK_VAULT_WORK)
 
@@ -260,7 +258,7 @@ describe('SectionsView · удаление', () => {
   })
 
   it('оставляет секцию на месте, если ядро отказало', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     await button(card(wrapper, 'Рабочее'), 'Удалить').trigger('click')
     await flushPromises()
@@ -282,12 +280,36 @@ describe('SectionsView · удаление', () => {
 
 describe('SectionsView · ЗАКОН №1', () => {
   it('не показывает ни одного секрета', async () => {
-    const wrapper = await mountSections()
+    const { wrapper } = await mountSections()
 
     expect(wrapper.html()).not.toMatch(/mock-[a-z]+-pw/)
     expect(wrapper.html()).not.toContain('MOCKTOTPSECRET')
     expect(wrapper.html()).not.toContain('Recovery codes')
 
     wrapper.unmount()
+  })
+})
+
+describe('SectionsView · открыть секцию (F13)', () => {
+  it('«Открыть» ставит секцию фильтром и возвращает к паролям', async () => {
+    // Ради этого секции и существуют; идти за тем же в сайдбар — лишний шаг
+    // ровно там, где человек уже смотрит на нужную секцию.
+    const { wrapper, router } = await mountSections()
+
+    await button(card(wrapper, 'Рабочее'), 'Открыть').trigger('click')
+    await flushPromises()
+
+    expect(useRecordsStore().vaultFilter).toBe(MOCK_VAULT_WORK)
+    await waitForRoute(router, 'home')
+  })
+
+  it('системная строка считает записи всех секций сразу', async () => {
+    const { wrapper } = await mountSections()
+
+    const system = wrapper.find('.sections-view__card--system')
+    expect(system.text()).toContain('4 записи')
+    expect(system.text()).toContain('системная')
+    // Открывать и удалять там нечего: это не секция.
+    expect(system.findAll('button')).toHaveLength(0)
   })
 })
