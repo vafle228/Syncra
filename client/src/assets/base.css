@@ -68,6 +68,68 @@ a:hover {
   outline-offset: 2px;
 }
 
+/*
+ * Анимации из прототипа. Живут ГЛОБАЛЬНО, а не в `<style scoped>`: Vue дописывает
+ * к именам кейфреймов хэш компонента, поэтому объявленная в одном SFC анимация не
+ * видна из другого — а эти четыре нужны сразу нескольким.
+ *
+ * Каждая — про состояние, а не про красоту: `sy-pulse` — «сейчас происходит»,
+ * `sy-spin` — «ждём ядро», `sy-sweep` — «камера смотрит», `sy-in` — «это окно
+ * появилось только что, оно новое на экране».
+ */
+@keyframes sy-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes sy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sy-sweep {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(150px);
+  }
+}
+
+@keyframes sy-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * Попросили меньше движения — не двигаем. Анимации не выключаются в `none`, а
+ * сжимаются до одного мгновенного прогона: элемент встаёт в своё конечное
+ * состояние, и ни одна пульсирующая точка не остаётся мигать бесконечно.
+ * Переходы гасятся токеном `--sy-transition` (см. `tokens.css`).
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
 /* Утилита для подписей, доступных только скринридеру. */
 .sy-visually-hidden {
   position: absolute;

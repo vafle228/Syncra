@@ -118,6 +118,72 @@ describe('SyModal', () => {
 
     wrapper.unmount()
   })
+
+  it('размер задаётся назначением диалога, а не пикселями', async () => {
+    const wrapper = mount(SyModal, {
+      props: { open: true, title: 'Диалог' },
+      attachTo: document.body,
+    })
+
+    const classes = () => [...document.body.querySelector('.sy-modal__dialog')!.classList]
+    expect(classes()).toContain('sy-modal__dialog--default')
+
+    for (const size of ['confirm', 'form', 'wizard', 'wide'] as const) {
+      await wrapper.setProps({ size })
+      expect(classes()).toContain(`sy-modal__dialog--${size}`)
+    }
+
+    wrapper.unmount()
+  })
+
+  it('опасный диалог обведён красным целиком, а не только полоской внутри', async () => {
+    // Про потерю данных должно быть понятно раньше, чем прочитан текст.
+    const wrapper = mount(SyModal, {
+      props: { open: true, title: 'Удалить запись?', tone: 'danger' },
+      attachTo: document.body,
+    })
+
+    const dialog = () => document.body.querySelector('.sy-modal__dialog')!
+    expect([...dialog().classList]).toContain('sy-modal__dialog--tone-danger')
+
+    await wrapper.setProps({ tone: 'neutral' })
+    expect([...dialog().classList]).toContain('sy-modal__dialog--tone-neutral')
+
+    wrapper.unmount()
+  })
+
+  it('сноска стоит рядом с кнопками, а не выше по тексту', () => {
+    const wrapper = mount(SyModal, {
+      props: { open: true, title: 'Удалить запись?', tone: 'danger' },
+      slots: {
+        note: 'Подтвердите повторным нажатием «Удалить запись»',
+        actions: '<button>Удалить запись</button>',
+      },
+      attachTo: document.body,
+    })
+
+    const actions = document.body.querySelector('.sy-modal__actions')!
+    expect(actions.querySelector('.sy-modal__note')?.textContent).toContain(
+      'Подтвердите повторным нажатием',
+    )
+    // Селектор `.sy-modal__actions button` остаётся рабочим — на него смотрят
+    // тесты экранов, подтверждающих удаление.
+    expect(actions.querySelector('button')?.textContent).toBe('Удалить запись')
+
+    wrapper.unmount()
+  })
+
+  it('без сноски лишней разметки не появляется', () => {
+    const wrapper = mount(SyModal, {
+      props: { open: true, title: 'Диалог' },
+      slots: { actions: '<button>Ок</button>' },
+      attachTo: document.body,
+    })
+
+    expect(document.body.querySelector('.sy-modal__note')).toBeNull()
+
+    wrapper.unmount()
+  })
 })
 
 describe('SyEmptyState', () => {

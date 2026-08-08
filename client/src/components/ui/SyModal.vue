@@ -19,11 +19,20 @@ const props = withDefaults(
     /** Запретить закрытие по Escape и клику по подложке. */
     persistent?: boolean
     /**
-     * `wide` — для диалога, в котором сравнивают две колонки (конфликт версий,
-     * F11). Обычное подтверждение шире делать не нужно: чем длиннее строка,
-     * тем хуже читается вопрос.
+     * Ширина по НАЗНАЧЕНИЮ, а не по пикселям: размер диалога — следствие того,
+     * что в нём делают, и подбирать его на глаз в каждом месте нельзя.
+     *
+     * - `default` (460) — короткий вопрос;
+     * - `confirm` (480) — подтверждение необратимого действия: заголовок,
+     *   объяснение цены и две кнопки;
+     * - `form` (520) — диалог с полями ввода;
+     * - `wizard` (560) — многошаговый сценарий (сопряжение, импорт);
+     * - `wide` (860) — сравнение двух колонок (конфликт версий, F11).
+     *
+     * Шире делать без причины не нужно: чем длиннее строка, тем хуже читается
+     * вопрос.
      */
-    size?: 'default' | 'wide'
+    size?: 'default' | 'confirm' | 'form' | 'wizard' | 'wide'
   }>(),
   { tone: 'neutral', persistent: false, size: 'default' },
 )
@@ -68,7 +77,7 @@ onBeforeUnmount(() => {
       <div
         ref="dialog"
         class="sy-modal__dialog"
-        :class="{ 'sy-modal__dialog--wide': size === 'wide' }"
+        :class="[`sy-modal__dialog--${size}`, `sy-modal__dialog--tone-${tone}`]"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
@@ -85,8 +94,16 @@ onBeforeUnmount(() => {
           <slot />
         </div>
 
-        <div v-if="$slots.actions" class="sy-modal__actions">
-          <slot name="actions" />
+        <!--
+          Сноска слева, кнопки справа: в опасных диалогах прототипа рядом с
+          «Удалить» стоит напоминание, что именно эта кнопка и есть подтверждение.
+          Пояснение стоит там, где решают, а не выше по тексту.
+        -->
+        <div v-if="$slots.actions || $slots.note" class="sy-modal__actions">
+          <p v-if="$slots.note" class="sy-modal__note"><slot name="note" /></p>
+          <div v-if="$slots.actions" class="sy-modal__buttons">
+            <slot name="actions" />
+          </div>
         </div>
       </div>
     </div>
@@ -115,11 +132,37 @@ onBeforeUnmount(() => {
   border: 1px solid var(--sy-border-strong);
   border-radius: var(--sy-radius-lg);
   background: var(--sy-surface);
-  box-shadow: var(--sy-shadow-window);
+  box-shadow: var(--sy-shadow-window-2);
+  animation: sy-in 0.18s ease-out;
+}
+
+.sy-modal__dialog--confirm {
+  width: 480px;
+}
+
+.sy-modal__dialog--form {
+  width: 520px;
+}
+
+.sy-modal__dialog--wizard {
+  width: 560px;
 }
 
 .sy-modal__dialog--wide {
   width: 860px;
+}
+
+/*
+ * Опасный диалог обведён красным целиком, а не только полоской внутри: то, что
+ * этот вопрос про потерю данных, должно быть видно раньше, чем прочитан текст.
+ */
+.sy-modal__dialog--tone-danger {
+  border-color: var(--sy-danger);
+  box-shadow: var(--sy-shadow-window-2), var(--sy-shadow-danger);
+}
+
+.sy-modal__dialog--tone-warning {
+  border-color: var(--sy-warn);
 }
 
 .sy-modal__dialog:focus {
@@ -179,8 +222,24 @@ onBeforeUnmount(() => {
 
 .sy-modal__actions {
   display: flex;
-  gap: var(--sy-space-4);
+  align-items: center;
+  gap: var(--sy-space-5);
+  /* Без сноски кнопки прижаты вправо; со сноской она встаёт слева от них. */
   justify-content: flex-end;
   padding-top: var(--sy-space-1);
+}
+
+.sy-modal__note {
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--sy-text-3);
+  text-wrap: pretty;
+}
+
+.sy-modal__buttons {
+  flex: none;
+  display: flex;
+  gap: var(--sy-space-4);
 }
 </style>

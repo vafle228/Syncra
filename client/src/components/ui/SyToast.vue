@@ -55,7 +55,7 @@ const toasts = useToastStore()
   border: 1px solid var(--sy-accent-border);
   border-radius: var(--sy-radius-pill);
   background: var(--sy-surface);
-  box-shadow: var(--sy-shadow-window);
+  box-shadow: var(--sy-shadow-window-2);
   font-size: 13px;
   line-height: 1.4;
   color: var(--sy-text);
