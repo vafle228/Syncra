@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, MOCK_MASTER_PASSWORD, type MockCoreClient } from '@/core/mock'
+import {
+  createMockCoreClient,
+  MOCK_MASTER_PASSWORD,
+  MOCK_PIN_ATTEMPTS,
+  type MockCoreClient,
+} from '@/core/mock'
 import { useVaultStore } from '../useVaultStore'
 
 let core: MockCoreClient
@@ -164,5 +169,115 @@ describe('недоступное ядро', () => {
 
     expect(vault.status).toBe('locked')
     expect(vault.error).toBe('Ядро недоступно.')
+  })
+})
+
+describe('быстрый вход по PIN (F13)', () => {
+  beforeEach(() => {
+    setCoreClient(createMockCoreClient({ latencyMs: 0, pin: '1234' }))
+  })
+
+  it('узнаёт у ядра, заведён ли PIN на этом устройстве', async () => {
+    const vault = useVault()
+    expect(vault.pin).toEqual({ enrolled: false, attempts_left: null })
+
+    await vault.refresh()
+
+    expect(vault.pin).toEqual({ enrolled: true, attempts_left: MOCK_PIN_ATTEMPTS })
+  })
+
+  it('открывает хранилище верным PIN', async () => {
+    const vault = useVault()
+
+    const response = await vault.unlockByPin('1234')
+
+    expect(response.ok).toBe(true)
+    expect(vault.status).toBe('unlocked')
+    expect(vault.lockReason).toBeNull()
+  })
+
+  it('неверный PIN не попадает в error: это опечатка, а не сбой', async () => {
+    const vault = useVault()
+
+    const response = await vault.unlockByPin('9999')
+
+    expect(response).toMatchObject({ ok: false, pin_disabled: false })
+    expect(vault.error).toBeNull()
+    expect(vault.status).toBe('unknown')
+    expect(vault.pin.attempts_left).toBe(MOCK_PIN_ATTEMPTS - 1)
+  })
+
+  it('исчерпанные попытки убирают быстрый вход из состояния', async () => {
+    const vault = useVault()
+
+    for (let attempt = 0; attempt < MOCK_PIN_ATTEMPTS; attempt += 1) {
+      await vault.unlockByPin('9999')
+    }
+
+    expect(vault.pin).toEqual({ enrolled: false, attempts_left: null })
+  })
+
+  it('ЗАКОН №1: набранный PIN не оседает в состоянии стора', async () => {
+    const vault = useVault()
+
+    await vault.unlockByPin('9999')
+    expect(JSON.stringify(vault.$state)).not.toContain('9999')
+
+    await vault.unlockByPin('1234')
+    expect(JSON.stringify(vault.$state)).not.toContain('1234')
+  })
+})
+
+describe('смена мастер-пароля (F13)', () => {
+  const NEXT = 'сосновая шишка на полке'
+
+  beforeEach(() => {
+    setCoreClient(createMockCoreClient({ latencyMs: 0, startUnlocked: true, pin: '1234' }))
+  })
+
+  it('меняет пароль, не запирая хранилище', async () => {
+    const vault = useVault()
+    await vault.refresh()
+
+    const response = await vault.changeMasterPassword(MOCK_MASTER_PASSWORD, NEXT)
+
+    expect(response.changed_at).toEqual(expect.any(String))
+    expect(vault.status).toBe('unlocked')
+  })
+
+  it('сразу убирает быстрый вход: он отпирал ключ от старого пароля', async () => {
+    const vault = useVault()
+    await vault.refresh()
+    expect(vault.pin.enrolled).toBe(true)
+
+    await vault.changeMasterPassword(MOCK_MASTER_PASSWORD, NEXT)
+
+    // Не ждём следующего refresh: иначе экран блокировки успел бы показать
+    // клавиатуру, которая больше ничего не отпирает.
+    expect(vault.pin).toEqual({ enrolled: false, attempts_left: null })
+  })
+
+  it('показывает сообщение ядра, если текущий пароль не подошёл', async () => {
+    const vault = useVault()
+
+    await expect(vault.changeMasterPassword('не тот пароль вовсе', NEXT)).rejects.toBeTruthy()
+
+    expect(vault.error).toBe('Неверный мастер-пароль.')
+  })
+
+  it('ЗАКОН №1: ни один из двух паролей не оседает в состоянии стора', async () => {
+    const vault = useVault()
+
+    await vault.changeMasterPassword(MOCK_MASTER_PASSWORD, NEXT)
+    const snapshot = JSON.stringify(vault.$state)
+    expect(snapshot).not.toContain(MOCK_MASTER_PASSWORD)
+    expect(snapshot).not.toContain(NEXT)
+
+    // И после отказа — сообщение об ошибке не эхо-ит ввод.
+    await expect(
+      vault.changeMasterPassword('очень-секретная-фраза', 'другая-секретная-фраза'),
+    ).rejects.toBeTruthy()
+    expect(JSON.stringify(vault.$state)).not.toContain('очень-секретная-фраза')
+    expect(JSON.stringify(vault.$state)).not.toContain('другая-секретная-фраза')
   })
 })

@@ -1,4 +1,5 @@
 import type {
+  ChangeMasterPasswordResponse,
   ConflictSide,
   CoreErrorCode,
   Device,
@@ -22,6 +23,7 @@ import type {
   PairingOffer,
   PairingResult,
   PairingSessionId,
+  PinStatus,
   RecordConflict,
   RecordDraft,
   RecordId,
@@ -30,8 +32,11 @@ import type {
   RecordSecrets,
   RestoreBackupResult,
   SecretField,
+  SecuritySettings,
+  SecuritySettingsPatch,
   SyncStatus,
   UnlockResponse,
+  UnlockWithPinResponse,
   Vault,
   VaultColor,
   VaultId,
@@ -42,6 +47,7 @@ import {
   IMPORT_PREVIEW_ROWS,
   IMPORT_SOURCES,
   MASTER_PASSWORD_MIN_LENGTH,
+  PIN_LENGTH,
   VAULT_COLORS,
   VAULT_NAME_MAX_LENGTH,
 } from '../contract'
@@ -66,6 +72,12 @@ import {
   THIS_DEVICE_NAME,
   unreadableCode,
 } from './pairing'
+import {
+  applySecurityPatch,
+  cloneSecuritySettings,
+  initialSecuritySettings,
+  MOCK_PIN_ATTEMPTS,
+} from './security'
 import {
   createConflictSeed,
   createDeviceSeed,
@@ -101,6 +113,7 @@ export {
 } from './seed'
 export { SYNC_FAILURE_MESSAGE, SYNC_SIMULATION_STEP_MS } from './sync'
 export { DEFAULT_GENERATOR_PROFILE } from './generator'
+export { MOCK_PIN_ATTEMPTS } from './security'
 export {
   FINGERPRINT_WORD_COUNT,
   PAIRING_CODE_TTL_MS,
@@ -147,6 +160,18 @@ export interface MockCoreOptions {
   initialized?: boolean
   /** Профиль генератора, с которым стартует хранилище (F6). */
   generatorProfile?: GeneratorProfile
+  /** Настройки безопасности, с которыми стартует хранилище (F13). */
+  securitySettings?: SecuritySettings
+  /**
+   * PIN быстрого входа на этом устройстве (F13). По умолчанию `null` — не
+   * заведён, и экран блокировки спрашивает мастер-пароль.
+   *
+   * Умолчание именно такое, потому что энролмент PIN нигде в макетах не
+   * нарисован: пока не решено, где он живёт, фейк-ядро не должно делать вид,
+   * что этот путь пройден. Ветка с клавиатурой достижима через эту опцию или
+   * `control.enrollPin()` — это аффорданс для дева и тестов, а не экран.
+   */
+  pin?: string | null
 }
 
 /** Ручки управления фейк-ядром: только для разработки и тестов. */
@@ -187,6 +212,17 @@ export interface MockCoreControl {
    * способа проверить эту ветку у UI нет.
    */
   cancelNextFilePick(): void
+
+  /**
+   * Завести PIN быстрого входа на этом устройстве (F13).
+   *
+   * Ручка, а не команда контракта: энролмент PIN не нарисован ни в одном
+   * макете, и выдумывать под него экран рано. Здесь она нужна, чтобы ветка с
+   * клавиатурой была достижима из дева и тестов.
+   */
+  enrollPin(pin: string): void
+  /** Убрать PIN: снова только мастер-пароль. */
+  clearPin(): void
 
   /** Остановить таймеры фейк-ядра. Нужно тестам и горячей перезагрузке. */
   dispose(): void
@@ -306,6 +342,16 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   let generatorProfile: GeneratorProfile = cloneProfile(
     options.generatorProfile ?? DEFAULT_GENERATOR_PROFILE,
   )
+  /** Таймауты замка, буфера и показа секрета (F13). */
+  let securitySettings: SecuritySettings = cloneSecuritySettings(
+    options.securitySettings ?? initialSecuritySettings(),
+  )
+  /**
+   * PIN быстрого входа. Свойство УСТРОЙСТВА, а не хранилища: он не уезжает на
+   * другие устройства и не участвует в бэкапе.
+   */
+  let pin: string | null = options.pin ?? null
+  let pinAttemptsLeft = MOCK_PIN_ATTEMPTS
 
   function timestamp(): IsoDateTime {
     return now().toISOString()
@@ -595,6 +641,20 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     }
   }
 
+  /** Состояние быстрого входа для `getVaultStatus` (F13). */
+  function pinStatus(): PinStatus {
+    return {
+      enrolled: pin !== null,
+      attempts_left: pin === null ? null : pinAttemptsLeft,
+    }
+  }
+
+  /** Выключить быстрый вход: попытки кончились или человек попросил сам. */
+  function forgetPin(): void {
+    pin = null
+    pinAttemptsLeft = MOCK_PIN_ATTEMPTS
+  }
+
   function liveRecords(): RecordMeta[] {
     return [...meta.values()].filter((record) => record.deleted_at === null)
   }
@@ -669,7 +729,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     async getVaultStatus(): Promise<VaultStatus> {
       // Статус доступен всегда: с него начинается запуск UI.
       await enter({ requiresUnlock: false, requiresInit: false })
-      return { initialized, unlocked, unlocked_at: unlockedAt }
+      return { initialized, unlocked, unlocked_at: unlockedAt, pin: pinStatus() }
     },
 
     async initVault(masterPasswordInput: string): Promise<InitVaultResponse> {
@@ -693,6 +753,10 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       meta.clear()
       secrets.clear()
       generatorProfile = cloneProfile(DEFAULT_GENERATOR_PROFILE)
+      securitySettings = initialSecuritySettings()
+      // Быстрого входа на новом хранилище нет: PIN — это то, что настраивают
+      // потом, и подставлять его за пользователя нельзя.
+      forgetPin()
 
       const initializedAt = timestamp()
       // Одна секция по умолчанию: выбирать между секциями до того, как они
@@ -711,12 +775,78 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
         throw new CoreError('INVALID_MASTER_PASSWORD', 'Неверный мастер-пароль.')
       }
 
+      // Мастер-пароль подтверждён — счётчик попыток PIN снова полный: человек
+      // доказал, что хранилище его, и наказывать за забытый PIN нечем.
+      pinAttemptsLeft = MOCK_PIN_ATTEMPTS
       return { unlocked_at: doUnlock() }
+    },
+
+    async unlockWithPin(pinInput: string): Promise<UnlockWithPinResponse> {
+      await enter({ requiresUnlock: false, requiresInit: true })
+
+      // Не та форма запроса — виноват UI, и это настоящая ошибка.
+      if (!new RegExp(`^\\d{${PIN_LENGTH}}$`).test(pinInput)) {
+        throw new CoreError('VALIDATION', `PIN — это ${PIN_LENGTH} цифры.`)
+      }
+      if (pin === null) {
+        throw new CoreError('VALIDATION', 'Быстрый вход на этом устройстве не настроен.')
+      }
+
+      if (pinInput !== pin) {
+        pinAttemptsLeft -= 1
+        const exhausted = pinAttemptsLeft <= 0
+        // Попытки кончились — быстрый вход выключается целиком: дальше только
+        // мастер-пароль, и UI обязан сказать об этом словами.
+        if (exhausted) forgetPin()
+        return {
+          ok: false,
+          attempts_left: exhausted ? 0 : pinAttemptsLeft,
+          pin_disabled: exhausted,
+        }
+      }
+
+      pinAttemptsLeft = MOCK_PIN_ATTEMPTS
+      return { ok: true, unlocked_at: doUnlock() }
     },
 
     async lock(): Promise<void> {
       await enter({ requiresUnlock: false })
       doLock('manual')
+    },
+
+    async changeMasterPassword(
+      currentInput: string,
+      nextInput: string,
+    ): Promise<ChangeMasterPasswordResponse> {
+      // За замком: перешифровать хранилище можно только открыв его.
+      await enter({ requiresUnlock: true })
+
+      requireMasterPassword(currentInput)
+
+      if (nextInput.length < MASTER_PASSWORD_MIN_LENGTH) {
+        throw new CoreError(
+          'VALIDATION',
+          `Мастер-пароль короче ${MASTER_PASSWORD_MIN_LENGTH} символов.`,
+        )
+      }
+      if (nextInput === currentInput) {
+        throw new CoreError('VALIDATION', 'Новый мастер-пароль совпадает с текущим.')
+      }
+
+      // В настоящем ядре здесь перешифровка хранилища новым ключом. Фейк-ядро
+      // просто запоминает пароль — крипты во фронте нет и в моке её быть не должно.
+      masterPassword = nextInput
+      // Быстрый вход отпирал ключ, выведенный из СТАРОГО пароля: после
+      // перешифровки он больше ничего не отпирает и должен быть заведён заново.
+      forgetPin()
+
+      // Хранилище остаётся открытым: пароль только что подтвердили.
+      return {
+        changed_at: timestamp(),
+        devices_to_update: devices.filter(
+          (device) => !device.is_this_device && device.revoked_at === null,
+        ).length,
+      }
     },
 
     async listRecords(request: ListRecordsRequest = {}): Promise<RecordMeta[]> {
@@ -956,6 +1086,20 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
 
       generatorProfile = validateProfile(profile)
       return cloneProfile(generatorProfile)
+    },
+
+    async getSecuritySettings(): Promise<SecuritySettings> {
+      // За замком, как и профиль генератора: рассказывать про настройки защиты
+      // закрытого хранилища незачем.
+      await enter({ requiresUnlock: true })
+      return cloneSecuritySettings(securitySettings)
+    },
+
+    async saveSecuritySettings(patch: SecuritySettingsPatch): Promise<SecuritySettings> {
+      await enter({ requiresUnlock: true })
+
+      securitySettings = applySecurityPatch(securitySettings, patch)
+      return cloneSecuritySettings(securitySettings)
     },
 
     async generatePasswords(count: number, profile?: GeneratorProfile) {
@@ -1488,6 +1632,13 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       cancelNextFilePick() {
         cancelNextPick = true
       },
+      enrollPin(next: string) {
+        pin = next
+        pinAttemptsLeft = MOCK_PIN_ATTEMPTS
+      },
+      clearPin() {
+        forgetPin()
+      },
       dispose() {
         stopSimulation()
       },
@@ -1496,6 +1647,11 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
         masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
         initialized = options.initialized !== false
         generatorProfile = cloneProfile(options.generatorProfile ?? DEFAULT_GENERATOR_PROFILE)
+        securitySettings = cloneSecuritySettings(
+          options.securitySettings ?? initialSecuritySettings(),
+        )
+        pin = options.pin ?? null
+        pinAttemptsLeft = MOCK_PIN_ATTEMPTS
         stopSimulation()
         online.clear()
         loadSeed()

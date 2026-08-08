@@ -1,7 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import type { IsoDateTime, RestoreBackupResult } from '@/core/contract'
+import type {
+  ChangeMasterPasswordResponse,
+  IsoDateTime,
+  PinStatus,
+  RestoreBackupResult,
+  UnlockWithPinResponse,
+} from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useCore, type Unsubscribe } from '@/core/ipc'
 
@@ -34,6 +40,12 @@ export const useVaultStore = defineStore('vault', () => {
   const status = ref<VaultLockStatus>('unknown')
   const unlockedAt = ref<IsoDateTime | null>(null)
   const lockReason = ref<LockReason>(null)
+  /**
+   * Быстрый вход по PIN на ЭТОМ устройстве (F13). Не секрет: здесь только
+   * «заведён ли» и «сколько попыток осталось» — сам PIN сюда не попадает
+   * никогда, как и мастер-пароль.
+   */
+  const pin = ref<PinStatus>({ enrolled: false, attempts_left: null })
   /** Сообщение ядра для показа пользователю. Секретов не содержит по контракту. */
   const error = ref<string | null>(null)
   const busy = ref(false)
@@ -83,6 +95,7 @@ export const useVaultStore = defineStore('vault', () => {
       const vault = await useCore().getVaultStatus()
       status.value = !vault.initialized ? 'uninitialized' : vault.unlocked ? 'unlocked' : 'locked'
       unlockedAt.value = vault.unlocked_at
+      pin.value = vault.pin
       return status.value
     } catch (cause) {
       // Не знаем состояния — считаем закрытым: это безопасная сторона ошибки.
@@ -123,6 +136,71 @@ export const useVaultStore = defineStore('vault', () => {
       status.value = 'unlocked'
       unlockedAt.value = response.unlocked_at
       lockReason.value = null
+    } catch (cause) {
+      applyError(cause)
+    } finally {
+      busy.value = false
+    }
+  }
+
+  /**
+   * Быстрый вход по PIN (F13).
+   *
+   * `pinInput` — транзитный аргумент ровно как мастер-пароль: уходит в ядро и
+   * тут же отпускается, в состоянии его нет.
+   *
+   * Неверный PIN НЕ бросается и не пишется в `error`: это опечатка, а не сбой.
+   * Возвращаем ответ ядра целиком, чтобы экран сам сказал, сколько попыток
+   * осталось и не выключился ли быстрый вход совсем.
+   */
+  async function unlockByPin(pinInput: string): Promise<UnlockWithPinResponse> {
+    watchCore()
+    busy.value = true
+    error.value = null
+    try {
+      const response = await useCore().unlockWithPin(pinInput)
+
+      if (response.ok) {
+        status.value = 'unlocked'
+        unlockedAt.value = response.unlocked_at
+        lockReason.value = null
+        pin.value = { enrolled: true, attempts_left: null }
+      } else {
+        pin.value = response.pin_disabled
+          ? { enrolled: false, attempts_left: null }
+          : { enrolled: true, attempts_left: response.attempts_left }
+      }
+
+      return response
+    } catch (cause) {
+      applyError(cause)
+    } finally {
+      busy.value = false
+    }
+  }
+
+  /**
+   * Сменить мастер-пароль (F13). Оба пароля — транзитные аргументы.
+   *
+   * Хранилище остаётся открытым: старый пароль только что подтвердили.
+   * Быстрый вход после перешифровки ядро сбрасывает — отражаем это здесь, а не
+   * ждём следующего `refresh()`, иначе экран блокировки покажет клавиатуру,
+   * которая больше ничего не отпирает.
+   */
+  async function changeMasterPassword(
+    currentMasterPassword: string,
+    newMasterPassword: string,
+  ): Promise<ChangeMasterPasswordResponse> {
+    watchCore()
+    busy.value = true
+    error.value = null
+    try {
+      const response = await useCore().changeMasterPassword(
+        currentMasterPassword,
+        newMasterPassword,
+      )
+      pin.value = { enrolled: false, attempts_left: null }
+      return response
     } catch (cause) {
       applyError(cause)
     } finally {
@@ -204,6 +282,7 @@ export const useVaultStore = defineStore('vault', () => {
     status,
     unlockedAt,
     lockReason,
+    pin,
     error,
     busy,
     isUnlocked,
@@ -211,6 +290,8 @@ export const useVaultStore = defineStore('vault', () => {
     refresh,
     ensureStatus,
     unlock,
+    unlockByPin,
+    changeMasterPassword,
     initVault,
     restoreBackup,
     lock,

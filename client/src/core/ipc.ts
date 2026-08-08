@@ -5,6 +5,7 @@ import {
   COMMAND_NAMES,
   EVENT_NAMES,
   type CommandMap,
+  type ChangeMasterPasswordResponse,
   type CommandName,
   type ConflictSide,
   type Device,
@@ -34,8 +35,11 @@ import {
   type RecordSecrets,
   type RestoreBackupResult,
   type SecretField,
+  type SecuritySettings,
+  type SecuritySettingsPatch,
   type SyncStatus,
   type UnlockResponse,
+  type UnlockWithPinResponse,
   type Vault,
   type VaultColor,
   type VaultId,
@@ -70,8 +74,31 @@ export interface CoreClient {
   /** Разблокировать хранилище мастер-паролем (§7.3). */
   unlock(masterPassword: string): Promise<UnlockResponse>
 
+  /**
+   * Быстрый вход по PIN (F13). Доступен, только когда `VaultStatus.pin.enrolled`.
+   *
+   * Неверный PIN возвращается как `ok: false`, а не бросается: опечатка на
+   * четырёх кнопках — ожидаемый исход, и обрабатывать её через `catch` значит
+   * путать ошибку пользователя с ошибкой программы.
+   *
+   * ЗАКОН №1: PIN — такой же транзитный аргумент, как мастер-пароль. Набранные
+   * цифры живут в локальном состоянии экрана блокировки и стираются сразу.
+   */
+  unlockWithPin(pin: string): Promise<UnlockWithPinResponse>
+
   /** Заблокировать хранилище. Ядро сбрасывает расшифрованные данные. */
   lock(): Promise<void>
+
+  /**
+   * Перешифровать хранилище под новый мастер-пароль (F13).
+   *
+   * Оба пароля проходят транзитом; перешифровка целиком в ядре. Хранилище
+   * остаётся открытым — старый пароль только что подтвердили.
+   */
+  changeMasterPassword(
+    currentMasterPassword: string,
+    newMasterPassword: string,
+  ): Promise<ChangeMasterPasswordResponse>
 
   /** Метаданные записей. Секретов в ответе нет — по контракту (§4.1). */
   listRecords(request?: ListRecordsRequest): Promise<RecordMeta[]>
@@ -119,6 +146,18 @@ export interface CoreClient {
 
   /** Сохранить правила «один раз и навсегда». Ядро возвращает их после проверки. */
   saveGeneratorProfile(profile: GeneratorProfile): Promise<GeneratorProfile>
+
+  /**
+   * Таймауты замка, буфера обмена и показа секрета (F13).
+   *
+   * Автоблокировку исполняет ЯДРО и присылает `locked`; фронт эти числа только
+   * показывает и применяет к своим таймерам буфера и авто-скрытия. Своего
+   * таймера бездействия во фронте нет — см. `SecuritySettings` в контракте.
+   */
+  getSecuritySettings(): Promise<SecuritySettings>
+
+  /** Изменить одну или несколько настроек. Ядро возвращает результат проверки. */
+  saveSecuritySettings(patch: SecuritySettingsPatch): Promise<SecuritySettings>
 
   /**
    * Попросить `count` вариантов пароля (§6.1).
@@ -267,9 +306,15 @@ export function createTauriCoreClient(): CoreClient {
     getVaultStatus: () => call('getVaultStatus', {}),
     initVault: (masterPassword) => call('initVault', { master_password: masterPassword }),
     unlock: (masterPassword) => call('unlock', { master_password: masterPassword }),
+    unlockWithPin: (pin) => call('unlockWithPin', { pin }),
     lock: async () => {
       await call('lock', {})
     },
+    changeMasterPassword: (currentMasterPassword, newMasterPassword) =>
+      call('changeMasterPassword', {
+        current_master_password: currentMasterPassword,
+        new_master_password: newMasterPassword,
+      }),
     listRecords: (request = {}) => call('listRecords', request),
     getSecret: (recordId) => call('getSecret', { record_id: recordId }),
     createRecord: (draft) => call('createRecord', { draft }),
@@ -283,6 +328,8 @@ export function createTauriCoreClient(): CoreClient {
     deleteVault: (vaultId) => call('deleteVault', { vault_id: vaultId }),
     getGeneratorProfile: () => call('getGeneratorProfile', {}),
     saveGeneratorProfile: (profile) => call('saveGeneratorProfile', { profile }),
+    getSecuritySettings: () => call('getSecuritySettings', {}),
+    saveSecuritySettings: (patch) => call('saveSecuritySettings', { patch }),
     generatePasswords: (count, profile) => call('generatePasswords', { count, profile }),
     getPairingPayload: () => call('getPairingPayload', {}),
     submitPairedKey: (payload) => call('submitPairedKey', { payload }),

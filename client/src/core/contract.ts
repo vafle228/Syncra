@@ -164,6 +164,33 @@ export interface CoreErrorPayload {
 // ---------------------------------------------------------------------------
 
 /**
+ * Длина PIN. Ступень одна: выбор «4 или 6» — это вопрос политики ядра, а не
+ * настройка на экране, и разной длины на разных устройствах быть не должно.
+ */
+export const PIN_LENGTH = 4
+
+/**
+ * Заведён ли на этом устройстве быстрый вход по PIN (F13, экран блокировки).
+ *
+ * PIN — НЕ второй мастер-пароль. Настоящий ключ шифрования один, и PIN только
+ * отпирает его локальное представление на ЭТОМ устройстве: он не уезжает на
+ * другие устройства, не открывает бэкап и не подходит вместо мастер-пароля
+ * там, где тот спрашивают отдельно (экспорт, смена пароля).
+ *
+ * Из этого следует, что состояние PIN — свойство устройства, а не хранилища, и
+ * приезжает оно вместе со статусом замка: экран блокировки должен решить, что
+ * рисовать, до первой отрисовки, а не после второго запроса.
+ */
+export interface PinStatus {
+  enrolled: boolean
+  /**
+   * Сколько попыток осталось, прежде чем ядро отключит быстрый вход и
+   * потребует мастер-пароль. `null` — PIN не заведён, считать нечего.
+   */
+  attempts_left: number | null
+}
+
+/**
  * Состояние хранилища (F3). Запрашивается ДО всего остального: по нему UI
  * решает, показать онбординг, экран входа или сам продукт.
  * Команда работает и на заблокированном, и на неинициализированном хранилище.
@@ -174,6 +201,8 @@ export interface VaultStatus {
   unlocked: boolean
   /** `null`, пока хранилище заблокировано. */
   unlocked_at: IsoDateTime | null
+  /** Быстрый вход на этом устройстве. См. `PinStatus`. */
+  pin: PinStatus
 }
 
 export type GetVaultStatusRequest = Record<string, never>
@@ -209,6 +238,52 @@ export interface UnlockRequest {
 
 export interface UnlockResponse {
   unlocked_at: IsoDateTime
+}
+
+/** Быстрый вход по PIN. Работает только там, где `VaultStatus.pin.enrolled`. */
+export interface UnlockWithPinRequest {
+  pin: string
+}
+
+/**
+ * Итог попытки войти по PIN.
+ *
+ * Форма — «ок или не ок», а не исключение: ошибиться на четырёх кнопках это
+ * ОЖИДАЕМЫЙ исход, опечатка, а не сбой. Ошибкой отвечает только неверная форма
+ * запроса (`VALIDATION`, если это не `PIN_LENGTH` цифр) — там виноват UI.
+ * Тот же приём, что у `restore_backup` с его `null`.
+ *
+ * `pin_disabled` — попытки кончились: ядро выключило быстрый вход, и дальше
+ * только мастер-пароль. UI обязан сказать об этом словами, а не просто
+ * перестать показывать клавиатуру.
+ */
+export type UnlockWithPinResponse =
+  | { ok: true; unlocked_at: IsoDateTime }
+  | { ok: false; attempts_left: number; pin_disabled: boolean }
+
+/**
+ * Смена мастер-пароля (F13, «Настройки → Безопасность»).
+ *
+ * Старый пароль обязателен, даже если хранилище уже открыто: перешифровать
+ * хранилище — не то же самое, что им пользоваться, и второе не даёт права на
+ * первое (то же правило, что у экспорта).
+ *
+ * Оба пароля идут ТРАНЗИТОМ: перешифровка целиком в ядре, во фронте от них не
+ * остаётся ничего — ни в сторе, ни в замыкании дольше вызова.
+ */
+export interface ChangeMasterPasswordRequest {
+  current_master_password: string
+  new_master_password: string
+}
+
+export interface ChangeMasterPasswordResponse {
+  changed_at: IsoDateTime
+  /**
+   * Сколько доверенных устройств спросят новый пароль при следующей встрече в
+   * сети. Число из ядра: только оно знает список устройств, а UI об этом
+   * обязан предупредить ДО нажатия.
+   */
+  devices_to_update: number
 }
 
 export interface ListRecordsRequest {
@@ -417,6 +492,76 @@ export interface GeneratePasswordsResponse {
    */
   entropy_bits: number
 }
+
+// ---------------------------------------------------------------------------
+// Настройки безопасности (F13, «Настройки → Безопасность»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Три таймаута, между которыми выбирает пользователь.
+ *
+ * Живут в ЯДРЕ, а не в `localStorage`, по двум причинам. Первая: автоблокировку
+ * ИСПОЛНЯЕТ ядро — оно считает бездействие и присылает `locked` с
+ * `reason: 'timeout'`. Вторая: настройка, от которой зависит, когда закроется
+ * хранилище, — это часть его защиты, а не оформление окна, и переживать
+ * переустановку фронта она должна вместе с хранилищем.
+ *
+ * Из этого следует правило для UI: никакого своего таймера автоблокировки во
+ * фронте нет и быть не должно. Два таймера — это две правды о том, заперто ли
+ * хранилище, и расходиться они начнут в первый же день.
+ *
+ * Всё в миллисекундах: на проводе — числа, а «5 мин» и «20 с» это подписи,
+ * которые рисует UI.
+ */
+export interface SecuritySettings {
+  /** Через сколько бездействия ядро закрывает хранилище само. */
+  autolock_ms: number
+  /** Через сколько скопированный пароль исчезает из буфера обмена. */
+  clipboard_clear_ms: number
+  /** Через сколько открытый на экране секрет прячется обратно. */
+  secret_reveal_ms: number
+}
+
+/**
+ * Ступени из макета — ровно те, между которыми выбирает пользователь, и ничего
+ * между ними. Свободный ввод здесь был бы ложной свободой: «автоблокировка
+ * через 3 секунды» — не настройка, а способ сломать себе работу.
+ *
+ * Ядро проверяет значение повторно и отвечает `VALIDATION` на всё остальное.
+ */
+export const AUTOLOCK_OPTIONS_MS = [60_000, 300_000, 1_800_000] as const
+export const CLIPBOARD_CLEAR_OPTIONS_MS = [10_000, 20_000, 60_000] as const
+export const SECRET_REVEAL_OPTIONS_MS = [15_000, 30_000, 120_000] as const
+
+/**
+ * Умолчания — средняя ступень каждой тройки.
+ *
+ * Это те же числа, которыми UI пользовался до появления настроек, и это
+ * намеренно: пока ядро не ответило, действуют они, поэтому «настройки не
+ * успели загрузиться» выглядит как обычная работа, а не как другое поведение.
+ */
+export const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
+  autolock_ms: 300_000,
+  clipboard_clear_ms: 20_000,
+  secret_reveal_ms: 30_000,
+}
+
+export type GetSecuritySettingsRequest = Record<string, never>
+export type GetSecuritySettingsResponse = SecuritySettings
+
+/** Отсутствующее поле означает «не трогать»: экран меняет по одной настройке. */
+export interface SecuritySettingsPatch {
+  autolock_ms?: number
+  clipboard_clear_ms?: number
+  secret_reveal_ms?: number
+}
+
+export interface SaveSecuritySettingsRequest {
+  patch: SecuritySettingsPatch
+}
+
+/** Ядро возвращает настройки после проверки — показываем их, а не свою копию. */
+export type SaveSecuritySettingsResponse = SecuritySettings
 
 // ---------------------------------------------------------------------------
 // Сопряжение устройств (F8, §2.2)
@@ -945,7 +1090,18 @@ export interface CommandMap {
   getVaultStatus: { request: GetVaultStatusRequest; response: GetVaultStatusResponse }
   initVault: { request: InitVaultRequest; response: InitVaultResponse }
   unlock: { request: UnlockRequest; response: UnlockResponse }
+  /** Быстрый вход на этом устройстве. Неверный PIN — не ошибка, а `ok: false`. */
+  unlockWithPin: { request: UnlockWithPinRequest; response: UnlockWithPinResponse }
   lock: { request: Record<string, never>; response: null }
+  /**
+   * Перешифровать хранилище под новый мастер-пароль. Хранилище остаётся
+   * ОТКРЫТЫМ: старый пароль только что подтвердили, и запирать за это — значит
+   * наказывать за успех.
+   */
+  changeMasterPassword: {
+    request: ChangeMasterPasswordRequest
+    response: ChangeMasterPasswordResponse
+  }
   listRecords: { request: ListRecordsRequest; response: ListRecordsResponse }
   getSecret: { request: GetSecretRequest; response: GetSecretResponse }
   createRecord: { request: CreateRecordRequest; response: RecordMeta }
@@ -974,6 +1130,15 @@ export interface CommandMap {
   saveGeneratorProfile: {
     request: SaveGeneratorProfileRequest
     response: SaveGeneratorProfileResponse
+  }
+  /** Таймауты замка, буфера и показа секрета (F13). Исполняет их ядро. */
+  getSecuritySettings: {
+    request: GetSecuritySettingsRequest
+    response: GetSecuritySettingsResponse
+  }
+  saveSecuritySettings: {
+    request: SaveSecuritySettingsRequest
+    response: SaveSecuritySettingsResponse
   }
   generatePasswords: { request: GeneratePasswordsRequest; response: GeneratePasswordsResponse }
   getPairingPayload: { request: GetPairingPayloadRequest; response: GetPairingPayloadResponse }
@@ -1027,7 +1192,9 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   getVaultStatus: 'get_vault_status',
   initVault: 'init_vault',
   unlock: 'unlock',
+  unlockWithPin: 'unlock_with_pin',
   lock: 'lock',
+  changeMasterPassword: 'change_master_password',
   listRecords: 'list_records',
   getSecret: 'get_secret',
   createRecord: 'create_record',
@@ -1041,6 +1208,8 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   deleteVault: 'delete_vault',
   getGeneratorProfile: 'get_generator_profile',
   saveGeneratorProfile: 'save_generator_profile',
+  getSecuritySettings: 'get_security_settings',
+  saveSecuritySettings: 'save_security_settings',
   generatePasswords: 'generate_passwords',
   getPairingPayload: 'get_pairing_payload',
   submitPairedKey: 'submit_paired_key',
