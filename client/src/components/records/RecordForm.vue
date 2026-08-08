@@ -338,26 +338,51 @@ async function save(): Promise<void> {
         />
 
         <div class="form__urls">
-          <span class="form__label">Адреса сайта</span>
-          <div v-for="(url, index) in urls" :key="index" class="form__url-row">
-            <SyInput
-              class="form__url-input"
-              :model-value="url"
-              type="url"
-              placeholder="https://github.com"
-              :error="urlError(url)"
-              @update:model-value="setUrl(index, $event)"
-              @submit="save"
-            />
-            <SyButton
-              v-if="urls.length > 1 || url !== ''"
-              size="sm"
-              class="form__url-remove"
-              @click="removeUrl(index)"
-              >Убрать</SyButton
-            >
+          <div class="form__urls-head">
+            <span class="form__label">Адреса сайта</span>
+            <span class="form__urls-hint">автозаполнение сработает на любом из них</span>
+            <button type="button" class="form__add" @click="addUrl">Добавить адрес</button>
           </div>
-          <button type="button" class="form__add" @click="addUrl">Добавить ещё адрес</button>
+
+          <!--
+            Сетка, а не столбец: адресов у одной записи бывает пять, и пять
+            строк во всю ширину вытеснили бы с экрана пароль. Список сам
+            прокручивается, чтобы форма не росла бесконечно.
+          -->
+          <div class="form__url-grid">
+            <div v-for="(url, index) in urls" :key="index" class="form__url-row">
+              <span class="form__url-num" aria-hidden="true">{{ index + 1 }}</span>
+              <SyInput
+                class="form__url-input"
+                :model-value="url"
+                type="url"
+                :label="`Адрес ${index + 1}`"
+                label-hidden
+                placeholder="https://github.com"
+                :error="urlError(url)"
+                @update:model-value="setUrl(index, $event)"
+                @submit="save"
+              />
+              <button
+                v-if="urls.length > 1 || url !== ''"
+                type="button"
+                class="form__url-remove"
+                :title="`Убрать адрес ${index + 1}`"
+                :aria-label="`Убрать адрес ${index + 1}`"
+                @click="removeUrl(index)"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <p v-if="cleanUrls().length === 0" class="form__urls-empty">
+            Без адреса запись сохранится, но автозаполнение не сработает
+          </p>
+
+          <p class="form__note">
+            Первый адрес основной — он виден в карточке, остальные складываются в компактные чипы.
+          </p>
         </div>
 
         <SyInput
@@ -564,10 +589,45 @@ async function save(): Promise<void> {
   min-width: 0;
 }
 
+.form__urls-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sy-space-4);
+  min-width: 0;
+}
+
+.form__urls-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--sy-text-3);
+}
+
+.form__url-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--sy-space-3);
+  /* Пять адресов не должны выдавливать пароль за нижний край формы. */
+  max-height: 190px;
+  overflow: auto;
+  padding: 1px;
+}
+
 .form__url-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--sy-space-3);
+  min-width: 0;
+}
+
+.form__url-num {
+  flex: none;
+  font-family: var(--sy-font-mono);
+  font-size: 10.5px;
+  color: var(--sy-text-3);
 }
 
 .form__url-input {
@@ -577,22 +637,65 @@ async function save(): Promise<void> {
 
 .form__url-remove {
   flex: none;
-  margin-top: 0;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--sy-border-strong);
+  border-radius: var(--sy-radius-xs);
+  background: var(--sy-bg-1);
+  color: var(--sy-text-3);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    border-color var(--sy-transition),
+    color var(--sy-transition);
+}
+
+.form__url-remove:hover {
+  border-color: var(--sy-danger);
+  color: var(--sy-danger);
+}
+
+.form__url-remove:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+.form__urls-empty {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 var(--sy-space-5);
+  border: 1px dashed var(--sy-border-strong);
+  border-radius: var(--sy-radius-sm);
+  font-size: 12.5px;
+  color: var(--sy-text-3);
 }
 
 .form__add {
-  align-self: flex-start;
-  border: none;
-  background: none;
-  padding: 0;
-  color: var(--sy-accent);
+  flex: none;
+  height: 30px;
+  padding: 0 var(--sy-space-4);
+  border: 1px dashed var(--sy-border-strong);
+  border-radius: var(--sy-radius-xs);
+  background: transparent;
+  color: var(--sy-text-2);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   cursor: pointer;
+  transition:
+    border-color var(--sy-transition),
+    color var(--sy-transition);
 }
 
 .form__add:hover {
-  text-decoration: underline;
+  border-color: var(--sy-accent);
+  color: var(--sy-text);
+}
+
+.form__add:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
 }
 
 .form__secrets {

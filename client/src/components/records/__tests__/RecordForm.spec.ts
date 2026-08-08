@@ -44,7 +44,8 @@ async function type(input: ReturnType<Form['find']>, value: string) {
 
 /** Найти поле по подписи и вписать значение. */
 async function fill(wrapper: Form, label: string, value: string) {
-  // Адреса — список полей без собственных подписей у каждого input.
+  // Адреса — список: подписи у полей есть, но скрытые («Адрес 1», «Адрес 2»),
+  // поэтому ищем по позиции, а не по тексту.
   if (label === 'Адреса сайта') {
     await type(wrapper.find('.form__url-input input'), value)
     return
@@ -424,6 +425,73 @@ describe('RecordForm · редактирование (ЗАКОН №1)', () => {
     await flushPromises()
 
     expect(JSON.stringify(list.$state)).not.toContain('mock-github-pw-3')
+
+    wrapper.unmount()
+  })
+})
+
+/** Форма создания на загруженном списке — как её монтирует `VaultView`. */
+async function mountCreate() {
+  await useRecordsStore().load()
+  const wrapper = mount(RecordForm)
+  await flushPromises()
+  return wrapper
+}
+
+describe('RecordForm · адреса (F13)', () => {
+  it('каждое поле подписано, даже когда подпись не видна', async () => {
+    // «Текстовое поле» без имени — это то, что услышит человек с экранным
+    // диктором. Номер в сетке видит только зрячий.
+    const wrapper = await mountCreate()
+
+    const first = wrapper.find('.form__url-row .sy-input__label')
+    expect(first.text()).toBe('Адрес 1')
+    expect(first.classes()).toContain('sy-input__label--hidden')
+
+    wrapper.unmount()
+  })
+
+  it('добавляет и убирает адреса, сохраняя порядок', async () => {
+    const wrapper = await mountCreate()
+
+    await wrapper.find('.form__add').trigger('click')
+    await wrapper.find('.form__add').trigger('click')
+    expect(wrapper.findAll('.form__url-row')).toHaveLength(3)
+
+    const inputs = wrapper.findAll('.form__url-input input')
+    await type(inputs[0]!, 'a.example')
+    await type(inputs[1]!, 'b.example')
+    await type(inputs[2]!, 'c.example')
+
+    // Убираем средний — первый и последний должны остаться на своих местах.
+    await wrapper.findAll('.form__url-remove')[1]!.trigger('click')
+
+    const left = wrapper
+      .findAll<HTMLInputElement>('.form__url-input input')
+      .map((node) => node.element.value)
+    expect(left).toEqual(['a.example', 'c.example'])
+
+    wrapper.unmount()
+  })
+
+  it('предупреждает про автозаполнение, пока адреса нет', async () => {
+    const wrapper = await mountCreate()
+
+    expect(wrapper.find('.form__urls-empty').text()).toContain('автозаполнение не сработает')
+
+    await type(wrapper.find('.form__url-input input'), 'https://figma.com')
+
+    expect(wrapper.find('.form__urls-empty').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('объясняет, что станет с адресами в карточке', async () => {
+    // Обещание проверяемое: карточка правда показывает первый строкой,
+    // остальные чипами (см. `RecordCard.spec`).
+    const wrapper = await mountCreate()
+
+    expect(wrapper.find('.form__urls .form__note').text()).toContain('Первый адрес основной')
 
     wrapper.unmount()
   })

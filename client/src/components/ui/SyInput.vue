@@ -27,6 +27,14 @@ const props = withDefaults(
     autofocus?: boolean
     /** Показывать кнопку «показать/скрыть» у пароля. */
     revealable?: boolean
+    /**
+     * Спрятать метку визуально, оставив её для скринридера.
+     *
+     * Нужно там, где подпись очевидна из соседства (пронумерованный список
+     * адресов), но поле всё равно обязано быть подписанным: «текстовое поле» без
+     * имени — это то, что слышит человек с экранным диктором.
+     */
+    labelHidden?: boolean
   }>(),
   {
     type: 'text',
@@ -34,6 +42,7 @@ const props = withDefaults(
     disabled: false,
     autofocus: false,
     revealable: true,
+    labelHidden: false,
   },
 )
 
@@ -59,7 +68,13 @@ function onInput(event: Event): void {
 
 <template>
   <div class="sy-input" :class="{ 'sy-input--error': Boolean(error) }">
-    <label v-if="label" class="sy-input__label" :for="inputId">{{ label }}</label>
+    <label
+      v-if="label"
+      class="sy-input__label"
+      :class="{ 'sy-input__label--hidden': labelHidden }"
+      :for="inputId"
+      >{{ label }}</label
+    >
 
     <div class="sy-input__box">
       <input
@@ -108,6 +123,19 @@ function onInput(event: Event): void {
   letter-spacing: var(--sy-tracking-label);
   text-transform: uppercase;
   color: var(--sy-text-3);
+}
+
+/*
+ * Скрыта для глаза, но не для скринридера: `display: none` убрал бы её и из
+ * дерева доступности, оставив поле без имени.
+ */
+.sy-input__label--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .sy-input--error .sy-input__label {
