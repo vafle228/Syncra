@@ -3,7 +3,14 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, MOCK_VAULT_WORK, type MockCoreClient } from '@/core/mock'
+import {
+  createMockCoreClient,
+  MOCK_DEVICE_PHONE,
+  MOCK_RECORD_GITHUB,
+  MOCK_VAULT_WORK,
+  type MockCoreClient,
+} from '@/core/mock'
+import { useConflictsStore } from '@/stores/useConflictsStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useVaultStore } from '@/stores/useVaultStore'
@@ -94,8 +101,15 @@ describe('HomeView · список (сквозной путь UI → IPC → м�
 
   it('показывает сообщение ядра вместо списка, если ядро вернуло ошибку', async () => {
     const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
-    core.control.failNext('INTERNAL', 'Ядро недоступно.')
     const wrapper = await mountHome(core)
+
+    // `failNext` роняет БЛИЖАЙШУЮ команду, а при открытии экрана их несколько
+    // (записи, секции, конфликты, статус синхронизации). Поэтому роняем именно
+    // перезагрузку списка — проверяется путь «ядро отказало → вместо списка
+    // его сообщение», а не то, какая команда уходит первой.
+    core.control.failNext('INTERNAL', 'Ядро недоступно.')
+    await useRecordsStore().load()
+    await flushPromises()
 
     expect(wrapper.text()).toContain('Ядро недоступно.')
     expect(wrapper.find('.home__list').exists()).toBe(false)
@@ -112,6 +126,49 @@ describe('HomeView · список (сквозной путь UI → IPC → м�
 
     expect(wrapper.text()).toContain('Пока ни одного пароля')
     expect(wrapper.find('.home__list').exists()).toBe(false)
+  })
+})
+
+describe('HomeView · синхронизация и конфликты (F10, F11)', () => {
+  it('показывает индикатор в шапке — по состоянию из ядра', async () => {
+    const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
+    const wrapper = await mountHome(core)
+
+    // В сиде есть конфликт — он важнее всего остального (§ «Состояния»).
+    expect(wrapper.find('.sync-chip').text()).toBe('1 конфликт')
+
+    await useConflictsStore().resolve(MOCK_RECORD_GITHUB, 'local')
+    await flushPromises()
+    // Конфликта больше нет, но выбор ещё не уехал.
+    expect(wrapper.find('.sync-chip').text()).toBe('1 изменение ждёт')
+
+    core.control.peerFound(MOCK_DEVICE_PHONE)
+    core.control.startSync(MOCK_DEVICE_PHONE)
+    core.control.finishSync()
+    await flushPromises()
+    expect(wrapper.find('.sync-chip').text()).toBe('Синхронизировано')
+  })
+
+  it('помечает в списке запись, из-за которой спор, и ту, что ещё не уехала', async () => {
+    const core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
+    const wrapper = await mountHome(core)
+
+    const conflictRow = wrapper
+      .findAll('.home__group-list li')
+      .find((row) => row.text().includes('GitHub'))
+    expect(conflictRow?.find('.sy-list-item__status--conflict').text()).toContain('конфликт версий')
+
+    // Правка другой записи ждёт отправки — и это видно на её строке.
+    const steam = useRecordsStore().records.find((record) => record.service_name === 'Steam')!
+    await useRecordsStore().update(steam.record_id, { login: 'demo_player_2' })
+    await flushPromises()
+
+    const pendingRow = wrapper
+      .findAll('.home__group-list li')
+      .find((row) => row.text().includes('Steam'))
+    expect(pendingRow?.find('.sy-list-item__status--pending').text()).toContain(
+      'ждёт синхронизации',
+    )
   })
 })
 

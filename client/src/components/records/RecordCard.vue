@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import ConflictBanner from '@/components/conflicts/ConflictBanner.vue'
+import ConflictDialog from '@/components/conflicts/ConflictDialog.vue'
 import {
   iconHue,
   iconInitials,
@@ -13,8 +15,10 @@ import {
 import { useRecordSecrets } from '@/composables/useRecordSecrets'
 import type { RecordMeta } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
+import { useConflictsStore } from '@/stores/useConflictsStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
+import { useSyncStore } from '@/stores/useSyncStore'
 import { useToastStore } from '@/stores/useToastStore'
 
 import { formatDate, passwordAgeWarning } from './recordFormat'
@@ -37,11 +41,27 @@ const emit = defineEmits<{ edit: [] }>()
 
 const list = useRecordsStore()
 const sections = useSectionsStore()
+const conflicts = useConflictsStore()
+const sync = useSyncStore()
 const toast = useToastStore()
 
 onMounted(() => {
   void sections.ensure()
+  void conflicts.ensure()
+  // Подвал говорит, уехала ли запись; дальше состояние приезжает событиями.
+  void sync.ensure()
 })
+
+/**
+ * Конфликт версий этой записи (F11). Полоса стоит НАД карточкой: пока выбор не
+ * сделан, показанный ниже пароль — только одна из двух правд, и узнать об этом
+ * человек должен раньше, чем поверит увиденному.
+ */
+const conflict = computed(() => conflicts.byRecord(props.record.record_id))
+const resolving = ref(false)
+
+/** Изменение сделано здесь и ещё не уехало (F10). */
+const isPending = computed(() => sync.isPending(props.record.record_id))
 
 /**
  * Секция записи (F7). Синхронизация настраивается по секциям (§4.2), поэтому
@@ -130,6 +150,12 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
     </header>
 
     <div class="card__body">
+      <ConflictBanner
+        v-if="conflict"
+        :device-name="conflict.remote.device_name"
+        @open="resolving = true"
+      />
+
       <section class="card__block">
         <div class="card__block-head">
           <span class="card__block-title">Метаданные · видны сразу</span>
@@ -269,9 +295,11 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
     <footer class="card__foot">
       <span class="card__foot-note">
         {{
-          section === null || section.sync
-            ? 'Хранится на этом устройстве · синхронизация — в следующих задачах'
-            : `Секция «${section.name}» локальная · копии этой записи на других устройствах нет`
+          section !== null && !section.sync
+            ? `Секция «${section.name}» локальная · копии этой записи на других устройствах нет`
+            : isPending
+              ? 'Изменение сохранено здесь и уедет, когда рядом окажется другое устройство'
+              : 'Хранится на этом устройстве · копии есть на сопряжённых устройствах'
         }}
       </span>
       <SyButton variant="danger" size="sm" @click="askDelete">Удалить запись</SyButton>
@@ -305,6 +333,8 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
         </SyButton>
       </template>
     </SyModal>
+
+    <ConflictDialog v-if="conflict && resolving" :conflict="conflict" @close="resolving = false" />
   </article>
 </template>
 

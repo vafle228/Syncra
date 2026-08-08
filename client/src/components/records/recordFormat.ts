@@ -13,6 +13,23 @@ export function formatDate(value: IsoDateTime): string {
   return Number.isNaN(date.getTime()) ? '—' : DATE.format(date)
 }
 
+const DATE_TIME = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+
+/**
+ * Дата со временем — там, где важен ПОРЯДОК правок, а не день. При разрешении
+ * конфликта (F11, §5.5) обе версии часто сделаны в один день, и «14 мар» в двух
+ * колонках не отвечает на вопрос «какая позже».
+ */
+export function formatDateTime(value: IsoDateTime): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : DATE_TIME.format(date)
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export function daysSince(value: IsoDateTime, now: Date = new Date()): number | null {

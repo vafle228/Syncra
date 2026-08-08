@@ -1,4 +1,5 @@
 import type { Device, RecordMeta, RecordSecrets, Vault } from '../contract'
+import type { MockConflictEntry } from './conflicts'
 import { createThisDevice } from './pairing'
 
 /**
@@ -11,6 +12,18 @@ import { createThisDevice } from './pairing'
 export interface MockSeedEntry {
   meta: Omit<RecordMeta, 'has_notes' | 'has_totp'>
   secrets: RecordSecrets
+}
+
+/**
+ * Выводит метаданные-флаги из самих секретов. Единственный источник правды о
+ * том, заполнены ли `notes` / `totp_secret`: настоящее ядро тоже считает их у
+ * себя, а не принимает от UI.
+ */
+export function secretFlags(secrets: RecordSecrets): Pick<RecordMeta, 'has_notes' | 'has_totp'> {
+  return {
+    has_notes: (secrets.notes ?? '').trim() !== '',
+    has_totp: (secrets.totp_secret ?? '').trim() !== '',
+  }
 }
 
 /**
@@ -109,6 +122,51 @@ export function createDeviceSeed(now: Date): Device[] {
 }
 
 /**
+ * Запись, на которой показывается конфликт версий (F11). Вынесена в константу,
+ * потому что на неё ссылаются и сид записей, и сид конфликтов, и тесты.
+ */
+export const MOCK_RECORD_GITHUB = '6f1c2e14-4c1e-4a3f-9b4a-1f9f0c7a1003'
+
+/**
+ * Конфликт версий в фейк-хранилище (F11, §5.5).
+ *
+ * Он есть в сиде с самого начала: расхождение рождается при обмене с другим
+ * устройством (§5.3), а второго устройства в процессе разработки не бывает —
+ * без сида экран разрешения конфликта невозможно было бы ни увидеть, ни
+ * проверить руками.
+ *
+ * Номер версии у приехавшей стороны СОВПАДАЕТ с местным, и это не небрежность:
+ * конфликт растёт из общего предка, обе стороны честно досчитали 6 → 7. Ровно
+ * поэтому `resolve_conflict` принимает сторону, а не номер версии.
+ */
+export function createConflictSeed(): MockConflictEntry[] {
+  return [
+    {
+      record_id: MOCK_RECORD_GITHUB,
+      raised_at: '2026-03-02T08:13:05.000Z',
+      device_name: 'iPhone 14',
+      version: 7,
+      // Позже местной правки (28.02) — экран показывает, какая версия свежее.
+      updated_at: '2026-03-02T08:12:40.000Z',
+      meta: {
+        vault_id: MOCK_VAULT_PERSONAL,
+        service_name: 'GitHub',
+        // Адрес добавлен на телефоне: расходятся не только секреты.
+        urls: ['github.com', 'gist.github.com'],
+        login: 'demo-user',
+        account_label: null,
+      },
+      secrets: {
+        password: 'mock-github-pw-phone',
+        notes: 'Recovery codes: mock-4444 mock-5555 mock-6666',
+        // Ключ TOTP одинаковый — в diff он попасть не должен.
+        totp_secret: 'MOCKTOTPSECRET3',
+      },
+    },
+  ]
+}
+
+/**
  * Сид-данные для разработки.
  *
  * Все «секреты» ниже — заведомо фальшивые строки с префиксом `mock-`.
@@ -161,7 +219,7 @@ export function createSeed(): MockSeedEntry[] {
     },
     {
       meta: {
-        record_id: '6f1c2e14-4c1e-4a3f-9b4a-1f9f0c7a1003',
+        record_id: MOCK_RECORD_GITHUB,
         vault_id: MOCK_VAULT_PERSONAL,
         service_name: 'GitHub',
         urls: ['github.com'],

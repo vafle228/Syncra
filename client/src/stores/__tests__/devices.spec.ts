@@ -106,6 +106,35 @@ describe('отзыв доступа (§2.3)', () => {
   })
 })
 
+describe('события синхронизации (F10)', () => {
+  it('двигает «был рядом» по событию, не перечитывая список', async () => {
+    const devices = useDevicesStore()
+    await devices.load()
+    const before = devices.devices.find((device) => device.device_id === MOCK_DEVICE_LAPTOP)
+
+    core.control.peerFound(MOCK_DEVICE_LAPTOP)
+
+    const after = devices.devices.find((device) => device.device_id === MOCK_DEVICE_LAPTOP)
+    expect(after?.last_seen_at).not.toBe(before?.last_seen_at)
+    expect(devices.devices).toHaveLength(before === undefined ? 0 : 3)
+  })
+
+  it('узнаёт о сопряжении, которое подтвердили на втором устройстве', async () => {
+    const devices = useDevicesStore()
+    await devices.load()
+    const before = devices.devices.length
+
+    const result = core.control.pairedByPeer('Pixel 8')
+
+    expect(devices.justPaired?.device.name).toBe('Pixel 8')
+    expect(devices.justPaired?.records_transferred).toBe(result.records_transferred)
+    expect(devices.devices).toHaveLength(before + 1)
+
+    devices.forgetPaired()
+    expect(devices.justPaired).toBeNull()
+  })
+})
+
 describe('замок', () => {
   it('очищает список устройств по событию блокировки', async () => {
     const devices = useDevicesStore()

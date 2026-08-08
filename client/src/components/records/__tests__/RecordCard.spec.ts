@@ -5,6 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { RecordMeta } from '@/core/contract'
 import { setCoreClient } from '@/core/ipc'
 import { createMockCoreClient, MOCK_VAULT_WORK, type MockCoreClient } from '@/core/mock'
+import { useConflictsStore } from '@/stores/useConflictsStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import RecordCard from '../RecordCard.vue'
 
@@ -235,6 +236,56 @@ describe('RecordCard · удаление', () => {
     expect(document.body.querySelector('.sy-modal__dialog')?.textContent).toContain(
       'Хранилище занято.',
     )
+
+    wrapper.unmount()
+  })
+})
+
+describe('конфликт версий (F11)', () => {
+  it('предупреждает о споре над карточкой и открывает обе версии', async () => {
+    const { wrapper } = await mountCard()
+
+    const banner = wrapper.find('.conflict-banner')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Эту запись правили на двух устройствах')
+    expect(banner.text()).toContain('iPhone 14')
+
+    await banner.find('.conflict-banner__action').trigger('click')
+    await flushPromises()
+
+    expect(document.body.querySelector('.sy-modal__dialog')?.textContent).toContain(
+      'Две версии одной записи',
+    )
+
+    wrapper.unmount()
+  })
+
+  it('у записи без спора полосы нет', async () => {
+    const { wrapper } = await mountCard(STEAM)
+
+    expect(wrapper.find('.conflict-banner').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('после выбора версии полоса уходит вместе с конфликтом', async () => {
+    const { wrapper } = await mountCard()
+    await useConflictsStore().resolve(GITHUB, 'local')
+    await flushPromises()
+
+    expect(wrapper.find('.conflict-banner').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+})
+
+describe('подвал карточки (F10)', () => {
+  it('говорит, что изменение ещё не уехало', async () => {
+    const { wrapper, record } = await mountCard(STEAM)
+    await useRecordsStore().update(record.record_id, { login: 'demo_player_2' })
+    await flushPromises()
+
+    expect(wrapper.find('.card__foot-note').text()).toContain('уедет, когда рядом')
 
     wrapper.unmount()
   })

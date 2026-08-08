@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import TrustedDevices from '@/components/devices/TrustedDevices.vue'
 import PairingQr from '@/components/pairing/PairingQr.vue'
 import PairingScanBox from '@/components/pairing/PairingScanBox.vue'
+import SyncIndicator from '@/components/sync/SyncIndicator.vue'
+import SyncPanel from '@/components/sync/SyncPanel.vue'
 import { SyButton, SyThemeToggle } from '@/components/ui'
 import { pluralize, RECORD_FORMS } from '@/composables/plural'
 import { formatManualCode, usePairingOffer, usePairingScan } from '@/composables/usePairing'
@@ -50,7 +52,30 @@ onMounted(() => {
   // Локальные секции никуда не уезжают (§4.2) — про это нужно сказать до того,
   // как человек решит, что на втором устройстве будет всё.
   void sections.ensure()
+  // Список нужен сразу: событие о сопряжении придёт в него же (F10).
+  void devices.ensure()
 })
+
+/**
+ * Второе устройство прочитало наш код и подтвердило сопряжение (обратная
+ * сторона F8, событие `device_paired`).
+ *
+ * Это ровно тот случай, когда человек смотрит на экран и ничего не нажимает:
+ * он держит код, а всё происходит на другом устройстве. Не сказать ему об этом
+ * значило бы оставить его гадать, сработало ли.
+ */
+watch(
+  () => devices.justPaired,
+  (result) => {
+    if (result === null) return
+    toast.push(
+      `«${result.device.name}» сопряжено · ${pluralize(result.records_transferred, RECORD_FORMS)} уехало`,
+      'success',
+    )
+    // Код своё отработал: показывать его дальше — приглашать третьего.
+    offer.forget()
+  },
+)
 
 function showCode(): void {
   mode.value = 'show'
@@ -123,7 +148,10 @@ function formatDuration(ms: number): string {
         <RouterLink class="devices__back" :to="{ name: 'home' }">← К паролям</RouterLink>
         <h1 class="devices__title">Устройства</h1>
       </div>
-      <SyThemeToggle />
+      <div class="devices__header-actions">
+        <SyncIndicator />
+        <SyThemeToggle />
+      </div>
     </header>
 
     <div class="devices__body">
@@ -327,6 +355,8 @@ function formatDuration(ms: number): string {
         </div>
       </div>
 
+      <SyncPanel />
+
       <TrustedDevices @repair="repair" />
     </div>
   </main>
@@ -354,6 +384,12 @@ function formatDuration(ms: number): string {
   display: flex;
   align-items: baseline;
   gap: var(--sy-space-6);
+}
+
+.devices__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sy-space-4);
 }
 
 .devices__back {

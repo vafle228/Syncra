@@ -3,7 +3,14 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, MOCK_DEVICE_LAPTOP, type MockCoreClient } from '@/core/mock'
+import {
+  createMockCoreClient,
+  MOCK_DEVICE_LAPTOP,
+  MOCK_RECORD_GITHUB,
+  type MockCoreClient,
+} from '@/core/mock'
+import { useConflictsStore } from '@/stores/useConflictsStore'
+import { useToastStore } from '@/stores/useToastStore'
 import DevicesView from '../DevicesView.vue'
 
 /**
@@ -383,6 +390,58 @@ describe('DevicesView · Закон №1', () => {
     await flushPromises()
 
     expect(wrapper.findAll('.trusted__card')).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+})
+
+describe('DevicesView · синхронизация (F10)', () => {
+  /** Кнопка, которой может и не быть: у «рядом никого» повтора нет намеренно. */
+  function maybeButton(wrapper: View, text: string) {
+    return wrapper.findAll('button').find((node) => node.text() === text)
+  }
+
+  it('объясняет состояние словами и предлагает повтор только после обрыва', async () => {
+    const wrapper = await mountDevices()
+
+    // Сид-конфликт заслоняет всё остальное: он единственный ждёт человека.
+    expect(wrapper.find('.sync-panel').text()).toContain('в двух местах')
+    expect(wrapper.find('.sync-panel__conflicts').exists()).toBe(true)
+
+    await core.resolveConflict(MOCK_RECORD_GITHUB, 'local')
+    await useConflictsStore().load()
+    await flushPromises()
+    // Выбор версии — тоже изменение, и оно ещё не уехало.
+    expect(wrapper.find('.sync-panel').text()).toContain('живёт только здесь')
+
+    core.control.finishSync()
+    await flushPromises()
+    // «Рядом никого» — это не ошибка: ни кнопки «Повторить», ни жёлтого.
+    expect(wrapper.find('.sync-panel').text()).toContain('и это нормально')
+    expect(maybeButton(wrapper, 'Попробовать сейчас')).toBeUndefined()
+
+    core.control.finishSync('Соединение оборвалось.')
+    await flushPromises()
+    expect(wrapper.find('.sync-panel').text()).toContain('Данные целы')
+
+    await maybeButton(wrapper, 'Попробовать сейчас')!.trigger('click')
+    await flushPromises()
+    expect((await core.getSyncStatus()).phase).toBe('searching')
+
+    wrapper.unmount()
+  })
+
+  it('сообщает тому, кто показывал код, что второе устройство сопряглось', async () => {
+    const wrapper = await mountDevices()
+    expect(wrapper.find('.qr__module').exists()).toBe(true)
+
+    core.control.pairedByPeer('Pixel 8')
+    await flushPromises()
+
+    // Код своё отработал: держать его на экране значит звать третьего.
+    expect(wrapper.find('.qr__module').exists()).toBe(false)
+    expect(useToastStore().toasts.some((toast) => toast.text.includes('Pixel 8'))).toBe(true)
+    expect(wrapper.findAll('.trusted__name').map((node) => node.text())).toContain('Pixel 8')
 
     wrapper.unmount()
   })

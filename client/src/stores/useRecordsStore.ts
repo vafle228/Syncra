@@ -142,6 +142,18 @@ export const useRecordsStore = defineStore('records', () => {
   }
 
   /**
+   * Положить в список версию записи, которую вернуло ядро на другой команде
+   * (сейчас — разрешение конфликта, F11). Команду НЕ шлёт: это отражение уже
+   * состоявшегося изменения, а не второе такое же.
+   */
+  function replace(record: RecordMeta): void {
+    if (!records.value.some((item) => item.record_id === record.record_id)) return
+    records.value = sortRecords(
+      records.value.map((item) => (item.record_id === record.record_id ? record : item)),
+    )
+  }
+
+  /**
    * Удалить запись. Ядро ставит tombstone (§5.4) и возвращает его метаданные;
    * в живом списке надгробию делать нечего — убираем строку.
    */
@@ -204,6 +216,7 @@ export const useRecordsStore = defineStore('records', () => {
     forgetVault,
     create,
     update,
+    replace,
     remove,
     setQuery,
     clearQuery,

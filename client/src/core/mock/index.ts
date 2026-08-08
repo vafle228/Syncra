@@ -1,4 +1,5 @@
 import type {
+  ConflictSide,
   CoreErrorCode,
   Device,
   DeviceId,
@@ -6,6 +7,7 @@ import type {
   EventName,
   GeneratePasswordsResponse,
   GeneratorProfile,
+  GetConflictSecretResponse,
   InitVaultResponse,
   IsoDateTime,
   ListRecordsRequest,
@@ -13,11 +15,14 @@ import type {
   PairingOffer,
   PairingResult,
   PairingSessionId,
+  RecordConflict,
   RecordDraft,
   RecordId,
   RecordMeta,
   RecordPatch,
   RecordSecrets,
+  SecretField,
+  SyncStatus,
   UnlockResponse,
   Vault,
   VaultColor,
@@ -28,6 +33,7 @@ import type {
 import { MASTER_PASSWORD_MIN_LENGTH, VAULT_COLORS, VAULT_NAME_MAX_LENGTH } from '../contract'
 import { CoreError } from '../errors'
 import type { CoreClient, Unsubscribe } from '../ipc'
+import { buildConflict, type MockConflictEntry } from './conflicts'
 import {
   cloneProfile,
   DEFAULT_GENERATOR_PROFILE,
@@ -43,25 +49,32 @@ import {
   normalizePairingInput,
   PAIRING_CODE_TTL_MS,
   peerDevice,
+  THIS_DEVICE_NAME,
   unreadableCode,
 } from './pairing'
 import {
+  createConflictSeed,
   createDeviceSeed,
   createInitialVault,
   createSeed,
   createVaultSeed,
   MOCK_MASTER_PASSWORD,
+  secretFlags,
   type MockSeedEntry,
 } from './seed'
+import { initialSyncStatus, SYNC_SIMULATION_STEP_MS } from './sync'
 
+export type { MockConflictEntry } from './conflicts'
 export {
   createVaultSeed,
   MOCK_DEVICE_LAPTOP,
   MOCK_DEVICE_PHONE,
   MOCK_MASTER_PASSWORD,
+  MOCK_RECORD_GITHUB,
   MOCK_VAULT_PERSONAL,
   MOCK_VAULT_WORK,
 } from './seed'
+export { SYNC_FAILURE_MESSAGE, SYNC_SIMULATION_STEP_MS } from './sync'
 export { DEFAULT_GENERATOR_PROFILE } from './generator'
 export {
   FINGERPRINT_WORD_COUNT,
@@ -90,6 +103,14 @@ export interface MockCoreOptions {
   vaults?: Vault[]
   /** Доверенные устройства, с которыми стартует хранилище (F9). */
   devices?: Device[]
+  /** Конфликты версий, с которыми стартует хранилище (F11). */
+  conflicts?: MockConflictEntry[]
+  /**
+   * Изображать жизнь синхронизации по таймеру (F10): поиск пиров, обмен,
+   * затишье. Для дева; в тестах выключено — иначе состояние менялось бы само
+   * посреди проверки. Тесты двигают фазы через `control`.
+   */
+  simulateSync?: boolean
   /** Источник времени — для детерминированных тестов. */
   now?: () => Date
   /** Начинать разблокированным (удобно для UI-тестов, минующих экран входа). */
@@ -112,6 +133,31 @@ export interface MockCoreControl {
   forceLock(reason: EventMap['locked']['reason']): void
   isUnlocked(): boolean
   isInitialized(): boolean
+
+  // Синхронизация (F10). Настоящее ядро двигает эти фазы само, увидев пира в
+  // сети; фейк-ядру пира взять негде, поэтому фазы двигают снаружи.
+  /** Доверенное устройство появилось в сети (§5.1). */
+  peerFound(deviceId: DeviceId): void
+  /** Устройство ушло из сети: выключили, унесли, сменили сеть. */
+  peerLost(deviceId: DeviceId): void
+  /** Начать обмен с найденным устройством (§5.3). */
+  startSync(deviceId?: DeviceId): void
+  /** Закончить обмен: без аргумента — успешно, с текстом — обрывом. */
+  finishSync(failure?: string): void
+  /**
+   * Приехала чужая версия записи и разошлась с местной (F11).
+   * Без аргумента берётся сид-конфликт.
+   */
+  raiseConflict(entry: MockConflictEntry): void
+  /**
+   * Второе устройство прочитало наш код и подтвердило сопряжение (обратная
+   * сторона F8). В процессе тут ровно одно устройство, поэтому событие,
+   * которое приходит «с той стороны», приходится вызывать руками.
+   */
+  pairedByPeer(name?: string): PairingResult
+
+  /** Остановить таймеры фейк-ядра. Нужно тестам и горячей перезагрузке. */
+  dispose(): void
   /** Вернуть фейк-ядро к исходному сиду. */
   reset(): void
 }
@@ -143,16 +189,16 @@ function cloneDevice(device: Device): Device {
   return { ...device }
 }
 
-/**
- * Выводит метаданные-флаги из самих секретов. Единственный источник правды о
- * том, заполнены ли `notes` / `totp_secret`: ядро тоже считает их у себя, а не
- * принимает от UI.
- */
-function secretFlags(secrets: RecordSecrets): Pick<RecordMeta, 'has_notes' | 'has_totp'> {
+function cloneConflictEntry(entry: MockConflictEntry): MockConflictEntry {
   return {
-    has_notes: (secrets.notes ?? '').trim() !== '',
-    has_totp: (secrets.totp_secret ?? '').trim() !== '',
+    ...entry,
+    meta: { ...entry.meta, urls: [...entry.meta.urls] },
+    secrets: { ...entry.secrets },
   }
+}
+
+function cloneSyncStatus(status: SyncStatus): SyncStatus {
+  return { ...status, pending_records: [...status.pending_records] }
 }
 
 /** Валидирует и нормализует метаданное поле. */
@@ -197,6 +243,14 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   /** Доверенные устройства, включая отозванные (F9, §2.3). */
   let devices: Device[] = []
 
+  // Синхронизация (F10) и конфликты (F11). Всё это — содержимое открытого
+  // хранилища: замок сбрасывает его вместе с расшифрованными данными.
+  let sync: SyncStatus = initialSyncStatus()
+  /** Приехавшие версии, разошедшиеся с местными (§5.5). */
+  let conflicts: MockConflictEntry[] = []
+  let simulation: ReturnType<typeof setInterval> | null = null
+  let simulationStep = 0
+
   let masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
   let initialized = options.initialized !== false
   let unlocked = false
@@ -215,10 +269,13 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     secrets.clear()
     vaults = []
     devices = []
+    conflicts = []
+    sync = initialSyncStatus()
     forgetPairing()
     // Свежесозданное хранилище пустое: сид — это «данные, которые уже были».
     if (!initialized) return
 
+    conflicts = (options.conflicts ?? createConflictSeed()).map(cloneConflictEntry)
     devices = (options.devices ?? createDeviceSeed(now())).map(cloneDevice)
     vaults = (options.vaults ?? createVaultSeed()).map(cloneVault)
     for (const entry of options.seed ?? createSeed()) {
@@ -235,6 +292,139 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     for (const handler of handlers.get(event) ?? []) {
       ;(handler as (payload: EventMap[E]) => void)(payload)
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Синхронизация (F10)
+  //
+  // Фейк-ядро не ходит в сеть: оно только изображает то, что видно UI. Фазы
+  // двигаются снаружи (`control`) или демо-таймером — но состояние при этом
+  // остаётся согласованным, иначе индикатор нечего было бы проверять.
+  // -------------------------------------------------------------------------
+
+  /** Кто из доверенных устройств виден в сети прямо сейчас. */
+  const online = new Set<DeviceId>()
+
+  function emitSync(): void {
+    emit('sync_status', cloneSyncStatus(sync))
+  }
+
+  /** Изменить статус и рассказать об этом. `peers_online` всегда считается. */
+  function setSync(patch: Partial<SyncStatus>): void {
+    sync = { ...sync, ...patch, peers_online: online.size }
+    emitSync()
+  }
+
+  /**
+   * Запись изменилась и ещё не уехала.
+   *
+   * Записи локальных секций сюда не попадают никогда: выключенная
+   * синхронизация означает «никуда» (§4.2), и пометка «ждёт синхронизации»
+   * обещала бы отправку, которой не будет.
+   */
+  function markPending(record: RecordMeta): void {
+    const vault = vaults.find((item) => item.vault_id === record.vault_id)
+    if (vault === undefined || !vault.sync) return
+    if (sync.pending_records.includes(record.record_id)) return
+    setSync({ pending_records: [...sync.pending_records, record.record_id] })
+  }
+
+  /** Сколько живых записей уехало бы на второе устройство (§4.2). */
+  function syncableRecordCount(): number {
+    const syncing = new Set(vaults.filter((vault) => vault.sync).map((vault) => vault.vault_id))
+    return [...meta.values()].filter(
+      (record) => record.deleted_at === null && syncing.has(record.vault_id),
+    ).length
+  }
+
+  function doPeerFound(deviceId: DeviceId): void {
+    const device = devices.find((item) => item.device_id === deviceId)
+    // Отозванное устройство discovery в сети найти может, а вот доверенным
+    // пиром оно больше не считается (§2.3) — в счётчик оно не идёт.
+    if (device === undefined || device.is_this_device || device.revoked_at !== null) return
+
+    const foundAt = timestamp()
+    devices = devices.map((item) =>
+      item.device_id === deviceId ? { ...item, last_seen_at: foundAt } : item,
+    )
+    online.add(deviceId)
+    emit('peer_found', {
+      device_id: deviceId,
+      name: device.name,
+      kind: device.kind,
+      found_at: foundAt,
+    })
+    setSync({})
+  }
+
+  function doPeerLost(deviceId: DeviceId): void {
+    if (online.delete(deviceId)) setSync({})
+  }
+
+  function doStartSync(deviceId?: DeviceId): void {
+    const peer =
+      deviceId === undefined
+        ? devices.find((item) => online.has(item.device_id))
+        : devices.find((item) => item.device_id === deviceId)
+    setSync({ phase: 'syncing', peer_name: peer?.name ?? null, message: null })
+  }
+
+  function doFinishSync(failure?: string): void {
+    if (failure !== undefined) {
+      // Ошибка не трогает `pending_records`: изменения никуда не делись и
+      // поедут со следующей попыткой. «Не удалось» — про связь, не про данные.
+      setSync({ phase: 'error', message: failure })
+      return
+    }
+
+    setSync({
+      phase: 'idle',
+      peer_name: null,
+      message: null,
+      pending_records: [],
+      last_sync_at: timestamp(),
+    })
+  }
+
+  /** Демо-цикл для дева: ищем → нашли → обменялись → тишина. */
+  function simulationTick(): void {
+    if (!unlocked) return
+
+    const peer = devices.find((item) => !item.is_this_device && item.revoked_at === null)
+    const step = simulationStep % 4
+    simulationStep += 1
+
+    if (step === 0) setSync({ phase: 'searching', peer_name: null, message: null })
+    else if (step === 1 && peer !== undefined) doPeerFound(peer.device_id)
+    else if (step === 2) doStartSync(peer?.device_id)
+    else doFinishSync()
+  }
+
+  function startSimulation(): void {
+    if (options.simulateSync !== true || simulation !== null) return
+    simulationStep = 0
+    simulation = setInterval(simulationTick, SYNC_SIMULATION_STEP_MS)
+  }
+
+  function stopSimulation(): void {
+    if (simulation !== null) clearInterval(simulation)
+    simulation = null
+  }
+
+  // -------------------------------------------------------------------------
+  // Конфликты версий (F11, §5.5)
+  // -------------------------------------------------------------------------
+
+  function conflictFor(recordId: RecordId): MockConflictEntry {
+    const found = conflicts.find((entry) => entry.record_id === recordId)
+    if (!found) throw new CoreError('NOT_FOUND', 'Конфликт версий не найден.')
+    return found
+  }
+
+  function liveSecrets(recordId: RecordId): RecordSecrets {
+    const found = secrets.get(recordId)
+    if (!found) throw new CoreError('NOT_FOUND', 'Запись не найдена.')
+    return found
   }
 
   /** Общий пролог команды: задержка, впрыск ошибки, проверка замка. */
@@ -297,6 +487,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   function doUnlock(): IsoDateTime {
     unlocked = true
     unlockedAt = timestamp()
+    startSimulation()
     emit('unlocked', { unlocked_at: unlockedAt })
     return unlockedAt
   }
@@ -308,6 +499,12 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
     // Незавершённое сопряжение не переживает замок: код на экране даёт право
     // забрать копию хранилища, а закрытое хранилище такого права не выдаёт.
     forgetPairing()
+    // Закрытое хранилище не синхронизируется: связи с пирами больше нет.
+    // `pending_records` при этом остаются — изменения никуда не делись и
+    // поедут, когда хранилище откроют; конфликты тоже ждут в хранилище.
+    stopSimulation()
+    online.clear()
+    sync = { ...sync, phase: 'idle', peers_online: 0, peer_name: null, message: null }
     emit('locked', { locked_at: timestamp(), reason })
   }
 
@@ -326,6 +523,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
   if (options.startUnlocked && initialized) {
     unlocked = true
     unlockedAt = timestamp()
+    startSimulation()
   }
 
   const client: MockCoreClient = {
@@ -439,6 +637,8 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
 
       meta.set(record.record_id, record)
       secrets.set(record.record_id, newSecrets)
+      // Новая запись ещё нигде, кроме этого устройства (F10).
+      markPending(record)
 
       return cloneMeta(record)
     },
@@ -484,6 +684,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
 
       meta.set(recordId, next)
       secrets.set(recordId, nextSecrets)
+      markPending(next)
 
       return cloneMeta(next)
     },
@@ -507,6 +708,10 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       meta.set(recordId, tombstone)
       // Надгробие не хранит секретов (§5.4).
       secrets.delete(recordId)
+      // Удаление так же важно, как добавление: надгробие тоже должно доехать.
+      markPending(tombstone)
+      // Спорить о версиях удалённой записи больше не о чем.
+      conflicts = conflicts.filter((entry) => entry.record_id !== recordId)
 
       return cloneMeta(tombstone)
     },
@@ -719,11 +924,11 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
 
       // Уезжают только записи синхронизируемых секций: выключенная
       // синхронизация означает «никуда», в том числе на новое устройство (§4.2).
-      const syncing = new Set(vaults.filter((vault) => vault.sync).map((vault) => vault.vault_id))
-      const transferred = [...meta.values()].filter(
-        (record) => record.deleted_at === null && syncing.has(record.vault_id),
-      ).length
+      const transferred = syncableRecordCount()
 
+      // Событие `device_paired` отсюда НЕ шлётся: его получает та сторона,
+      // которая показывала код и ничего не вызывала. Здесь результат и так
+      // возвращается ответом на команду — второе уведомление было бы эхом.
       return {
         device: { ...device },
         records_transferred: transferred,
@@ -772,10 +977,118 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       const next: Device = { ...found, revoked_at: timestamp() }
       devices = devices.map((device) => (device.device_id === deviceId ? next : device))
 
+      // Отозванное устройство перестаёт быть пиром сразу, а не после того, как
+      // отзыв догонит его по сети доверия: отсюда обновления ему больше не идут.
+      doPeerLost(deviceId)
+
       // Настоящее ядро здесь ещё и рассылает revoke-запись по сети доверия
       // (§2.3). Фейк-ядру рассылать некуда — и притворяться, что оно это
       // сделало, оно не будет.
       return cloneDevice(next)
+    },
+
+    // -------------------------------------------------------------------------
+    // Статус синхронизации (F10)
+    // -------------------------------------------------------------------------
+
+    async getSyncStatus(): Promise<SyncStatus> {
+      // За замком: «сколько записей ждёт отправки» и «кто рядом» — сведения о
+      // содержимом хранилища и о том, чем пользуется владелец.
+      await enter({ requiresUnlock: true })
+      return cloneSyncStatus(sync)
+    },
+
+    async syncNow(): Promise<SyncStatus> {
+      await enter({ requiresUnlock: true })
+
+      // Ручная попытка — та же самая попытка, просто не ждём своей минуты.
+      // Настоящее ядро начинает с discovery; фейк-ядро изображает его же.
+      setSync({ phase: 'searching', peer_name: null, message: null })
+      return cloneSyncStatus(sync)
+    },
+
+    // -------------------------------------------------------------------------
+    // Конфликты версий (F11, §5.5)
+    // -------------------------------------------------------------------------
+
+    async listConflicts(): Promise<RecordConflict[]> {
+      await enter({ requiresUnlock: true })
+
+      return conflicts.flatMap((entry) => {
+        const record = meta.get(entry.record_id)
+        const values = secrets.get(entry.record_id)
+        // Запись удалили, пока конфликт ждал: спорить больше не о чем.
+        if (record === undefined || record.deleted_at !== null || values === undefined) return []
+        return [buildConflict(entry, record, values, THIS_DEVICE_NAME)]
+      })
+    },
+
+    async resolveConflict(recordId: RecordId, side: ConflictSide): Promise<RecordMeta> {
+      await enter({ requiresUnlock: true })
+
+      const entry = conflictFor(recordId)
+      const current = liveRecord(recordId)
+      const currentSecrets = liveSecrets(recordId)
+
+      const resolvedAt = timestamp()
+      // Победившая версия перебивает ОБЕ: иначе при следующем обмене
+      // проигравшая вернулась бы как более свежая (§5.2).
+      const version = Math.max(current.version, entry.version) + 1
+
+      const nextSecrets = side === 'local' ? currentSecrets : { ...entry.secrets }
+      // Секция приехавшей версии могла к этому моменту исчезнуть — тогда
+      // запись остаётся там, где лежит: секцию удаляли уже с ней внутри (§4.2).
+      const remoteVault = vaults.some((vault) => vault.vault_id === entry.meta.vault_id)
+        ? entry.meta.vault_id
+        : current.vault_id
+
+      const next: RecordMeta =
+        side === 'local'
+          ? { ...current, version, updated_at: resolvedAt }
+          : {
+              ...current,
+              vault_id: remoteVault,
+              service_name: entry.meta.service_name,
+              urls: [...entry.meta.urls],
+              login: entry.meta.login,
+              account_label: entry.meta.account_label,
+              ...secretFlags(nextSecrets),
+              version,
+              updated_at: resolvedAt,
+              password_updated_at:
+                nextSecrets.password === currentSecrets.password
+                  ? current.password_updated_at
+                  : resolvedAt,
+            }
+
+      meta.set(recordId, next)
+      secrets.set(recordId, nextSecrets)
+      // Проигравшая версия НЕ склеивается с победившей и никуда не
+      // сохраняется: §5.5 обещает выбор записи целиком.
+      conflicts = conflicts.filter((item) => item.record_id !== recordId)
+      // Выбор — такое же изменение записи: его ещё надо довезти до второго
+      // устройства, иначе там останется своё мнение о том, чья версия верна.
+      markPending(next)
+
+      return cloneMeta(next)
+    },
+
+    async getConflictSecret(
+      recordId: RecordId,
+      field: SecretField,
+    ): Promise<GetConflictSecretResponse> {
+      await enter({ requiresUnlock: true })
+
+      if (field !== 'password' && field !== 'notes' && field !== 'totp_secret') {
+        throw new CoreError('VALIDATION', 'У записи нет такого секретного поля.')
+      }
+
+      const entry = conflictFor(recordId)
+      liveRecord(recordId)
+      const currentSecrets = liveSecrets(recordId)
+
+      // Ровно одно поле обеих версий — не вся пара записей целиком.
+      return { local: currentSecrets[field], remote: entry.secrets[field] }
     },
 
     on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe {
@@ -803,14 +1116,64 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       isInitialized() {
         return initialized
       },
+      peerFound(deviceId) {
+        doPeerFound(deviceId)
+      },
+      peerLost(deviceId) {
+        doPeerLost(deviceId)
+      },
+      startSync(deviceId) {
+        doStartSync(deviceId)
+      },
+      finishSync(failure) {
+        doFinishSync(failure)
+      },
+      raiseConflict(entry) {
+        conflicts = [
+          ...conflicts.filter((item) => item.record_id !== entry.record_id),
+          cloneConflictEntry(entry),
+        ]
+        const record = meta.get(entry.record_id)
+        const values = secrets.get(entry.record_id)
+        if (record === undefined || values === undefined) return
+        emit('conflict_raised', buildConflict(entry, record, values, THIS_DEVICE_NAME))
+      },
+      pairedByPeer(name = 'iPhone 14') {
+        const pairedAt = timestamp()
+        const device: Device = {
+          device_id: crypto.randomUUID(),
+          name,
+          kind: 'mobile',
+          is_this_device: false,
+          paired_at: pairedAt,
+          last_seen_at: pairedAt,
+          revoked_at: null,
+        }
+        devices = [...devices, device]
+
+        const transferred = syncableRecordCount()
+        const result: PairingResult = {
+          device: { ...device },
+          records_transferred: transferred,
+          duration_ms: 200 + transferred * 9,
+        }
+        emit('device_paired', result)
+        return result
+      },
+      dispose() {
+        stopSimulation()
+      },
       reset() {
         masterPassword = options.masterPassword ?? MOCK_MASTER_PASSWORD
         initialized = options.initialized !== false
         generatorProfile = cloneProfile(options.generatorProfile ?? DEFAULT_GENERATOR_PROFILE)
+        stopSimulation()
+        online.clear()
         loadSeed()
         failures.length = 0
         unlocked = initialized && options.startUnlocked === true
         unlockedAt = unlocked ? timestamp() : null
+        if (unlocked) startSimulation()
       },
     },
   }

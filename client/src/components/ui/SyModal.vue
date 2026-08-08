@@ -18,8 +18,14 @@ const props = withDefaults(
     warning?: string
     /** Запретить закрытие по Escape и клику по подложке. */
     persistent?: boolean
+    /**
+     * `wide` — для диалога, в котором сравнивают две колонки (конфликт версий,
+     * F11). Обычное подтверждение шире делать не нужно: чем длиннее строка,
+     * тем хуже читается вопрос.
+     */
+    size?: 'default' | 'wide'
   }>(),
-  { tone: 'neutral', persistent: false },
+  { tone: 'neutral', persistent: false, size: 'default' },
 )
 
 const emit = defineEmits<{ close: [] }>()
@@ -62,6 +68,7 @@ onBeforeUnmount(() => {
       <div
         ref="dialog"
         class="sy-modal__dialog"
+        :class="{ 'sy-modal__dialog--wide': size === 'wide' }"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
@@ -109,6 +116,10 @@ onBeforeUnmount(() => {
   border-radius: var(--sy-radius-lg);
   background: var(--sy-surface);
   box-shadow: var(--sy-shadow-window);
+}
+
+.sy-modal__dialog--wide {
+  width: 860px;
 }
 
 .sy-modal__dialog:focus {

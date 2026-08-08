@@ -249,13 +249,20 @@ export function peerDevice(code: string): { name: string; kind: DeviceKind } {
 }
 
 /**
+ * Как называется устройство, на котором открыт UI. Нужно не только списку
+ * устройств: в конфликте версий (F11) местная сторона подписывается именно им —
+ * «какая версия чья» без имени не читается.
+ */
+export const THIS_DEVICE_NAME = 'Этот компьютер'
+
+/**
  * Устройство, на котором открыт UI. В настоящем ядре его имя берётся у ОС;
  * фейк-ядру достаточно, чтобы список доверенных устройств не был пустым.
  */
 export function createThisDevice(pairedAt: string): Device {
   return {
     device_id: 'device-this',
-    name: 'Этот компьютер',
+    name: THIS_DEVICE_NAME,
     kind: 'desktop',
     is_this_device: true,
     paired_at: pairedAt,

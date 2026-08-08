@@ -12,15 +12,19 @@
  *  - Даты — строки ISO-8601 в UTC.
  *
  * ЗАКОН №1: секреты (`password`, `notes`, `totp_secret`) пересекают эту границу
- * ТОЛЬКО в ответе `get_secret` — разово, по явному действию пользователя.
- * Ни одна другая команда не возвращает расшифрованный секрет, и ни один тип
+ * ТОЛЬКО разово и только по явному действию пользователя. Ни один тип
  * метаданных ниже не содержит секретных полей.
  *
- * Единственное исключение — `generate_passwords` (F6): он отдаёт свежие
- * пароли-кандидаты. Это ещё ничей секрет — он не лежит в хранилище и исчезнет,
- * если пользователь не выберет ни одного варианта, — но обращаться с ним нужно
- * ровно так же: не в Pinia, не в localStorage, не в логи; живёт в области
- * видимости компонента, пока пользователь выбирает.
+ * Команд, отдающих открытый текст, ровно три, и все они — по нажатию:
+ *  - `get_secret` (F5) — reveal или копирование одного поля записи;
+ *  - `get_conflict_secret` (F11) — то же поле в двух версиях сразу, чтобы
+ *    человек мог сравнить их при разрешении конфликта (§5.5);
+ *  - `generate_passwords` (F6) — свежие пароли-кандидаты. Это ещё ничей
+ *    секрет: он не лежит в хранилище и исчезнет, если ни один вариант не
+ *    выбран, — но обращаться с ним нужно так же.
+ *
+ * Правило обращения общее для всех трёх: не в Pinia, не в localStorage, не в
+ * логи; значение живёт в области видимости компонента, пока оно на экране.
  */
 
 export type RecordId = string
@@ -570,6 +574,166 @@ export interface RevokeDeviceRequest {
  */
 export type RevokeDeviceResponse = Device
 
+// ---------------------------------------------------------------------------
+// Статус синхронизации (F10, §5.1 · §5.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Чем ядро занято прямо сейчас.
+ *
+ * Это МАШИННОЕ состояние, а не надпись на индикаторе. Шесть видов индикатора из
+ * макета («всё сошлось», «рядом никого», «ждут изменения», «идёт обмен», «не
+ * удалось», «конфликт») UI выводит сам — из фазы, счётчиков ниже и списка
+ * конфликтов. Иначе ядру пришлось бы знать про оформление, а UI — верить ему
+ * на слово вместо того, чтобы уметь объяснить, откуда взялась картинка.
+ */
+export type SyncPhase =
+  /** Ничего не происходит: обмена нет, ошибки нет. */
+  | 'idle'
+  /** Ищем устройства в локальной сети (§5.1, discovery по ARP/mDNS). */
+  | 'searching'
+  /** Идёт обмен манифестами и диффом (§5.3). */
+  | 'syncing'
+  /** Последняя попытка сорвалась. Данные целы — не доехал только дифф. */
+  | 'error'
+
+/**
+ * Что происходит с синхронизацией. Секретов здесь нет и быть не может: это
+ * сведения о процессе, а не о содержимом записей.
+ *
+ * Счётчика конфликтов здесь намеренно НЕТ, хотя индикатор его показывает:
+ * список конфликтов приходит отдельной командой (`list_conflicts`), и держать
+ * рядом ещё и число значило бы иметь две правды, которые рано или поздно
+ * разъедутся. UI складывает картинку из обоих источников.
+ */
+export interface SyncStatus {
+  phase: SyncPhase
+  /** Сколько доверенных устройств видно в сети прямо сейчас. */
+  peers_online: number
+  /** С кем идёт обмен — или с кем он сорвался. `null` вне обмена. */
+  peer_name: string | null
+  /**
+   * Записи, изменённые здесь и ещё не уехавшие. Список, а не счётчик: строка
+   * списка помечается «ждёт синхронизации» поимённо (§ «Состояния» макета), а
+   * число для шапки — это его длина. Два поля разъехались бы при первой же
+   * гонке. Записи локальных секций сюда НЕ попадают: им некуда ехать (§4.2).
+   */
+  pending_records: RecordId[]
+  /** Когда последний обмен успешно закончился. `null` — ни разу. */
+  last_sync_at: IsoDateTime | null
+  /**
+   * Что именно не получилось, словами для пользователя. Непусто только в фазе
+   * `error`. Ни адресов, ни ключей, ни путей — как и любое сообщение ядра.
+   */
+  message: string | null
+}
+
+export type GetSyncStatusRequest = Record<string, never>
+export type GetSyncStatusResponse = SyncStatus
+
+/**
+ * Не ждать следующей автоматической попытки (§ «Состояния»: «следующая попытка
+ * через минуту, вручную можно раньше»). Кнопка есть только у состояния
+ * «не удалось»: у «рядом никого» повторять нечего, и макет там кнопку запрещает.
+ */
+export type SyncNowRequest = Record<string, never>
+export type SyncNowResponse = SyncStatus
+
+// ---------------------------------------------------------------------------
+// Конфликты версий (F11, §5.5)
+// ---------------------------------------------------------------------------
+
+/** Чья версия: `local` — эта машина, `remote` — то, что приехало от пира. */
+export type ConflictSide = 'local' | 'remote'
+
+/**
+ * Поле, по которому версии разошлись. Секретные поля здесь ЕСТЬ — но как имена,
+ * а не как значения: «пароли различаются» это факт о записи, а не сам пароль.
+ */
+export type ConflictField =
+  'vault_id' | 'service_name' | 'urls' | 'login' | 'account_label' | SecretField
+
+/**
+ * Одна из двух версий записи (§5.5).
+ *
+ * Секретных значений здесь нет — те же флаги `has_notes` / `has_totp`, что и в
+ * `RecordMeta`. «Полный diff» из §5.5 собирается так: метаданные приходят
+ * сразу, а секреты открываются разово через `get_conflict_secret` — по тому же
+ * явному действию, что и обычный reveal. Иначе один приехавший конфликт
+ * выкладывал бы на экран два пароля, которых никто не просил.
+ */
+export interface ConflictVersion {
+  side: ConflictSide
+  /** Устройство, на котором сделана эта правка, — «какая версия чья». */
+  device_name: string
+  version: number
+  /** «Какая версия раньше, какая позже» (§5.5) — показывается пользователю. */
+  updated_at: IsoDateTime
+  /** Секцию тоже могли поменять — а вместе с ней и то, уезжает ли запись (§4.2). */
+  vault_id: VaultId
+  service_name: string
+  urls: string[]
+  login: string
+  account_label: string | null
+  has_notes: boolean
+  has_totp: boolean
+}
+
+/**
+ * Одна и та же запись, независимо изменённая на двух устройствах (§5.5).
+ *
+ * Разрешение — на уровне ЦЕЛОЙ записи: пользователь выбирает одну версию
+ * целиком, а не собирает её по полям. Поэтому здесь ровно две стороны и ни
+ * одного «слить автоматически».
+ */
+export interface RecordConflict {
+  record_id: RecordId
+  /** Когда ядро обнаружило расхождение — при обмене диффом (§5.3). */
+  raised_at: IsoDateTime
+  local: ConflictVersion
+  remote: ConflictVersion
+  /** По каким полям версии расходятся. Значений секретов здесь НЕТ. */
+  differing_fields: ConflictField[]
+}
+
+export type ListConflictsRequest = Record<string, never>
+export type ListConflictsResponse = RecordConflict[]
+
+export interface ResolveConflictRequest {
+  record_id: RecordId
+  /**
+   * Какую версию оставить — СТОРОНОЙ, а не номером версии (в отличие от
+   * заготовки в TASKS). Номер здесь не различает: конфликт растёт из общего
+   * предка, и обе стороны сплошь и рядом несут одно и то же число — 4 стало 5
+   * и здесь, и там. Сторона однозначна и совпадает с тем, что видит человек:
+   * он выбирает колонку, а не цифру.
+   */
+  side: ConflictSide
+}
+
+/** Победившая версия — уже как обычная запись, с новым `version`. */
+export type ResolveConflictResponse = RecordMeta
+
+/**
+ * Открыть одно секретное поле обеих версий (§5.5, «ручная пересборка» в редких
+ * случаях). Разово, по явному действию — правила `get_secret` действуют здесь
+ * целиком: не в стор, не в localStorage, не в логи.
+ */
+export interface GetConflictSecretRequest {
+  record_id: RecordId
+  field: SecretField
+}
+
+/**
+ * Обе стороны сразу: сравнить одно значение с другим — весь смысл действия.
+ * Отдавать их по одному значило бы заставить человека нажать дважды и держать
+ * первое значение на экране, пока едет второе.
+ */
+export interface GetConflictSecretResponse {
+  local: string | null
+  remote: string | null
+}
+
 /**
  * Карта команд: имя метода клиента → форма запроса/ответа.
  * Служит единым источником истины для `ipc.ts` и мок-ядра.
@@ -622,6 +786,19 @@ export interface CommandMap {
    * прежним `revoked_at` — момент отзыва это факт, и переписывать его нельзя.
    */
   revokeDevice: { request: RevokeDeviceRequest; response: RevokeDeviceResponse }
+  /** Что происходит с синхронизацией прямо сейчас (F10). */
+  getSyncStatus: { request: GetSyncStatusRequest; response: GetSyncStatusResponse }
+  /** Попробовать обменяться сейчас, не дожидаясь следующей попытки. */
+  syncNow: { request: SyncNowRequest; response: SyncNowResponse }
+  /** Записи, разошедшиеся на двух устройствах (F11, §5.5). */
+  listConflicts: { request: ListConflictsRequest; response: ListConflictsResponse }
+  /**
+   * Оставить одну версию целиком. Проигравшая версия не склеивается с
+   * победившей: §5.5 обещает выбор записи, а не сборку по полям.
+   */
+  resolveConflict: { request: ResolveConflictRequest; response: ResolveConflictResponse }
+  /** Открыть одно секретное поле обеих версий — разово, по нажатию. */
+  getConflictSecret: { request: GetConflictSecretRequest; response: GetConflictSecretResponse }
 }
 
 export type CommandName = keyof CommandMap
@@ -652,6 +829,11 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   cancelPairing: 'cancel_pairing',
   listDevices: 'list_devices',
   revokeDevice: 'revoke_device',
+  getSyncStatus: 'get_sync_status',
+  syncNow: 'sync_now',
+  listConflicts: 'list_conflicts',
+  resolveConflict: 'resolve_conflict',
+  getConflictSecret: 'get_conflict_secret',
 }
 
 // ---------------------------------------------------------------------------
@@ -669,12 +851,49 @@ export interface LockedEvent {
 }
 
 /**
- * Карта событий ядра. Расширяется по мере задач
- * (`sync_status`, `peer_found` — F10; `conflict_raised` — F11).
+ * Смена состояния синхронизации (F10).
+ *
+ * Событие несёт ПОЛНЫЙ статус, а не то, что изменилось. Дельта заставила бы UI
+ * собирать состояние по кусочкам и расходиться с ядром при каждом пропущенном
+ * событии — а пропустить его легко: подписка живёт не всё время работы окна.
  */
+export type SyncStatusEvent = SyncStatus
+
+/**
+ * Доверенное устройство появилось в сети (§5.1).
+ *
+ * Отдельно от `sync_status` намеренно: статус отвечает на вопрос «что сейчас
+ * происходит», а это — событие про конкретное устройство, и по нему двигается
+ * `Device.last_seen_at` в списке устройств.
+ */
+export interface PeerFoundEvent {
+  device_id: DeviceId
+  name: string
+  kind: DeviceKind
+  found_at: IsoDateTime
+}
+
+/**
+ * Обратная сторона сопряжения (F8): код показывали ЗДЕСЬ, а прочитали и
+ * подтвердили на втором устройстве. Тому, кто держит на экране код, никакая
+ * команда об этом не расскажет — он ничего не вызывал, поэтому событие.
+ */
+export type DevicePairedEvent = PairingResult
+
+/**
+ * Приехавшая версия разошлась с местной (F11, §5.5). Событие не требует
+ * немедленной реакции: конфликт ждёт в списке столько, сколько нужно.
+ */
+export type ConflictRaisedEvent = RecordConflict
+
+/** Карта событий ядра. Расширяется по мере задач. */
 export interface EventMap {
   unlocked: UnlockedEvent
   locked: LockedEvent
+  sync_status: SyncStatusEvent
+  peer_found: PeerFoundEvent
+  device_paired: DevicePairedEvent
+  conflict_raised: ConflictRaisedEvent
 }
 
 export type EventName = keyof EventMap
@@ -683,4 +902,8 @@ export type EventName = keyof EventMap
 export const EVENT_NAMES: Record<EventName, string> = {
   unlocked: 'unlocked',
   locked: 'locked',
+  sync_status: 'sync_status',
+  peer_found: 'peer_found',
+  device_paired: 'device_paired',
+  conflict_raised: 'conflict_raised',
 }

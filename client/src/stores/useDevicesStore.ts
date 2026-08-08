@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import type { Device, DeviceId } from '@/core/contract'
+import type { Device, DeviceId, PairingResult } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useCore, type Unsubscribe } from '@/core/ipc'
 
@@ -40,19 +40,52 @@ export const useDevicesStore = defineStore('devices', () => {
    */
   const isAlone = computed(() => active.value.length <= 1)
 
-  let unsubscribe: Unsubscribe | null = null
+  /**
+   * Устройство, которое только что сопряглось с этим по показанному отсюда
+   * коду (обратная сторона F8). Тот, кто держал код на экране, ничего не
+   * вызывал — узнать об этом он может только из события.
+   */
+  const justPaired = ref<PairingResult | null>(null)
+
+  let unsubscribes: Unsubscribe[] = []
 
   function watchCore(): void {
-    if (unsubscribe) return
-    unsubscribe = useCore().on('locked', () => {
-      clear()
-    })
+    if (unsubscribes.length > 0) return
+    const core = useCore()
+    unsubscribes = [
+      core.on('locked', () => {
+        clear()
+      }),
+      /**
+       * Устройство вышло на связь (F10, §5.1). Двигаем `last_seen_at` на месте,
+       * а не перечитываем список: событие уже несёт всё нужное, а перезапрос
+       * из-за каждого пира дёргал бы ядро тем чаще, чем лучше связь.
+       */
+      core.on('peer_found', (peer) => {
+        devices.value = devices.value.map((device) =>
+          device.device_id === peer.device_id ? { ...device, last_seen_at: peer.found_at } : device,
+        )
+      }),
+      core.on('device_paired', (result) => {
+        justPaired.value = result
+        devices.value = [
+          ...devices.value.filter((device) => device.device_id !== result.device.device_id),
+          result.device,
+        ]
+      }),
+    ]
+  }
+
+  /** Уведомление прочитано — экран его больше не показывает. */
+  function forgetPaired(): void {
+    justPaired.value = null
   }
 
   function clear(): void {
     devices.value = []
     loaded.value = false
     error.value = null
+    justPaired.value = null
   }
 
   /** Забрать список у ядра, если он ещё не забирался. */
@@ -93,10 +126,10 @@ export const useDevicesStore = defineStore('devices', () => {
     return updated
   }
 
-  /** Снять подписку на события ядра — нужно тестам и горячей перезагрузке. */
+  /** Снять подписки на события ядра — нужно тестам и горячей перезагрузке. */
   function dispose(): void {
-    unsubscribe?.()
-    unsubscribe = null
+    for (const unsubscribe of unsubscribes) unsubscribe()
+    unsubscribes = []
   }
 
   return {
@@ -108,9 +141,11 @@ export const useDevicesStore = defineStore('devices', () => {
     revoked,
     thisDevice,
     isAlone,
+    justPaired,
     ensure,
     load,
     revoke,
+    forgetPaired,
     clear,
     dispose,
   }

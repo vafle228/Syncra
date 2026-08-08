@@ -5,11 +5,14 @@ import { useRouter } from 'vue-router'
 import RecordCard from '@/components/records/RecordCard.vue'
 import RecordForm from '@/components/records/RecordForm.vue'
 import SectionSidebar from '@/components/sections/SectionSidebar.vue'
+import SyncIndicator from '@/components/sync/SyncIndicator.vue'
 import { SyButton, SyEmptyState, SyListItem, SyThemeToggle } from '@/components/ui'
 import { ACCOUNT_FORMS, pluralize, RECORD_FORMS, SERVICE_FORMS } from '@/composables/plural'
 import type { RecordId } from '@/core/contract'
+import { useConflictsStore } from '@/stores/useConflictsStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
+import { useSyncStore } from '@/stores/useSyncStore'
 import { useVaultStore } from '@/stores/useVaultStore'
 
 /**
@@ -31,6 +34,17 @@ const router = useRouter()
 const vault = useVaultStore()
 const list = useRecordsStore()
 const sections = useSectionsStore()
+const sync = useSyncStore()
+const conflicts = useConflictsStore()
+
+/**
+ * Отметка в строке списка (F10, F11). Конфликт важнее ожидания отправки: он
+ * ждёт человека, а «ждёт синхронизации» разрешится само.
+ */
+function rowStatus(id: RecordId): 'none' | 'pending' | 'conflict' {
+  if (conflicts.byRecord(id) !== null) return 'conflict'
+  return sync.isPending(id) ? 'pending' : 'none'
+}
 
 const searchInput = ref<HTMLInputElement | null>(null)
 
@@ -103,6 +117,9 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   void list.load()
   void sections.ensure()
+  // Индикатор в шапке спрашивает ядро сам; списку нужны те же данные для
+  // отметок в строках — `ensure()` второй команды не шлёт.
+  void conflicts.ensure()
 })
 
 onBeforeUnmount(() => {
@@ -128,6 +145,7 @@ async function lock(): Promise<void> {
       </div>
 
       <div class="home__header-actions">
+        <SyncIndicator />
         <SyThemeToggle />
         <RouterLink class="home__settings" :to="{ name: 'devices' }">Устройства</RouterLink>
         <RouterLink class="home__settings" :to="{ name: 'settings' }">Настройки</RouterLink>
@@ -267,6 +285,7 @@ async function lock(): Promise<void> {
                       :badge="record.account_label"
                       :seed="record.urls[0] ?? record.service_name"
                       :selected="list.selectedId === record.record_id"
+                      :status="rowStatus(record.record_id)"
                     />
                   </button>
                 </li>

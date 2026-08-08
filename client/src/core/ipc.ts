@@ -6,23 +6,28 @@ import {
   EVENT_NAMES,
   type CommandMap,
   type CommandName,
+  type ConflictSide,
   type Device,
   type DeviceId,
   type EventMap,
   type EventName,
   type GeneratePasswordsResponse,
   type GeneratorProfile,
+  type GetConflictSecretResponse,
   type InitVaultResponse,
   type ListRecordsRequest,
   type PairingHandshake,
   type PairingOffer,
   type PairingResult,
   type PairingSessionId,
+  type RecordConflict,
   type RecordDraft,
   type RecordId,
   type RecordMeta,
   type RecordPatch,
   type RecordSecrets,
+  type SecretField,
+  type SyncStatus,
   type UnlockResponse,
   type Vault,
   type VaultColor,
@@ -158,6 +163,38 @@ export interface CoreClient {
    */
   revokeDevice(deviceId: DeviceId): Promise<Device>
 
+  /**
+   * Что происходит с синхронизацией прямо сейчас (F10).
+   *
+   * Спрашивается один раз при открытии экрана: дальше состояние приезжает
+   * событием `sync_status`. Без этого запроса UI не знал бы состояния до
+   * первого события — а его может не быть часами.
+   */
+  getSyncStatus(): Promise<SyncStatus>
+
+  /**
+   * Попробовать обменяться сейчас. Ядро всё равно повторяет попытки само —
+   * это только «не жди минуту», а не отдельный режим работы.
+   */
+  syncNow(): Promise<SyncStatus>
+
+  /** Записи, разошедшиеся на двух устройствах (F11, §5.5). */
+  listConflicts(): Promise<RecordConflict[]>
+
+  /**
+   * Оставить одну версию целиком (§5.5). Проигравшая версия не склеивается с
+   * победившей: пользователь выбирает запись, а не собирает её по полям.
+   */
+  resolveConflict(recordId: RecordId, side: ConflictSide): Promise<RecordMeta>
+
+  /**
+   * Открыть одно секретное поле обеих версий — для сравнения глазами.
+   *
+   * ЗАКОН №1: правила `getSecret` действуют здесь целиком. Разово, по нажатию,
+   * значение не оседает ни в сторе, ни в localStorage.
+   */
+  getConflictSecret(recordId: RecordId, field: SecretField): Promise<GetConflictSecretResponse>
+
   /** Подписка на событие ядра. */
   on<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Unsubscribe
 }
@@ -207,6 +244,12 @@ export function createTauriCoreClient(): CoreClient {
     },
     listDevices: () => call('listDevices', {}),
     revokeDevice: (deviceId) => call('revokeDevice', { device_id: deviceId }),
+    getSyncStatus: () => call('getSyncStatus', {}),
+    syncNow: () => call('syncNow', {}),
+    listConflicts: () => call('listConflicts', {}),
+    resolveConflict: (recordId, side) => call('resolveConflict', { record_id: recordId, side }),
+    getConflictSecret: (recordId, field) =>
+      call('getConflictSecret', { record_id: recordId, field }),
 
     on: (event, handler) => {
       let cancelled = false
@@ -259,7 +302,12 @@ export async function initCoreClient(mode: CoreMode = resolveCoreMode()): Promis
     const { createMockCoreClient } = await import('./mock')
     // `VITE_CORE_FRESH=1` — эмуляция первого запуска: хранилища ещё нет,
     // мок-ядро отдаёт NOT_INITIALIZED и UI уходит в онбординг (F3).
-    client = createMockCoreClient({ initialized: import.meta.env.VITE_CORE_FRESH !== '1' })
+    client = createMockCoreClient({
+      initialized: import.meta.env.VITE_CORE_FRESH !== '1',
+      // В деве фейк-ядро изображает жизнь синхронизации (F10): без второго
+      // устройства индикатор иначе навсегда застрял бы в «рядом никого».
+      simulateSync: true,
+    })
   } else {
     client = createTauriCoreClient()
   }
