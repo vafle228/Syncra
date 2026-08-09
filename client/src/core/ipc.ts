@@ -413,6 +413,10 @@ export async function initCoreClient(mode: CoreMode = resolveCoreMode()): Promis
       // В деве фейк-ядро изображает жизнь синхронизации (F10): без второго
       // устройства индикатор иначе навсегда застрял бы в «рядом никого».
       simulateSync: true,
+      // `VITE_CORE_PIN=2468` — включить быстрый вход, чтобы экран блокировки
+      // показал клавиатуру (F13). Энролмента PIN в продукте пока нет ни в одном
+      // макете, и это единственный способ посмотреть ветку руками.
+      pin: import.meta.env.VITE_CORE_PIN || null,
     })
   } else {
     client = createTauriCoreClient()
