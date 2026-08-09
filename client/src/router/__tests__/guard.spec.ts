@@ -94,6 +94,16 @@ describe('вложенное дерево оболочки (F13)', () => {
     }
   })
 
+  it('старый адрес `/data` ведёт во вкладку «Данные», а не в никуда', async () => {
+    // Закладки на него делались, пока импорт и экспорт были отдельным экраном.
+    const router = await unlockedRouter()
+
+    await router.push('/data')
+
+    expect(router.currentRoute.value.name).toBe('settings')
+    expect(router.currentRoute.value.query.tab).toBe('data')
+  })
+
   it('экраны входа лежат ВНЕ оболочки: сайдбару за замком делать нечего', async () => {
     setCoreClient(createMockCoreClient({ latencyMs: 0 }))
     const router = createAppRouter(createMemoryHistory())

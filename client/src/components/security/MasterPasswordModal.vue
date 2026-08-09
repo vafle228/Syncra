@@ -4,8 +4,8 @@ import { computed, ref, watch } from 'vue'
 import { SyButton, SyInput, SyModal } from '@/components/ui'
 import { MASTER_PASSWORD_MIN_LENGTH } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
-import { useCore } from '@/core/ipc'
 import { useToastStore } from '@/stores/useToastStore'
+import { useVaultStore } from '@/stores/useVaultStore'
 
 /**
  * Смена мастер-пароля (F13, «Настройки → Безопасность»).
@@ -28,6 +28,7 @@ const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const toast = useToastStore()
+const vault = useVaultStore()
 
 const current = ref('')
 const next = ref('')
@@ -72,7 +73,10 @@ async function submit(): Promise<void> {
   busy.value = true
   error.value = null
   try {
-    const result = await useCore().changeMasterPassword(current.value, next.value)
+    // Через стор, а не напрямую в ядро: перешифровка сбрасывает быстрый вход, и
+    // стор гасит `pin.enrolled` сразу. Иначе экран блокировки после следующего
+    // замка показал бы клавиатуру, которая больше ничего не отпирает.
+    const result = await vault.changeMasterPassword(current.value, next.value)
     // Хранилище остаётся открытым: человек только что доказал знание старого
     // пароля, и запирать за это — наказывать за успех.
     toast.push(

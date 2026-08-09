@@ -1,27 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import { setCoreClient } from '@/core/ipc'
 import { createMockCoreClient, MOCK_MASTER_PASSWORD, type MockCoreClient } from '@/core/mock'
-import { useRecordsStore } from '@/stores/useRecordsStore'
-import DataView from '../DataView.vue'
+import BackupModal from '../BackupModal.vue'
+import CsvExportModal from '../CsvExportModal.vue'
+import ImportModal from '../ImportModal.vue'
 
 /**
- * Экран данных (F12, §3.10 макета).
+ * Импорт, бэкап и CSV-экспорт (F12, §3.10 макета) — с F13 три модалки вкладки
+ * «Настройки → Данные», раньше один экран `/data`.
  *
- * Проверяем три обещания экрана: предупреждение про CSV показывается и требует
+ * Проверяем те же три обещания: предупреждение про CSV показывается и требует
  * подтверждения (§6.2 — формулировку не смягчаем), у опасного файла есть хвост
  * с кнопкой «Удалить файл сейчас», а импорт показывает, что попадёт внутрь, не
  * показывая при этом ни одного пароля.
  */
-
-const push = vi.fn()
-
-vi.mock('vue-router', () => ({
-  useRouter: () => ({ push }),
-  useRoute: () => ({ query: {} }),
-}))
 
 let core: MockCoreClient
 let pinia: ReturnType<typeof createPinia>
@@ -31,32 +26,49 @@ beforeEach(() => {
   setActivePinia(pinia)
   core = createMockCoreClient({ latencyMs: 0, startUnlocked: true })
   setCoreClient(core)
-  push.mockClear()
 })
 
 afterEach(() => {
   setCoreClient(null)
 })
 
-async function mountData() {
-  const wrapper = mount(DataView, {
-    global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } },
-  })
+/**
+ * Модалка телепортируется в `body`; заглушка `teleport` оставляет её содержимое
+ * внутри обёртки, чтобы утверждения читались как обычные.
+ */
+function modalMount() {
+  return {
+    props: { open: true },
+    attachTo: document.body,
+    global: { stubs: { teleport: true } },
+  }
+}
+
+async function mountCsv() {
+  const wrapper = mount(CsvExportModal, modalMount())
   await flushPromises()
   return wrapper
 }
 
-type View = Awaited<ReturnType<typeof mountData>>
+async function mountBackup() {
+  const wrapper = mount(BackupModal, modalMount())
+  await flushPromises()
+  return wrapper
+}
+
+async function mountImport() {
+  const wrapper = mount(ImportModal, modalMount())
+  await flushPromises()
+  return wrapper
+}
+
+/** Обёртка любой из трёх модалок: помощники ниже одинаковы для всех. */
+type View = ReturnType<typeof mount>
 
 function button(wrapper: View, text: string) {
   const found = wrapper.findAll('button').find((node) => node.text().includes(text))
   if (!found) throw new Error(`Кнопка «${text}» не найдена`)
   return found
-}
-
-async function openExport(wrapper: View): Promise<void> {
-  await button(wrapper, 'Экспорт').trigger('click')
-  await flushPromises()
 }
 
 /** Заполнить три подтверждения CSV-экспорта и нажать кнопку. */
@@ -68,10 +80,9 @@ async function confirmCsv(wrapper: View, password = MOCK_MASTER_PASSWORD): Promi
   await flushPromises()
 }
 
-describe('DataView · CSV-экспорт (§6.2)', () => {
+describe('CsvExportModal · экспорт в открытый текст (§6.2)', () => {
   it('предупреждает об открытом тексте до того, как файл создан', async () => {
-    const wrapper = await mountData()
-    await openExport(wrapper)
+    const wrapper = await mountCsv()
 
     expect(wrapper.text()).toContain('В файле все пароли и заметки открытым текстом')
     expect(wrapper.text()).toContain('их прочитает любая программа на компьютере')
@@ -81,8 +92,7 @@ describe('DataView · CSV-экспорт (§6.2)', () => {
   })
 
   it('не отдаёт файл без всех трёх подтверждений', async () => {
-    const wrapper = await mountData()
-    await openExport(wrapper)
+    const wrapper = await mountCsv()
 
     expect(button(wrapper, 'в CSV').attributes('disabled')).toBeDefined()
 
@@ -101,8 +111,7 @@ describe('DataView · CSV-экспорт (§6.2)', () => {
   })
 
   it('не принимает чужой мастер-пароль и файла не создаёт', async () => {
-    const wrapper = await mountData()
-    await openExport(wrapper)
+    const wrapper = await mountCsv()
 
     await confirmCsv(wrapper, 'не тот пароль')
 
@@ -113,8 +122,7 @@ describe('DataView · CSV-экспорт (§6.2)', () => {
   })
 
   it('после экспорта напоминает про файл и даёт его удалить', async () => {
-    const wrapper = await mountData()
-    await openExport(wrapper)
+    const wrapper = await mountCsv()
 
     await confirmCsv(wrapper)
 
@@ -135,10 +143,9 @@ describe('DataView · CSV-экспорт (§6.2)', () => {
   })
 })
 
-describe('DataView · зашифрованный бэкап', () => {
+describe('BackupModal · зашифрованный бэкап', () => {
   it('сохраняет файл и показывает, где он лежит', async () => {
-    const wrapper = await mountData()
-    await openExport(wrapper)
+    const wrapper = await mountBackup()
 
     await wrapper.find('.backup input[type="password"]').setValue(MOCK_MASTER_PASSWORD)
     await button(wrapper, 'Сохранить бэкап').trigger('click')
@@ -152,8 +159,7 @@ describe('DataView · зашифрованный бэкап', () => {
   })
 
   it('говорит, что старый бэкап останется на старом пароле', async () => {
-    const wrapper = await mountData()
-    await openExport(wrapper)
+    const wrapper = await mountBackup()
 
     expect(wrapper.text()).toContain('старый бэкап продолжит открываться старым')
 
@@ -161,9 +167,9 @@ describe('DataView · зашифрованный бэкап', () => {
   })
 })
 
-describe('DataView · импорт', () => {
+describe('ImportModal · импорт', () => {
   it('показывает, что попадёт внутрь, и ни одного пароля', async () => {
-    const wrapper = await mountData()
+    const wrapper = await mountImport()
 
     await wrapper.find('.import__drop').trigger('click')
     await flushPromises()
@@ -179,10 +185,9 @@ describe('DataView · импорт', () => {
     wrapper.unmount()
   })
 
-  it('переносит записи в отдельную секцию и уводит к ним', async () => {
-    const wrapper = await mountData()
-    const records = useRecordsStore()
-    const before = records.totalAll
+  it('переносит записи в отдельную секцию и сообщает, сколько приехало', async () => {
+    const wrapper = await mountImport()
+    const before = (await core.listRecords()).length
 
     await wrapper.find('.import__drop').trigger('click')
     await flushPromises()
@@ -195,15 +200,18 @@ describe('DataView · импорт', () => {
     await button(wrapper, 'Показать импортированные').trigger('click')
     await flushPromises()
 
-    expect(records.totalAll).toBeGreaterThan(before)
-    expect(records.vaultFilter).not.toBeNull()
-    expect(push).toHaveBeenCalledWith({ name: 'home' })
+    expect((await core.listRecords()).length).toBeGreaterThan(before)
+    // Куда идти дальше, решает экран настроек: модалка только сообщает, что и
+    // сколько приехало. Фильтр, перезагрузку списка и баннер ставит он.
+    const imported = wrapper.emitted('imported')
+    expect(imported).toBeTruthy()
+    expect(imported![0]![1]).toBeGreaterThan(0)
 
     wrapper.unmount()
   })
 
   it('отказ от импорта забывает разобранный файл', async () => {
-    const wrapper = await mountData()
+    const wrapper = await mountImport()
 
     await wrapper.find('.import__drop').trigger('click')
     await flushPromises()
@@ -217,7 +225,7 @@ describe('DataView · импорт', () => {
   })
 
   it('молчит, когда окно выбора файла закрыли: это не ошибка', async () => {
-    const wrapper = await mountData()
+    const wrapper = await mountImport()
     core.control.cancelNextFilePick()
 
     await wrapper.find('.import__drop').trigger('click')
@@ -230,26 +238,33 @@ describe('DataView · импорт', () => {
   })
 })
 
-describe('DataView · ЗАКОН №1', () => {
-  it('ни путь к открытому файлу, ни разобранный файл не оседают в сторах', async () => {
-    const wrapper = await mountData()
+describe('Модалки данных · ЗАКОН №1', () => {
+  it('разобранный файл импорта не оседает в сторах', async () => {
+    const wrapper = await mountImport()
 
     await wrapper.find('.import__drop').trigger('click')
     await flushPromises()
-    await openExport(wrapper)
+
+    const state = JSON.stringify(pinia.state.value)
+    expect(state).not.toContain('session_id')
+
+    wrapper.unmount()
+  })
+
+  it('ни путь к открытому файлу, ни мастер-пароль не оседают в сторах', async () => {
+    const wrapper = await mountCsv()
+
     await confirmCsv(wrapper)
 
     const state = JSON.stringify(pinia.state.value)
     expect(state).not.toContain('syncra-plain-')
-    expect(state).not.toContain('session_id')
     expect(state).not.toContain(MOCK_MASTER_PASSWORD)
 
     wrapper.unmount()
   })
 
   it('не показывает ни одного секрета хранилища', async () => {
-    const wrapper = await mountData()
-    await openExport(wrapper)
+    const wrapper = await mountCsv()
     await confirmCsv(wrapper)
 
     expect(wrapper.html()).not.toMatch(/mock-[a-z]+-pw/)
