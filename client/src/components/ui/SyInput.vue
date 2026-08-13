@@ -146,7 +146,7 @@ function onInput(event: Event): void {
   display: flex;
   align-items: center;
   gap: var(--sy-space-3);
-  height: var(--sy-control-height-lg);
+  height: var(--sy-control-height-field);
   padding: 0 var(--sy-space-2) 0 var(--sy-space-5);
   border: 1px solid var(--sy-border);
   border-radius: var(--sy-radius-sm);

@@ -64,6 +64,27 @@ function submit(wrapper: Form) {
   return wrapper.find('form').trigger('submit')
 }
 
+/** Что показывает свёрнутый список секций. */
+function shownVault(wrapper: Form): string {
+  return wrapper.find('.form__vault .sy-select__value-text').text()
+}
+
+/**
+ * Выбрать секцию. Список свой, а не нативный `<select>`, поэтому варианты
+ * появляются в DOM только раскрытыми — и искать их можно по тому же, по чему их
+ * находит человек: по подписи.
+ */
+async function pickVault(wrapper: Form, label: string) {
+  await wrapper.find('.form__vault .sy-select__trigger').trigger('click')
+
+  const option = wrapper
+    .findAll('.form__vault .sy-select__option')
+    .find((node) => node.text() === label)
+  if (!option) throw new Error(`Секция «${label}» не найдена в списке`)
+
+  await option.trigger('click')
+}
+
 function passwordInput(wrapper: Form): HTMLInputElement {
   return wrapper.find<HTMLInputElement>('input[type="password"]').element
 }
@@ -280,8 +301,9 @@ describe('RecordForm · секция (F7)', () => {
     const wrapper = mount(RecordForm)
     await flushPromises()
 
-    const select = wrapper.find<HTMLSelectElement>('.form__vault select')
-    expect(select.element.value).toBe(MOCK_VAULT_PERSONAL)
+    expect(shownVault(wrapper)).toBe('Личное')
+
+    await wrapper.find('.form__vault .sy-select__trigger').trigger('click')
     expect(wrapper.find('.form__vault').text()).toContain('Рабочее · локальная')
 
     wrapper.unmount()
@@ -295,9 +317,7 @@ describe('RecordForm · секция (F7)', () => {
     const wrapper = mount(RecordForm)
     await flushPromises()
 
-    expect(wrapper.find<HTMLSelectElement>('.form__vault select').element.value).toBe(
-      MOCK_VAULT_WORK,
-    )
+    expect(shownVault(wrapper)).toBe('Рабочее · локальная')
     // О последствиях выбора говорим прямо у поля.
     expect(wrapper.find('.form__vault').text()).toContain('останется на этом устройстве')
 
@@ -310,7 +330,7 @@ describe('RecordForm · секция (F7)', () => {
     const wrapper = mount(RecordForm)
     await flushPromises()
 
-    await wrapper.find('.form__vault select').setValue(MOCK_VAULT_WORK)
+    await pickVault(wrapper, 'Рабочее · локальная')
     await fill(wrapper, 'Имя сервиса', 'Figma')
     await fill(wrapper, 'Логин', 'anna')
     await fill(wrapper, 'Пароль', 'mock-figma-pw')
@@ -328,7 +348,7 @@ describe('RecordForm · секция (F7)', () => {
     const { wrapper, list, record } = await mountEdit()
     expect(record.vault_id).toBe(MOCK_VAULT_PERSONAL)
 
-    await wrapper.find('.form__vault select').setValue(MOCK_VAULT_WORK)
+    await pickVault(wrapper, 'Рабочее · локальная')
     await submit(wrapper)
     await flushPromises()
 

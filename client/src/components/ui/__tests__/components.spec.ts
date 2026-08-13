@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import SyButton from '../SyButton.vue'
@@ -343,16 +343,123 @@ describe('SySelect', () => {
       props: { modelValue: 'personal', label: 'Секция', options },
     })
 
-    expect(wrapper.find<HTMLSelectElement>('select').element.value).toBe('personal')
+    expect(wrapper.find('.sy-select__value-text').text()).toBe('Личное')
 
-    await wrapper.find('select').setValue('work')
+    await wrapper.find('.sy-select__trigger').trigger('click')
+    await wrapper.findAll('.sy-select__option')[1]!.trigger('click')
+
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['work'])
   })
 
   it('без вариантов нечего выбирать', () => {
     const wrapper = mount(SySelect, { props: { modelValue: '', options: [] } })
 
-    expect(wrapper.find('select').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.sy-select__trigger').attributes('disabled')).toBeDefined()
+  })
+
+  it('список раскрывается и закрывается, и сам по себе ничего не выбирает', async () => {
+    const wrapper = mount(SySelect, { props: { modelValue: 'personal', options } })
+    const trigger = wrapper.find('.sy-select__trigger')
+
+    expect(trigger.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+
+    await trigger.trigger('click')
+
+    expect(trigger.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(2)
+    expect(wrapper.find('.sy-select__option--on').text()).toBe('Личное')
+
+    await trigger.trigger('click')
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
+  it('стрелки водят подсветку, а выбирает только Enter', async () => {
+    // Иначе проход стрелками молча менял бы секцию записи по дороге.
+    const wrapper = mount(SySelect, { props: { modelValue: 'personal', options } })
+    const trigger = wrapper.find('.sy-select__trigger')
+
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    expect(wrapper.findAll('.sy-select__option')[1]!.classes()).toContain(
+      'sy-select__option--active',
+    )
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+
+    await trigger.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['work'])
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+  })
+
+  it('Escape закрывает список и не идёт дальше по форме', async () => {
+    // Форма записи сама закрывается по Escape: без stopPropagation одно нажатие
+    // закрыло бы и список, и всю форму.
+    const wrapper = mount(SySelect, {
+      props: { modelValue: 'personal', options },
+      attachTo: document.body,
+    })
+    const outer = vi.fn()
+    document.body.addEventListener('keydown', outer)
+
+    await wrapper.find('.sy-select__trigger').trigger('click')
+    wrapper
+      .find('.sy-select__trigger')
+      .element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    expect(outer).not.toHaveBeenCalled()
+
+    document.body.removeEventListener('keydown', outer)
+    wrapper.unmount()
+  })
+
+  it('щелчок мимо закрывает список', async () => {
+    const wrapper = mount(SySelect, {
+      props: { modelValue: 'personal', options },
+      attachTo: document.body,
+    })
+
+    await wrapper.find('.sy-select__trigger').trigger('click')
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true)
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('цветная метка варианта доезжает и до триггера, и до списка', async () => {
+    const wrapper = mount(SySelect, {
+      props: {
+        modelValue: 'personal',
+        options: [{ value: 'personal', label: 'Личное', dot: 'var(--sy-vault-mint)' }],
+      },
+    })
+
+    expect(wrapper.find('.sy-select__trigger .sy-select__dot').attributes('style')).toContain(
+      'var(--sy-vault-mint)',
+    )
+
+    await wrapper.find('.sy-select__trigger').trigger('click')
+    expect(wrapper.find('.sy-select__option .sy-select__dot').exists()).toBe(true)
+  })
+
+  it('подвал показывается только когда его дали', async () => {
+    const withFooter = mount(SySelect, {
+      props: { modelValue: 'personal', options },
+      slots: { footer: '<button type="button">Управление секциями…</button>' },
+    })
+    await withFooter.find('.sy-select__trigger').trigger('click')
+    expect(withFooter.find('.sy-select__footer').text()).toBe('Управление секциями…')
+
+    const plain = mount(SySelect, { props: { modelValue: 'personal', options } })
+    await plain.find('.sy-select__trigger').trigger('click')
+    expect(plain.find('.sy-select__footer').exists()).toBe(false)
   })
 })
 

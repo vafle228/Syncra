@@ -79,7 +79,12 @@ These unblock everything else. Do them first.
   `--sy-surface-2` (`Прототип:1520-1522`). Today `SyButton size="sm"` is 30px while
   `.card__menu-button` is a hardcoded 34px.
 
-- [ ] **1.3 `SySelect` — replace the native `<select>` with the mockup's custom dropdown**
+- [X] **1.3 `SySelect` — replace the native `<select>` with the mockup's custom dropdown**
+  > NOTE: the trigger is specified at 38px, but `SyInput` rendered its box at 42px
+  > (`--sy-control-height-lg`), and the two stand side by side in `.form__pair`. The mockup puts
+  > form fields at 38px too (`Прототип:1721`, and task 4.5 assumes it), so the field height was
+  > split out of the button ladder into `--sy-control-height-field: 38px` and `SyInput` now uses
+  > it. `SyButton size="lg"` is untouched at 42px.
   A native `<select>` renders OS chrome that cannot be themed — **this is user item 12.** Rewrite
   `SySelect.vue` keeping its public API (`modelValue`, `label`, `options`, `hint`, `disabled`) and
   adding an optional per-option `dot` colour and a `#footer` slot. Spec from `Прототип:1741-1769`:

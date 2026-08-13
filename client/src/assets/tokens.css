@@ -255,6 +255,12 @@
   /* 34px — высота действий в шапках панелей; на лестнице 30/36/42 её не было. */
   --sy-control-height-md: 34px;
   --sy-control-height-lg: 42px;
+  /*
+   * Поле ввода в форме — 38px во всём прототипе (`Прототип:1721`), и это НЕ то
+   * же, что кнопка `size="lg"`. Пока обе величины брались из одного
+   * `--sy-control-height-lg`, поля были на 4px выше макета.
+   */
+  --sy-control-height-field: 38px;
   --sy-row-height: 56px;
 
   --sy-focus-ring: 0 0 0 3px var(--sy-accent-quiet);
