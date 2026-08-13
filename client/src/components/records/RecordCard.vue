@@ -234,11 +234,12 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
       </div>
 
       <div class="card__head-actions">
-        <SyButton size="sm" data-test="card-edit" @click="emit('edit')">Изменить</SyButton>
+        <SyButton size="header" data-test="card-edit" @click="emit('edit')">Изменить</SyButton>
 
         <div ref="menuRoot" class="card__menu">
-          <button
-            type="button"
+          <SyButton
+            size="header"
+            icon
             class="card__menu-button"
             title="Другие действия"
             aria-label="Другие действия"
@@ -246,7 +247,7 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
             @click="toggleMenu"
           >
             ···
-          </button>
+          </SyButton>
 
           <div v-if="menuOpen" class="card__menu-pop" role="dialog" aria-label="Другие действия">
             <div class="card__menu-head">
@@ -625,26 +626,10 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
   position: relative;
 }
 
+/* Всю геометрию даёт `SyButton size="header" icon`; здесь — только кегль глифа:
+   «···» в макете на полразмера мельче подписи соседней кнопки. */
 .card__menu-button {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--sy-border-strong);
-  border-radius: var(--sy-radius-sm);
-  background: var(--sy-surface);
-  color: var(--sy-text-2);
-  font-family: inherit;
   font-size: 12px;
-  cursor: pointer;
-  transition: background var(--sy-transition);
-}
-
-.card__menu-button:hover {
-  background: var(--sy-surface-2);
-}
-
-.card__menu-button:focus-visible {
-  outline: none;
-  box-shadow: var(--sy-focus-ring);
 }
 
 .card__menu-pop {

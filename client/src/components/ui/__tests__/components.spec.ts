@@ -30,6 +30,17 @@ describe('SyButton', () => {
     await wrapper.trigger('click')
     expect(wrapper.emitted('click')).toBeUndefined()
   })
+
+  it('иконочный вариант помечается классом и не мешает размеру', () => {
+    const wrapper = mount(SyButton, { props: { icon: true, size: 'header' } })
+
+    expect(wrapper.classes()).toContain('sy-button--icon')
+    expect(wrapper.classes()).toContain('sy-button--header')
+  })
+
+  it('без пропа icon квадратным не становится', () => {
+    expect(mount(SyButton).classes()).not.toContain('sy-button--icon')
+  })
 })
 
 describe('SyInput', () => {

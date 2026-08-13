@@ -11,12 +11,22 @@
 withDefaults(
   defineProps<{
     variant?: 'primary' | 'secondary' | 'ghost' | 'danger'
-    size?: 'md' | 'sm' | 'lg'
+    /**
+     * Высота. `header` — 34px из шапок панелей прототипа: на ладдере 30/36/42
+     * такой ступени не было, поэтому каждая шапка рисовала её числом у себя.
+     */
+    size?: 'md' | 'sm' | 'lg' | 'header'
     type?: 'button' | 'submit'
     disabled?: boolean
     loading?: boolean
     /** Растянуть по ширине родителя. */
     block?: boolean
+    /**
+     * Кнопка под один глиф: квадрат со стороной в высоту выбранного размера.
+     * Без этого пропа такие кнопки собирались вручную в каждом компоненте — и
+     * разъезжались по высоте с соседями (в шапке карточки 30px против 34px).
+     */
+    icon?: boolean
   }>(),
   {
     variant: 'secondary',
@@ -25,6 +35,7 @@ withDefaults(
     disabled: false,
     loading: false,
     block: false,
+    icon: false,
   },
 )
 </script>
@@ -36,7 +47,7 @@ withDefaults(
       'sy-button',
       `sy-button--${variant}`,
       `sy-button--${size}`,
-      { 'sy-button--block': block },
+      { 'sy-button--block': block, 'sy-button--icon': icon },
     ]"
     :disabled="disabled || loading"
     :aria-busy="loading || undefined"
@@ -48,11 +59,18 @@ withDefaults(
 
 <style scoped>
 .sy-button {
+  /*
+   * Высота живёт в локальной переменной, а не только в `height`: иконочный
+   * вариант делает из неё же ширину, и два числа рядом рано или поздно
+   * разъехались бы. Префикс `--sy-` тут нарочно не берём — он за токенами.
+   */
+  --button-height: var(--sy-control-height);
+
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--sy-space-3);
-  height: var(--sy-control-height);
+  height: var(--button-height);
   padding: 0 var(--sy-space-6);
   border-radius: var(--sy-radius-sm);
   border: 1px solid transparent;
@@ -68,19 +86,43 @@ withDefaults(
 }
 
 .sy-button--sm {
-  height: var(--sy-control-height-sm);
+  --button-height: var(--sy-control-height-sm);
+
   padding: 0 var(--sy-space-5);
   font-size: var(--sy-text-small);
 }
 
+/* Действие в шапке панели: 34px, подпись 13px — размеры прототипа. */
+.sy-button--header {
+  --button-height: var(--sy-control-height-md);
+
+  padding: 0 14px;
+  font-size: var(--sy-text-note);
+}
+
 .sy-button--lg {
-  height: var(--sy-control-height-lg);
+  --button-height: var(--sy-control-height-lg);
+
   padding: 0 var(--sy-space-7);
   font-size: 14px;
 }
 
 .sy-button--block {
   width: 100%;
+}
+
+.sy-button--icon {
+  width: var(--button-height);
+  padding: 0;
+}
+
+/*
+ * Глиф тише подписи: в макете «Изменить» набрано основным цветом текста, а
+ * соседнее «···» — вторым. Разница читается как «это действие, а это ещё
+ * действия», и держать её стоит на уровне варианта, а не каждого места.
+ */
+.sy-button--icon.sy-button--secondary {
+  color: var(--sy-text-2);
 }
 
 .sy-button:disabled {

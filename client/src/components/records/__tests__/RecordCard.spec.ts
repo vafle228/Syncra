@@ -400,6 +400,21 @@ describe('RecordCard · плашка состояния в шапке (F13)', ()
   })
 })
 
+describe('RecordCard · шапка', () => {
+  it('«Изменить» и «···» — одного размера', async () => {
+    // Пока «···» рисовалась в карточке руками (34px), а «Изменить» брала
+    // `size="sm"` (30px), они стояли рядом разной высоты. Сравнивать пиксели в
+    // jsdom нечего — сравниваем то, из чего высота берётся.
+    const { wrapper } = await mountCard()
+
+    expect(wrapper.find('[data-test="card-edit"]').classes()).toContain('sy-button--header')
+    expect(wrapper.find('.card__menu-button').classes()).toContain('sy-button--header')
+    expect(wrapper.find('.card__menu-button').classes()).toContain('sy-button--icon')
+
+    wrapper.unmount()
+  })
+})
+
 describe('RecordCard · меню «···» (F13)', () => {
   it('открывается по нажатию и честно говорит, что состав не решён', async () => {
     const { wrapper } = await mountCard()

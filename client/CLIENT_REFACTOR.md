@@ -70,7 +70,7 @@ These unblock everything else. Do them first.
   - Add the small type sizes components currently hardcode (`10px`, `10.5px`, `11.5px`, `13px`,
     `14.5px`) and the `5px` / `7px` radii used by chips and swatches.
 
-- [ ] **1.2 `SyButton` — icon-only variant**
+- [X] **1.2 `SyButton` — icon-only variant**
   Four icon buttons are hand-rolled today (`.card__menu-button`, `.record-list__new`,
   `.record-list__copy`, `.form__url-remove`), which is why user item 3's height mismatch exists at
   all. Add an `icon?: boolean` prop producing a square button whose side equals the chosen size.
@@ -483,6 +483,14 @@ and here.
 - [ ] **E6. `SyListItem` exposes an `#actions` slot that `RecordList` ignores**, absolutely
   positioning `.record-list__copy` instead, with a hardcoded `border-radius: 7px`. Fold into phase
   1.2's icon-button work.
+  > NOTE: the slot cannot be used as described, and `RecordList` is not at fault. The row is itself
+  > a `<button>` wrapping `SyListItem` (`RecordList.vue:266-279`), so anything in the slot would be
+  > a button nested inside a button — invalid markup, and a click on it would also open the record.
+  > The comment at `RecordList.vue:281-284` says exactly this. What is left of E6 is real but
+  > smaller: the hardcoded `border-radius: 7px` (now `--sy-radius-tag`'s neighbour
+  > `--sy-radius-inner`, added in 1.1), and the fact that `SyListItem`'s `#actions` slot has no
+  > callers anywhere in `src/` — it is dead API and should probably be deleted. Deliberately left
+  > for phase 2, which restructures this file anyway (2.1, 2.2).
 - [ ] **E7. `TrustedDevices.vue` has a stray blank line (170) and an out-of-order import** —
   lint-adjacent noise; tidy while in the file.
 
