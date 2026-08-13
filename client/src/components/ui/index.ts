@@ -3,6 +3,7 @@
 export { default as SyButton } from './SyButton.vue'
 export { default as SyCopyButton } from './SyCopyButton.vue'
 export { default as SyEmptyState } from './SyEmptyState.vue'
+export { default as SyField } from './SyField.vue'
 export { default as SyInput } from './SyInput.vue'
 export { default as SyListItem } from './SyListItem.vue'
 export { default as SyModal } from './SyModal.vue'

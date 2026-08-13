@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useId } from 'vue'
+
 import { SyButton, SyInput, VAULT_COLOR_NAMES, vaultColorVar } from '@/components/ui'
 import { VAULT_COLORS, VAULT_NAME_MAX_LENGTH, type VaultColor } from '@/core/contract'
 
@@ -29,6 +31,8 @@ const emit = defineEmits<{
 
 /** Максимум длины дублирован из контракта: ядро проверит повторно. */
 const maxLength = VAULT_NAME_MAX_LENGTH
+
+const colorsLabelId = useId()
 </script>
 
 <template>
@@ -45,8 +49,14 @@ const maxLength = VAULT_NAME_MAX_LENGTH
       @submit="emit('submit')"
     />
 
-    <fieldset class="section-editor__colors">
-      <legend class="section-editor__colors-label">Цвет метки</legend>
+    <!--
+      Не `<fieldset>/<legend>`: подпись и ряд кружков должны быть двумя
+      отдельными ячейками сетки, а `<legend>` обязан лежать внутри `<fieldset>`.
+      `role="group"` с `aria-labelledby` даёт диктору ровно то же самое.
+    -->
+    <span :id="colorsLabelId" class="section-editor__colors-label">Цвет метки</span>
+
+    <div class="section-editor__colors" role="group" :aria-labelledby="colorsLabelId">
       <button
         v-for="option in VAULT_COLORS"
         :key="option"
@@ -60,7 +70,7 @@ const maxLength = VAULT_NAME_MAX_LENGTH
       >
         <span class="section-editor__color-name">{{ VAULT_COLOR_NAMES[option] }}</span>
       </button>
-    </fieldset>
+    </div>
 
     <div class="section-editor__actions">
       <SyButton variant="primary" size="sm" type="submit" :loading="saving">
@@ -73,9 +83,23 @@ const maxLength = VAULT_NAME_MAX_LENGTH
 
 <style scoped>
 .section-editor {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sy-space-6);
+  /*
+   * Имя · цвет · действия, и общая строка подписей сверху. Кнопки встают
+   * вровень с полем не потому, что им отмерено 22px сверху, а потому, что они
+   * стоят в той же строке сетки, что и кружки, — под общей строкой подписей.
+   * Высота этой строки складывается из тех же токенов, из которых её считает
+   * себе `SyInput`, так что разъехаться им теперь нечем.
+   */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  /*
+   * Первая строка ровно в высоту подписи, а не `auto`: поле занимает обе
+   * строки, и при `auto` сетка раздала бы его высоту им обеим — вторая строка
+   * уехала бы вниз вместе с кнопками.
+   */
+  grid-template-rows: var(--sy-text-label-lh) auto;
+  align-items: start;
+  gap: var(--sy-space-2) var(--sy-space-6);
   padding: var(--sy-space-5) var(--sy-space-6);
   border: 1px solid var(--sy-accent);
   border-radius: var(--sy-radius);
@@ -83,22 +107,16 @@ const maxLength = VAULT_NAME_MAX_LENGTH
   box-shadow: var(--sy-focus-ring);
 }
 
+/* Поле само рисует подпись, значение и подсказку — отдаём ему обе строки. */
 .section-editor__name {
-  flex: 1;
+  grid-column: 1;
+  grid-row: 1 / span 2;
   min-width: 0;
 }
 
-.section-editor__colors {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sy-space-2);
-  margin: 0;
-  padding: 0;
-  border: none;
-}
-
 .section-editor__colors-label {
+  grid-column: 2;
+  grid-row: 1;
   padding: 0;
   font-family: var(--sy-font-mono);
   font-size: var(--sy-text-label);
@@ -106,6 +124,11 @@ const maxLength = VAULT_NAME_MAX_LENGTH
   letter-spacing: var(--sy-tracking-label);
   text-transform: uppercase;
   color: var(--sy-text-3);
+}
+
+.section-editor__colors {
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .section-editor__color {
@@ -139,9 +162,9 @@ const maxLength = VAULT_NAME_MAX_LENGTH
 }
 
 .section-editor__actions {
-  flex: none;
+  grid-column: 3;
+  grid-row: 2;
   display: flex;
   gap: var(--sy-space-3);
-  margin-top: 22px;
 }
 </style>

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import PasswordGenerator from '@/components/generator/PasswordGenerator.vue'
-import { SyButton, SyInput, SySelect } from '@/components/ui'
+import { SyButton, SyField, SyInput, SySelect } from '@/components/ui'
 import { normalizeHost } from '@/composables/useRecordList'
 import type { RecordDraft, RecordMeta, RecordPatch, SecretField, VaultId } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
@@ -439,10 +439,9 @@ async function save(): Promise<void> {
         не листая форму.
       -->
       <PasswordGenerator :note="passwordNote" :note-value="passwordNoteValue" @pick="usePassword">
-        <div class="form__password">
+        <SyField label="Пароль" :invalid="Boolean(errors.password)">
           <SyInput
             v-model="secrets.password.value"
-            label="Пароль"
             type="password"
             :placeholder="isEdit ? 'Оставить как было' : 'Введите, вставьте или выберите вариант'"
             :error="errors.password"
@@ -450,46 +449,46 @@ async function save(): Promise<void> {
             autocomplete="new-password"
             @submit="save"
           />
-          <SyButton
-            v-if="isEdit && secrets.password.original === null"
-            size="sm"
-            :loading="secrets.password.loading"
-            @click="loadCurrent('password')"
-            >Показать текущий</SyButton
-          >
-        </div>
+
+          <template v-if="isEdit && secrets.password.original === null" #action>
+            <SyButton
+              size="sm"
+              :loading="secrets.password.loading"
+              @click="loadCurrent('password')"
+              >Показать текущий</SyButton
+            >
+          </template>
+        </SyField>
 
         <p v-if="secretError" class="form__error" role="alert">{{ secretError }}</p>
       </PasswordGenerator>
 
       <div class="form__secrets-grid">
-        <div class="form__secret form__secret--notes">
-          <div class="form__field">
-            <span class="form__label">Заметки · хранятся как секрет</span>
-            <textarea
-              v-model="secrets.notes.value"
-              class="form__textarea"
-              rows="3"
-              :placeholder="isEdit ? 'Оставить как было' : 'Скрыты по умолчанию, как пароль'"
-              spellcheck="false"
-            />
-            <p class="form__note">
-              {{ secretHint('notes', 'Хранятся так же, как пароль: скрыты по умолчанию.') }}
-            </p>
-          </div>
-          <SyButton
-            v-if="isEdit && secrets.notes.original === null && record?.has_notes"
-            size="sm"
-            :loading="secrets.notes.loading"
-            @click="loadCurrent('notes')"
-            >Показать текущие</SyButton
-          >
-        </div>
+        <SyField label="Заметки · хранятся как секрет">
+          <textarea
+            v-model="secrets.notes.value"
+            class="form__textarea"
+            rows="3"
+            :placeholder="isEdit ? 'Оставить как было' : 'Скрыты по умолчанию, как пароль'"
+            spellcheck="false"
+          />
+          <p class="form__note">
+            {{ secretHint('notes', 'Хранятся так же, как пароль: скрыты по умолчанию.') }}
+          </p>
 
-        <div class="form__secret">
+          <template
+            v-if="isEdit && secrets.notes.original === null && record?.has_notes"
+            #action
+          >
+            <SyButton size="sm" :loading="secrets.notes.loading" @click="loadCurrent('notes')"
+              >Показать текущие</SyButton
+            >
+          </template>
+        </SyField>
+
+        <SyField label="Код TOTP · необязательно">
           <SyInput
             v-model="secrets.totp_secret.value"
-            label="Код TOTP · необязательно"
             mono
             :placeholder="isEdit ? 'Оставить как было' : 'Ключ из настроек двухфакторной защиты'"
             :hint="
@@ -500,14 +499,19 @@ async function save(): Promise<void> {
             "
             @submit="save"
           />
-          <SyButton
+
+          <template
             v-if="isEdit && secrets.totp_secret.original === null && record?.has_totp"
-            size="sm"
-            :loading="secrets.totp_secret.loading"
-            @click="loadCurrent('totp_secret')"
-            >Показать текущий</SyButton
+            #action
           >
-        </div>
+            <SyButton
+              size="sm"
+              :loading="secrets.totp_secret.loading"
+              @click="loadCurrent('totp_secret')"
+              >Показать текущий</SyButton
+            >
+          </template>
+        </SyField>
       </div>
     </div>
   </form>
@@ -578,14 +582,6 @@ async function save(): Promise<void> {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sy-space-6) var(--sy-space-7);
   align-items: start;
-}
-
-.form__field {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sy-space-2);
 }
 
 .form__label {
@@ -733,36 +729,6 @@ async function save(): Promise<void> {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sy-space-7);
   align-items: start;
-}
-
-.form__password {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sy-space-4);
-}
-
-.form__password > :first-child {
-  flex: 1;
-  min-width: 0;
-}
-
-.form__password .sy-button {
-  margin-top: 22px;
-}
-
-.form__secret {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sy-space-4);
-}
-
-.form__secret > :first-child {
-  flex: 1;
-  min-width: 0;
-}
-
-.form__secret .sy-button {
-  margin-top: 22px;
 }
 
 .form__textarea {

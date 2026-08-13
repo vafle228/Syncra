@@ -202,7 +202,7 @@ describe('VaultShell · сквозные пути между панелями', 
     url.element.value = 'https://figma.com'
     await url.trigger('input')
 
-    const password = wrapper.find<HTMLInputElement>('.form__password input[type="password"]')
+    const password = wrapper.find<HTMLInputElement>('input[type="password"]')
     password.element.value = 'mock-figma-pw'
     await password.trigger('input')
 
@@ -232,7 +232,7 @@ describe('VaultShell · сквозные пути между панелями', 
     await set(0, 'Figma')
     await set(1, 'anna@studio.example')
 
-    const password = wrapper.find<HTMLInputElement>('.form__password input[type="password"]')
+    const password = wrapper.find<HTMLInputElement>('input[type="password"]')
     password.element.value = 'mock-figma-pw'
     await password.trigger('input')
 

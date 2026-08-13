@@ -51,8 +51,10 @@ async function fill(wrapper: Form, label: string, value: string) {
     return
   }
 
-  const field = wrapper.findAll('.sy-input').find((node) => {
-    const caption = node.find('.sy-input__label')
+  // Подпись рисует либо само поле, либо `SyField` — там, где рядом с полем
+  // стоит кнопка и подпись обязана быть общей строкой сетки для обоих.
+  const field = wrapper.findAll('.sy-input, .sy-field').find((node) => {
+    const caption = node.find('.sy-input__label, .sy-field__label')
     return caption.exists() && caption.text() === label
   })
   if (!field) throw new Error(`Поле «${label}» не найдено`)

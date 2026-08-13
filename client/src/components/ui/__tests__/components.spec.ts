@@ -4,6 +4,7 @@ import { mount } from '@vue/test-utils'
 import SyButton from '../SyButton.vue'
 import SyCopyButton from '../SyCopyButton.vue'
 import SyEmptyState from '../SyEmptyState.vue'
+import SyField from '../SyField.vue'
 import SyInput from '../SyInput.vue'
 import SyListItem from '../SyListItem.vue'
 import SyModal from '../SyModal.vue'
@@ -329,6 +330,40 @@ describe('SyToggle', () => {
     expect(wrapper.find('.sy-toggle__switch').attributes('disabled')).toBeDefined()
     await wrapper.find('.sy-toggle__switch').trigger('click')
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+})
+
+describe('SyField', () => {
+  it('подпись связана с контролом внутри, хотя `for` нигде не проставлен', () => {
+    // Ради этого подпись — настоящий `<label>` с `display: contents`: сетке он
+    // не мешает, а диктору поле перестаёт быть «текстовым полем» без имени.
+    const wrapper = mount(SyField, {
+      props: { label: 'Пароль' },
+      slots: { default: '<input type="password" />' },
+      attachTo: document.body,
+    })
+
+    const input = wrapper.find<HTMLInputElement>('input').element
+    expect(input.labels?.[0]?.textContent?.trim()).toBe('Пароль')
+
+    wrapper.unmount()
+  })
+
+  it('место под действие занимает, только когда действие дали', () => {
+    const plain = mount(SyField, { props: { label: 'Пароль' } })
+    expect(plain.find('.sy-field__action').exists()).toBe(false)
+
+    const withAction = mount(SyField, {
+      props: { label: 'Пароль' },
+      slots: { action: '<button type="button">Показать текущий</button>' },
+    })
+    expect(withAction.find('.sy-field__action').text()).toBe('Показать текущий')
+  })
+
+  it('ошибку в поле видно по подписи', () => {
+    const wrapper = mount(SyField, { props: { label: 'Пароль', invalid: true } })
+
+    expect(wrapper.find('.sy-field__label').classes()).toContain('sy-field__label--invalid')
   })
 })
 

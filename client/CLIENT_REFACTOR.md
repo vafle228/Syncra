@@ -105,7 +105,7 @@ These unblock everything else. Do them first.
   - **Keyboard / a11y**: `role="combobox"` + `role="listbox"`, ↑↓/Home/End/Enter/Escape, close on
     outside mousedown. Reuse the popover open/close pattern already in `RecordCard.vue:126-155`.
 
-- [ ] **1.4 `SyField` — a field with a trailing action**
+- [X] **1.4 `SyField` — a field with a trailing action**
   The magic number `margin-top: 22px` appears three times to nudge a sibling button past the label
   (`RecordForm.vue:738-751`, `RecordForm.vue:764`, `SectionEditor.vue:141-146`). Introduce a small
   `SyField` wrapper (label + control slot + `#action` slot) that aligns by grid instead of by a
@@ -482,7 +482,7 @@ and here.
   «Копировать» while metadata rows say «Скопировать адрес/логин». *(Covered by 2.5.)*
 - [ ] **E3. The delete dialog does not use `size="confirm"`** despite `SyModal`'s own prop doc
   naming that size for exactly this case. *(Covered by 2.9.)*
-- [ ] **E4. `margin-top: 22px` appears three times** as a label-height hack. *(Covered by 1.4.)*
+- [X] **E4. `margin-top: 22px` appears three times** as a label-height hack. *(Covered by 1.4.)*
 - [ ] **E5. `SyModal` has no focus trap and does not restore focus on close** — a real
   accessibility gap in a security product. *(Suggested in 1.5.)*
 - [ ] **E6. `SyListItem` exposes an `#actions` slot that `RecordList` ignores**, absolutely
