@@ -655,7 +655,7 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
   width: 278px;
   padding: var(--sy-space-2);
   border: 1px solid var(--sy-border-strong);
-  border-radius: var(--sy-radius-md);
+  border-radius: var(--sy-radius);
   background: var(--sy-surface);
   box-shadow: var(--sy-shadow-window-2);
   animation: sy-in 0.14s ease-out;

@@ -122,6 +122,59 @@
   --sy-vault-coral: oklch(0.56 0.13 32);
 }
 
+/*
+ * Акценты. Четыре палитры прототипа (`Syncra Прототип.dc.html:2595-2600`),
+ * переключаются атрибутом `data-accent` на <html>. Mint (hue 168) — умолчание
+ * и живёт в блоках выше: у него атрибута нет.
+ *
+ * Каждый акцент описан дважды. Тёмная тема берёт значения макета один в один;
+ * светлой нужен тот же hue, но темнее — иначе контраст на белом падает ниже
+ * 4.5:1 (ровно та же правка, что сделана для mint в `data-theme='light'`).
+ * Светлые селекторы длиннее на один атрибут намеренно: без этого они проиграли
+ * бы по специфичности тёмным и светлая тема получила бы тёмный акцент.
+ */
+:root[data-accent='cyan'] {
+  --sy-accent: oklch(0.79 0.11 218);
+  --sy-accent-quiet: oklch(0.79 0.11 218 / 0.14);
+  --sy-accent-border: oklch(0.79 0.11 218 / 0.38);
+  --sy-accent-fg: oklch(0.2 0.03 218);
+}
+
+:root[data-accent='amber'] {
+  --sy-accent: oklch(0.755 0.125 62);
+  --sy-accent-quiet: oklch(0.755 0.125 62 / 0.14);
+  --sy-accent-border: oklch(0.755 0.125 62 / 0.38);
+  --sy-accent-fg: oklch(0.205 0.045 62);
+}
+
+:root[data-accent='indigo'] {
+  --sy-accent: oklch(0.74 0.13 288);
+  --sy-accent-quiet: oklch(0.74 0.13 288 / 0.14);
+  --sy-accent-border: oklch(0.74 0.13 288 / 0.38);
+  --sy-accent-fg: oklch(0.2 0.04 288);
+}
+
+:root[data-theme='light'][data-accent='cyan'] {
+  --sy-accent: oklch(0.52 0.1 218);
+  --sy-accent-quiet: oklch(0.52 0.1 218 / 0.1);
+  --sy-accent-border: oklch(0.52 0.1 218 / 0.32);
+  --sy-accent-fg: oklch(0.985 0.015 218);
+}
+
+:root[data-theme='light'][data-accent='amber'] {
+  --sy-accent: oklch(0.52 0.115 62);
+  --sy-accent-quiet: oklch(0.52 0.115 62 / 0.1);
+  --sy-accent-border: oklch(0.52 0.115 62 / 0.32);
+  --sy-accent-fg: oklch(0.985 0.015 62);
+}
+
+:root[data-theme='light'][data-accent='indigo'] {
+  --sy-accent: oklch(0.52 0.12 288);
+  --sy-accent-quiet: oklch(0.52 0.12 288 / 0.1);
+  --sy-accent-border: oklch(0.52 0.12 288 / 0.32);
+  --sy-accent-fg: oklch(0.985 0.015 288);
+}
+
 :root {
   /*
    * QR-код (F8). Единственная пара цветов, которая НЕ переворачивается вместе
@@ -152,6 +205,18 @@
   --sy-text-label: 11px;
   --sy-text-label-lh: 16px;
 
+  /*
+   * Мелкая ступень лестницы. Прототип пользуется этими размерами постоянно —
+   * заголовок строки списка, пояснение под ним, mono-подписи, — а компоненты
+   * до сих пор писали их числом. Имена по роли, а не по величине: 13px и 13.5px
+   * рядом в ладдере ничем бы друг от друга не отличались.
+   */
+  --sy-text-item-title: 14.5px; /* имя строки/карточки в списке */
+  --sy-text-note: 13px; /* пояснение в карточке настроек */
+  --sy-text-caption: 11.5px; /* подпись рядом с контролом */
+  --sy-text-meta: 10.5px; /* mono-строка подвала и меты */
+  --sy-text-tag: 10px; /* mono-метка uppercase */
+
   --sy-weight-regular: 450;
   --sy-weight-medium: 500;
   --sy-weight-semibold: 600;
@@ -170,15 +235,25 @@
   --sy-space-9: 32px;
   --sy-space-10: 44px;
 
-  /* Форма. */
+  /* Форма. Основная лестница — xs/sm/(без суффикса)/lg/pill. */
   --sy-radius-xs: 6px;
   --sy-radius-sm: 8px;
   --sy-radius: 10px;
   --sy-radius-lg: 14px;
   --sy-radius-pill: 999px;
 
+  /*
+   * Две ступени вне лестницы: в прототипе мелочь внутри карточек скруглена
+   * чуть иначе, чем сами карточки, и подгонка их под 6/8px читается как ошибка.
+   * Имена по роли — чтобы никто не пытался вставить их в ладдер между xs и sm.
+   */
+  --sy-radius-tag: 5px; /* mono-чипы: «это устройство», account_label */
+  --sy-radius-inner: 7px; /* кнопки и свотчи внутри карточек */
+
   --sy-control-height: 36px;
   --sy-control-height-sm: 30px;
+  /* 34px — высота действий в шапках панелей; на лестнице 30/36/42 её не было. */
+  --sy-control-height-md: 34px;
   --sy-control-height-lg: 42px;
   --sy-row-height: 56px;
 

@@ -363,7 +363,7 @@ function toPin(): void {
 .unlock__key {
   height: 56px;
   border: 1px solid var(--sy-border);
-  border-radius: var(--sy-radius-md);
+  border-radius: var(--sy-radius);
   background: var(--sy-surface);
   color: var(--sy-text);
   font-family: var(--sy-font-mono);
