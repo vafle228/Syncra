@@ -25,8 +25,13 @@ afterEach(() => {
   setCoreClient(null)
 })
 
+/** Строку состояния под вариантами даёт форма — панель её только показывает. */
+const NOTE = 'Текущий пароль остаётся, пока не выбран новый'
+
 async function mountPanel() {
-  const wrapper = mount(PasswordGenerator)
+  const wrapper = mount(PasswordGenerator, {
+    props: { note: NOTE, noteValue: '•••••••••• · без изменений' },
+  })
   await flushPromises()
   return wrapper
 }
@@ -86,15 +91,56 @@ describe('PasswordGenerator', () => {
     wrapper.unmount()
   })
 
-  it('правила прячутся за кнопкой и раскрываются по ней', async () => {
+  it('состояние черновика показывается строкой над вариантами', async () => {
     const wrapper = await mountPanel()
 
-    expect(wrapper.findComponent(GeneratorProfileForm).exists()).toBe(false)
+    expect(wrapper.find('.pg__status').text()).toContain(NOTE)
+    expect(wrapper.find('.pg__status-value').text()).toBe('•••••••••• · без изменений')
+    // Правила рядом с вариантами: сколько символов и сколько это в битах.
+    expect(wrapper.find('.pg__entropy').text()).toMatch(/^Профиль: 20 символов · ≈ \d+ бит/)
 
-    await button(wrapper, 'Правила').trigger('click')
+    wrapper.unmount()
+  })
 
-    expect(wrapper.findComponent(GeneratorProfileForm).exists()).toBe(true)
-    expect(wrapper.text()).toContain('Профиль генерации · настраивается один раз')
+  it('свёрнутый профиль раскрывается кнопкой из макета', async () => {
+    const wrapper = await mountPanel()
+
+    expect(wrapper.find('.pg__profile').exists()).toBe(false)
+
+    await button(wrapper, 'Профиль генерации').trigger('click')
+
+    const profile = wrapper.find('.pg__profile')
+    expect(profile.exists()).toBe(true)
+    expect(profile.text()).toContain('Длина')
+    expect(profile.text()).toContain('Наборы символов')
+    // Буквы из алфавита не убираются — и кнопкой не притворяются.
+    expect(wrapper.findAll('.pg__chip--fixed').map((node) => node.text())).toEqual(['a–z', 'A–Z'])
+
+    await button(wrapper, 'Свернуть профиль').trigger('click')
+    expect(wrapper.find('.pg__profile').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('правка правил не уходит в ядро сама — только по «Сохранить как профиль»', async () => {
+    const wrapper = await mountPanel()
+    await button(wrapper, 'Профиль генерации').trigger('click')
+
+    expect(button(wrapper, 'Сохранить как профиль').attributes('disabled')).toBeDefined()
+
+    // Выключаем спецсимволы: правила изменились, но сохранённый профиль — нет.
+    const symbols = wrapper.findAll('button.pg__chip').find((node) => node.text() === '!@#$')!
+    await symbols.trigger('click')
+    await flushPromises()
+
+    expect(symbols.classes()).not.toContain('pg__chip--on')
+    expect(button(wrapper, 'Сохранить как профиль').attributes('disabled')).toBeUndefined()
+    expect((await core.getGeneratorProfile()).symbols).toBe(true)
+
+    await button(wrapper, 'Сохранить как профиль').trigger('click')
+    await flushPromises()
+
+    expect((await core.getGeneratorProfile()).symbols).toBe(false)
 
     wrapper.unmount()
   })
@@ -109,16 +155,6 @@ describe('PasswordGenerator', () => {
 
     expect(wrapper.text()).toContain('Ядро занято.')
     expect(variants(wrapper)).toEqual([])
-
-    wrapper.unmount()
-  })
-
-  it('«Закрыть» просит родителя убрать панель', async () => {
-    const wrapper = await mountPanel()
-
-    await button(wrapper, 'Закрыть').trigger('click')
-
-    expect(wrapper.emitted('close')).toHaveLength(1)
 
     wrapper.unmount()
   })

@@ -60,7 +60,7 @@ describe('VaultView · что показывает панель', () => {
 
     await wrapper.find('.card__head-actions button').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.form__title').text()).toBe('Изменить запись')
+    expect(wrapper.find('.form__title').text()).toBe('Изменение · GitHub')
 
     await wrapper.find('.form__head-actions button').trigger('click')
     await flushPromises()

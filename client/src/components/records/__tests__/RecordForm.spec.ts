@@ -240,16 +240,19 @@ describe('RecordForm · генератор (F6)', () => {
     wrapper.unmount()
   })
 
-  it('в редактировании панель закрыта: замена пароля — осознанное действие', async () => {
+  it('в редактировании варианты на виду, но пароль не меняется сам', async () => {
     const { wrapper } = await mountEdit()
 
-    expect(wrapper.findComponent(PasswordGenerator).exists()).toBe(false)
-
-    const open = wrapper.findAll('button').find((node) => node.text() === 'Подобрать')
-    await open!.trigger('click')
-    await flushPromises()
-
+    // Панель — это и есть блок «Пароль» из макета: она на месте всегда.
     expect(wrapper.findComponent(PasswordGenerator).exists()).toBe(true)
+    expect(wrapper.findAll('.pg__value').length).toBeGreaterThan(0)
+
+    // Но ни один вариант не выбран, поле пустое, и об этом сказано прямо.
+    expect(wrapper.find('.pg__variant--picked').exists()).toBe(false)
+    expect(passwordInput(wrapper).value).toBe('')
+    expect(wrapper.find('.pg__status').text()).toContain(
+      'Текущий пароль остаётся, пока не выбран новый',
+    )
 
     wrapper.unmount()
   })

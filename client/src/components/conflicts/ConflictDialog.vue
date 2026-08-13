@@ -119,59 +119,65 @@ async function resolve(): Promise<void> {
 <template>
   <SyModal open size="wide" title="Две версии одной записи" @close="emit('close')">
     <p class="conflict__lead">
-      Запись правили на двух устройствах, пока они не виделись. Ничего не потеряно: обе версии целы.
-      Выберите одну целиком — Syncra не выбирает за вас и не склеивает версии по полям.
+      Запись правили офлайн на двух устройствах. Ничего не потеряно: обе версии целы — выберите одну
+      целиком. Syncra не выбирает за вас и не склеивает версии по полям.
     </p>
 
     <div class="conflict__grid" role="radiogroup" aria-label="Какую версию оставить">
-      <div class="conflict__corner" aria-hidden="true" />
-
-      <label
+      <!--
+        Версия — это КАРТОЧКА, а не колонка таблицы: выбирают запись целиком,
+        и подсвечиваться должна вся она, а не отдельные ячейки (§5.5).
+      -->
+      <div
         v-for="which in ['local', 'remote'] as ConflictSide[]"
         :key="which"
-        class="conflict__head"
-        :class="{ 'conflict__head--on': side === which }"
+        class="conflict__card"
+        :class="{ 'conflict__card--on': side === which }"
+        @click="side = which"
       >
-        <input
-          v-model="side"
-          class="conflict__radio"
-          type="radio"
-          name="conflict-side"
-          :value="which"
-        />
-        <span class="conflict__head-text">
-          <span class="conflict__device">{{ versionOf(which).device_name }}</span>
+        <div class="conflict__card-head">
+          <input
+            :id="`conflict-${which}`"
+            v-model="side"
+            class="conflict__radio"
+            type="radio"
+            name="conflict-side"
+            :value="which"
+          />
+          <label class="conflict__device" :for="`conflict-${which}`">
+            {{ versionOf(which).device_name }}
+          </label>
           <span class="conflict__when">{{ headerNote(which) }}</span>
-        </span>
-      </label>
+        </div>
 
-      <template v-for="field in rows" :key="field">
-        <div class="conflict__label">
-          <span>{{ conflictFieldLabel(field) }}</span>
-          <button
-            v-if="isSecretField(field) && differs(field)"
-            type="button"
-            class="conflict__reveal"
-            :disabled="secrets.busy.value === field"
-            @click="secrets.toggle(field)"
+        <div v-for="field in rows" :key="field" class="conflict__row">
+          <div class="conflict__label">
+            <span>{{ conflictFieldLabel(field) }}</span>
+            <button
+              v-if="isSecretField(field) && differs(field)"
+              type="button"
+              class="conflict__reveal"
+              :disabled="secrets.busy.value === field"
+              @click.stop="secrets.toggle(field)"
+            >
+              {{
+                secrets.shown[field] === null ? 'Показать' : `Скрыть · ${secrets.hideIn[field]} с`
+              }}
+            </button>
+          </div>
+
+          <div
+            class="conflict__cell"
+            :class="{
+              'conflict__cell--differs': differs(field),
+              'conflict__cell--on': side === which,
+              'conflict__cell--secret': isSecretField(field),
+            }"
           >
-            {{ secrets.shown[field] === null ? 'Показать' : `Скрыть · ${secrets.hideIn[field]} с` }}
-          </button>
+            {{ cellValue(which, field) }}
+          </div>
         </div>
-
-        <div
-          v-for="which in ['local', 'remote'] as ConflictSide[]"
-          :key="`${field}:${which}`"
-          class="conflict__cell"
-          :class="{
-            'conflict__cell--differs': differs(field),
-            'conflict__cell--on': side === which,
-            'conflict__cell--secret': isSecretField(field),
-          }"
-        >
-          {{ cellValue(which, field) }}
-        </div>
-      </template>
+      </div>
     </div>
 
     <p v-if="secrets.error.value" class="conflict__error" role="alert">
@@ -205,34 +211,45 @@ async function resolve(): Promise<void> {
 
 .conflict__grid {
   display: grid;
-  grid-template-columns: 104px minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--sy-space-1) var(--sy-space-3);
-  align-items: stretch;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sy-space-6);
+  align-items: start;
   margin-top: var(--sy-space-5);
 }
 
-.conflict__corner {
-  grid-column: 1;
+.conflict__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sy-space-5);
+  padding: var(--sy-space-6);
+  border: 1px solid var(--sy-border);
+  border-radius: var(--sy-radius);
+  background: var(--sy-bg-1);
+  cursor: pointer;
+  transition:
+    border-color var(--sy-transition),
+    background var(--sy-transition);
 }
 
-.conflict__head {
+.conflict__card:hover {
+  border-color: var(--sy-border-strong);
+}
+
+.conflict__card--on {
+  border-color: var(--sy-accent);
+  background: var(--sy-accent-quiet);
+  box-shadow: 0 0 0 3px var(--sy-accent-quiet);
+}
+
+.conflict__card:focus-within {
+  box-shadow: var(--sy-focus-ring);
+}
+
+.conflict__card-head {
   display: flex;
   align-items: center;
   gap: var(--sy-space-4);
-  padding: var(--sy-space-4) var(--sy-space-5);
-  border: 1px solid var(--sy-border);
-  border-radius: var(--sy-radius-sm);
-  background: var(--sy-bg-1);
-  cursor: pointer;
-}
-
-.conflict__head--on {
-  border-color: var(--sy-accent);
-  background: var(--sy-accent-quiet);
-}
-
-.conflict__head:focus-within {
-  box-shadow: var(--sy-focus-ring);
+  min-width: 0;
 }
 
 .conflict__radio {
@@ -243,33 +260,40 @@ async function resolve(): Promise<void> {
   accent-color: var(--sy-accent);
 }
 
-.conflict__head-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
 .conflict__device {
+  flex: 1;
+  min-width: 0;
   font-size: 14.5px;
   font-weight: var(--sy-weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .conflict__when {
+  flex: none;
   font-family: var(--sy-font-mono);
   font-size: 10.5px;
   color: var(--sy-text-3);
 }
 
-.conflict__label {
+.conflict__card--on .conflict__when {
+  color: var(--sy-accent);
+}
+
+.conflict__row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  justify-content: center;
-  padding: var(--sy-space-2) 0;
+  gap: var(--sy-space-1);
+  min-width: 0;
+}
+
+.conflict__label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sy-space-4);
   font-family: var(--sy-font-mono);
   font-size: var(--sy-text-label);
   line-height: var(--sy-text-label-lh);
@@ -279,7 +303,7 @@ async function resolve(): Promise<void> {
 }
 
 .conflict__reveal {
-  align-self: flex-start;
+  flex: none;
   padding: 0;
   border: none;
   background: none;
@@ -299,8 +323,8 @@ async function resolve(): Promise<void> {
 .conflict__cell {
   display: flex;
   align-items: center;
-  min-height: 34px;
-  padding: var(--sy-space-2) var(--sy-space-5);
+  min-height: 32px;
+  padding: var(--sy-space-3) var(--sy-space-5);
   border: 1px solid transparent;
   border-radius: var(--sy-radius-xs);
   font-size: var(--sy-text-body);

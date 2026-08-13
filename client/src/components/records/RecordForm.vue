@@ -37,6 +37,11 @@ const toast = useToastStore()
 
 const isEdit = computed(() => props.record != null)
 
+/** Заголовок из макета: в правке — имя сервиса, у новой записи просто «Новая запись». */
+const title = computed(() =>
+  props.record == null ? 'Новая запись' : `Изменение · ${props.record.service_name}`,
+)
+
 // ---------------------------------------------------------------------------
 // Метаданные
 // ---------------------------------------------------------------------------
@@ -93,6 +98,11 @@ onMounted(() => {
 
 /** Всегда есть хотя бы одна строка адреса — иначе не за что нажать. */
 const urls = ref<string[]>(props.record?.urls.length ? [...props.record.urls] : [''])
+
+/** Подпись блока адресов из макета: со счётчиком, когда их больше одного. */
+const urlLabel = computed(() =>
+  urls.value.length > 1 ? `Адреса сайта · ${urls.value.length}` : 'Адрес сайта',
+)
 
 function addUrl(): void {
   urls.value = [...urls.value, '']
@@ -194,21 +204,37 @@ const formError = ref<string | null>(null)
 // ---------------------------------------------------------------------------
 
 /**
- * В новой записи панель открыта сразу: §6.1 обещает, что правила настраиваются
- * один раз, а дальше «в форме будет просто готовый пароль и кнопка „другой“».
- * Свежесгенерированная строка ещё ничей секрет — показать её не значит что-то
- * раскрыть.
+ * Панель генератора видна всегда — это и есть блок «Пароль» из макета (§3.4).
+ * §6.1 обещает, что правила настраиваются один раз, а дальше «в форме будет
+ * просто готовый пароль и кнопка „другой“». Свежесгенерированная строка ещё
+ * ничей секрет — показать её не значит что-то раскрыть.
  *
- * В редактировании панель закрыта: смена работающего пароля — осознанное
- * действие, и подсовывать замену тому, кто зашёл поправить логин, незачем.
+ * Тому, кто зашёл поправить логин, это ничем не грозит: строка состояния под
+ * вариантами прямо говорит, что текущий пароль остаётся, пока не выбран новый,
+ * и сам по себе ни один вариант в черновик не попадает.
  */
-const generatorOpen = ref(!isEdit.value)
 
 /** Выбранный вариант попадает в поле пароля — то есть в тот же черновик, что и ручной ввод. */
 function usePassword(password: string): void {
   secrets.password.value = password
   errors.password = null
 }
+
+/** Левая половина строки состояния под вариантами — из макета дословно. */
+const passwordNote = computed(() =>
+  isEdit.value
+    ? 'Текущий пароль остаётся, пока не выбран новый'
+    : 'Пароль обязателен — введите свой или выберите вариант',
+)
+
+/**
+ * Правая половина: состояние ЧЕРНОВИКА, а не значение пароля. Маска здесь
+ * фиксированной длины и ничего не сообщает о том, что лежит в ядре.
+ */
+const passwordNoteValue = computed(() => {
+  if (secrets.password.value !== '') return 'новый пароль выбран'
+  return isEdit.value ? '•••••••••• · без изменений' : 'пароль ещё не выбран'
+})
 
 function validate(): boolean {
   errors.service_name =
@@ -298,13 +324,9 @@ async function save(): Promise<void> {
   <form class="form" @submit.prevent="save" @keydown.escape="emit('cancel')">
     <header class="form__head">
       <div class="form__head-text">
-        <h2 class="form__title">{{ isEdit ? 'Изменить запись' : 'Новая запись' }}</h2>
+        <h2 class="form__title">{{ title }}</h2>
         <p class="form__subtitle">
-          {{
-            isEdit
-              ? 'Секретные поля пусты не случайно: пустое — значит «оставить как было».'
-              : 'Черновик не покидает это окно, пока вы не сохраните. Ничего не уходит в сеть.'
-          }}
+          Пароль генерируется на устройстве. Черновик не покидает это окно, пока вы не сохраните.
         </p>
       </div>
 
@@ -323,7 +345,7 @@ async function save(): Promise<void> {
           label="Имя сервиса"
           placeholder="Например, github.com"
           :error="errors.service_name"
-          hint="Иконка соберётся из имени — из сети ничего не загружается."
+          hint="Иконка соберётся из имени домена — ничего не загружается из сети."
           autofocus
           @submit="save"
         />
@@ -337,98 +359,97 @@ async function save(): Promise<void> {
           @submit="save"
         />
 
-        <div class="form__urls">
-          <div class="form__urls-head">
-            <span class="form__label">Адреса сайта</span>
-            <span class="form__urls-hint">автозаполнение сработает на любом из них</span>
-            <button type="button" class="form__add" @click="addUrl">Добавить адрес</button>
-          </div>
+        <!--
+          Метка и секция — вторая строка сетки: это уточнения к паре
+          «сервис + логин», а не самостоятельные поля.
+        -->
+        <div class="form__pair">
+          <SyInput
+            v-model="meta.account_label"
+            label="Метка аккаунта"
+            placeholder="например, рабочий"
+            hint="Ею вы отличите несколько аккаунтов одного сервиса."
+            @submit="save"
+          />
 
-          <!--
-            Сетка, а не столбец: адресов у одной записи бывает пять, и пять
-            строк во всю ширину вытеснили бы с экрана пароль. Список сам
-            прокручивается, чтобы форма не росла бесконечно.
-          -->
-          <div class="form__url-grid">
-            <div v-for="(url, index) in urls" :key="index" class="form__url-row">
-              <span class="form__url-num" aria-hidden="true">{{ index + 1 }}</span>
-              <SyInput
-                class="form__url-input"
-                :model-value="url"
-                type="url"
-                :label="`Адрес ${index + 1}`"
-                label-hidden
-                placeholder="https://github.com"
-                :error="urlError(url)"
-                @update:model-value="setUrl(index, $event)"
-                @submit="save"
-              />
-              <button
-                v-if="urls.length > 1 || url !== ''"
-                type="button"
-                class="form__url-remove"
-                :title="`Убрать адрес ${index + 1}`"
-                :aria-label="`Убрать адрес ${index + 1}`"
-                @click="removeUrl(index)"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-
-          <p v-if="cleanUrls().length === 0" class="form__urls-empty">
-            Без адреса запись сохранится, но автозаполнение не сработает
-          </p>
-
-          <p class="form__note">
-            Первый адрес основной — он виден в карточке, остальные складываются в компактные чипы.
-          </p>
+          <SySelect
+            class="form__vault"
+            :model-value="shownVault"
+            label="Секция"
+            :options="vaultOptions"
+            :hint="vaultHint"
+            @update:model-value="chooseVault"
+          />
         </div>
-
-        <SyInput
-          v-model="meta.account_label"
-          label="Метка аккаунта"
-          placeholder="личный / рабочий"
-          hint="Ею вы отличите несколько аккаунтов одного сервиса."
-          @submit="save"
-        />
-
-        <SySelect
-          class="form__vault"
-          :model-value="shownVault"
-          label="Секция"
-          :options="vaultOptions"
-          :hint="vaultHint"
-          @update:model-value="chooseVault"
-        />
       </div>
 
-      <section class="form__secrets">
-        <div class="form__secrets-head">
-          <span class="form__secrets-title">Секреты · шифруются ядром</span>
-          <span class="form__rule" aria-hidden="true" />
+      <section class="form__urls">
+        <div class="form__urls-head">
+          <div class="form__urls-title">
+            <span class="form__label">{{ urlLabel }}</span>
+            <span class="form__urls-hint">автозаполнение сработает на любом из них</span>
+          </div>
+          <button type="button" class="form__add" @click="addUrl">Добавить адрес</button>
         </div>
 
-        <p v-if="secretError" class="form__error" role="alert">{{ secretError }}</p>
+        <!--
+          Сетка, а не столбец: адресов у одной записи бывает пять, и пять
+          строк во всю ширину вытеснили бы с экрана пароль. Список сам
+          прокручивается, чтобы форма не росла бесконечно.
+        -->
+        <div class="form__url-grid">
+          <div v-for="(url, index) in urls" :key="index" class="form__url-row">
+            <span class="form__url-num" aria-hidden="true">{{ index + 1 }}</span>
+            <SyInput
+              class="form__url-input"
+              :model-value="url"
+              type="url"
+              :label="`Адрес ${index + 1}`"
+              label-hidden
+              placeholder="https://github.com"
+              :error="urlError(url)"
+              @update:model-value="setUrl(index, $event)"
+              @submit="save"
+            />
+            <button
+              v-if="urls.length > 1 || url !== ''"
+              type="button"
+              class="form__url-remove"
+              :title="`Убрать адрес ${index + 1}`"
+              :aria-label="`Убрать адрес ${index + 1}`"
+              @click="removeUrl(index)"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
 
-        <div class="form__secret">
+        <p v-if="cleanUrls().length === 0" class="form__urls-empty">
+          Без адреса запись сохранится, но автозаполнение не сработает
+        </p>
+
+        <p class="form__note">
+          Первый адрес основной — он виден в карточке, остальные складываются в компактные чипы.
+        </p>
+      </section>
+
+      <!--
+        Блок «Пароль» (F6). Ручной ввод и варианты генератора живут в одной
+        рамке: это один и тот же черновик, и выбирать между ними человек должен
+        не листая форму.
+      -->
+      <PasswordGenerator :note="passwordNote" :note-value="passwordNoteValue" @pick="usePassword">
+        <div class="form__password">
           <SyInput
             v-model="secrets.password.value"
             label="Пароль"
             type="password"
-            :placeholder="isEdit ? 'Оставить как было' : 'Введите, вставьте или подберите'"
+            :placeholder="isEdit ? 'Оставить как было' : 'Введите, вставьте или выберите вариант'"
             :error="errors.password"
-            :hint="secretHint('password', 'Можно ввести свой или выбрать вариант генератора.')"
+            :hint="secretHint('password', 'Можно ввести свой или выбрать вариант ниже.')"
             autocomplete="new-password"
             @submit="save"
           />
-          <SyButton
-            v-if="!generatorOpen"
-            size="sm"
-            :aria-expanded="false"
-            @click="generatorOpen = true"
-            >Подобрать</SyButton
-          >
           <SyButton
             v-if="isEdit && secrets.password.original === null"
             size="sm"
@@ -438,27 +459,18 @@ async function save(): Promise<void> {
           >
         </div>
 
-        <!--
-          Панель генератора (F6). Живёт внутри блока секретов: варианты — это
-          пароли, пусть пока и ничьи. `v-if`, а не `v-show`: закрытая панель
-          должна быть размонтирована, чтобы её composable забыл варианты.
-        -->
-        <PasswordGenerator
-          v-if="generatorOpen"
-          @pick="usePassword"
-          @close="generatorOpen = false"
-        />
+        <p v-if="secretError" class="form__error" role="alert">{{ secretError }}</p>
+      </PasswordGenerator>
 
+      <div class="form__secrets-grid">
         <div class="form__secret form__secret--notes">
           <div class="form__field">
-            <span class="form__label">Заметки · необязательно</span>
+            <span class="form__label">Заметки · хранятся как секрет</span>
             <textarea
               v-model="secrets.notes.value"
               class="form__textarea"
               rows="3"
-              :placeholder="
-                isEdit ? 'Оставить как было' : 'Контрольные вопросы, коды восстановления, PIN'
-              "
+              :placeholder="isEdit ? 'Оставить как было' : 'Скрыты по умолчанию, как пароль'"
               spellcheck="false"
             />
             <p class="form__note">
@@ -477,7 +489,7 @@ async function save(): Promise<void> {
         <div class="form__secret">
           <SyInput
             v-model="secrets.totp_secret.value"
-            label="Ключ TOTP · необязательно"
+            label="Код TOTP · необязательно"
             mono
             :placeholder="isEdit ? 'Оставить как было' : 'Ключ из настроек двухфакторной защиты'"
             :hint="
@@ -496,7 +508,7 @@ async function save(): Promise<void> {
             >Показать текущий</SyButton
           >
         </div>
-      </section>
+      </div>
     </div>
   </form>
 </template>
@@ -559,6 +571,15 @@ async function save(): Promise<void> {
   align-items: start;
 }
 
+/* Метка и секция стоят парой во всю ширину — как в макете. */
+.form__pair {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sy-space-6) var(--sy-space-7);
+  align-items: start;
+}
+
 .form__field {
   flex: 1;
   min-width: 0;
@@ -590,6 +611,14 @@ async function save(): Promise<void> {
 }
 
 .form__urls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sy-space-5);
+  min-width: 0;
+}
+
+.form__urls-title {
   display: flex;
   align-items: baseline;
   gap: var(--sy-space-4);
@@ -698,34 +727,27 @@ async function save(): Promise<void> {
   box-shadow: var(--sy-focus-ring);
 }
 
-.form__secrets {
+/* Заметки и TOTP — две колонки под блоком пароля, как в макете. */
+.form__secrets-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sy-space-7);
+  align-items: start;
+}
+
+.form__password {
   display: flex;
-  flex-direction: column;
-  gap: var(--sy-space-6);
-  padding: var(--sy-space-6);
-  border: 1px solid var(--sy-accent-border);
-  border-radius: var(--sy-radius);
-  background: var(--sy-bg-0);
+  align-items: flex-start;
+  gap: var(--sy-space-4);
 }
 
-.form__secrets-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sy-space-5);
-}
-
-.form__secrets-title {
-  font-family: var(--sy-font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--sy-accent);
-}
-
-.form__rule {
+.form__password > :first-child {
   flex: 1;
-  height: 1px;
-  background: var(--sy-border);
+  min-width: 0;
+}
+
+.form__password .sy-button {
+  margin-top: 22px;
 }
 
 .form__secret {

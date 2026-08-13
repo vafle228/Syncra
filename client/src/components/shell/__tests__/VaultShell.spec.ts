@@ -194,12 +194,15 @@ describe('VaultShell · сквозные пути между панелями', 
       input.element.value = value
       await input.trigger('input')
     }
-    // Порядок полей в сетке: сервис, логин, адрес, метка.
+    // Порядок полей в сетке: сервис, логин, метка. Адреса — отдельным блоком.
     await set(0, 'Figma')
     await set(1, 'anna@studio.example')
-    await set(2, 'https://figma.com')
 
-    const password = wrapper.find<HTMLInputElement>('.form__secrets input[type="password"]')
+    const url = wrapper.find<HTMLInputElement>('.form__url-input input')
+    url.element.value = 'https://figma.com'
+    await url.trigger('input')
+
+    const password = wrapper.find<HTMLInputElement>('.form__password input[type="password"]')
     password.element.value = 'mock-figma-pw'
     await password.trigger('input')
 
@@ -229,7 +232,7 @@ describe('VaultShell · сквозные пути между панелями', 
     await set(0, 'Figma')
     await set(1, 'anna@studio.example')
 
-    const password = wrapper.find<HTMLInputElement>('.form__secrets input[type="password"]')
+    const password = wrapper.find<HTMLInputElement>('.form__password input[type="password"]')
     password.element.value = 'mock-figma-pw'
     await password.trigger('input')
 

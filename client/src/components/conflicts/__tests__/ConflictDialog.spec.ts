@@ -85,8 +85,9 @@ describe('полный diff (§5.5)', () => {
     const wrapper = await mountDialog()
 
     const reveal = document.body.querySelectorAll<HTMLButtonElement>('.conflict__reveal')
-    // Кнопка есть только у разошедшихся секретов: пароль и заметки.
-    expect(reveal).toHaveLength(2)
+    // Кнопка есть только у разошедшихся секретов — пароль и заметки — и стоит
+    // в обеих карточках: значения открываются парой, сравнивать их иначе не с чем.
+    expect(reveal).toHaveLength(4)
     reveal[0]!.click()
     await flushPromises()
 
