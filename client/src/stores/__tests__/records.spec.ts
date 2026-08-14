@@ -104,6 +104,50 @@ describe('поиск и группировка', () => {
   })
 })
 
+describe('порядок списка (F4)', () => {
+  const titles = (list: ReturnType<typeof useRecordsStore>) =>
+    list.groups.map((group) => group.title)
+
+  it('по умолчанию — «Недавние»', async () => {
+    const list = useRecordsStore()
+    await list.load()
+
+    expect(list.order).toBe('recent')
+    // GitHub правили 28.02, Google — 09.01, Steam — 08.09 прошлого года.
+    expect(titles(list)).toEqual(['GitHub', 'Google', 'Steam'])
+  })
+
+  it('«Старые пароли» поднимает наверх самый давний password_updated_at', async () => {
+    const list = useRecordsStore()
+    await list.load()
+
+    list.setOrder('stale')
+
+    // Google (02.06) → GitHub (30.08) → Steam (08.09).
+    expect(titles(list)).toEqual(['Google', 'GitHub', 'Steam'])
+  })
+
+  it('«По алфавиту» сортирует по имени сервиса', async () => {
+    const list = useRecordsStore()
+    await list.load()
+
+    list.setOrder('alpha')
+
+    expect(titles(list)).toEqual(['GitHub', 'Google', 'Steam'])
+  })
+
+  it('порядок — настройка показа: блокировка его не сбрасывает', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    list.setOrder('stale')
+
+    list.clear()
+
+    expect(list.order).toBe('stale')
+    expect(list.loaded).toBe(false)
+  })
+})
+
 describe('фильтр по секции (F7)', () => {
   it('по умолчанию показывает все записи', async () => {
     const list = useRecordsStore()

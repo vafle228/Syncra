@@ -602,6 +602,28 @@ compact CSV dialog, no «Показать» chip on master-password fields).
 Confirm in the built bundle: zero external URLs, no crypto in the frontend, `localStorage` holding
 only `syncra.theme` and `syncra.accent`, and no secret field in any store snapshot.
 
+> RESULT (после 5.5): аудит собранного бандла пройден.
+> - **Внешних URL нет.** В `dist/` остались только строки самого Vue: XML-namespace'ы
+>   (`w3.org/2000/svg`, `1999/xlink`, `1998/Math/MathML`) и ссылки на справочник ошибок
+>   (`vuejs.org/error-reference`, `github.com`). Ни одного запроса в сеть, ни одного фавикона
+>   извне. В `src/` `https://` встречается только как placeholder поля адреса, текст ошибки
+>   валидации и разбор `new URL(...)` в `recordFormat.ts`.
+> - **Крипты во фронте нет.** Ни `crypto.subtle`, ни KDF, ни подписи. `getRandomValues` /
+>   `randomUUID` живут исключительно в `src/core/mock/` — фейк-ядре в роли ядра (это
+>   зафиксировано комментариями в `mock/generator.ts:13` и `mock/pairing.ts:18`), в компонентах,
+>   сторах и composables их нет.
+> - **`localStorage`** держит ровно два ключа, `syncra.theme` и `syncra.accent`; это закреплено
+>   тестом `useTheme.spec.ts:116` («тема и акцент — единственное, что фронт кладёт в
+>   localStorage»), который сверяет `Object.keys(localStorage)` целиком.
+> - **Секретов в снапшотах сторов нет** — `useRecordSecrets.spec.ts:226` (пароль и заметки) и
+>   новый `useTotpCode.spec.ts` «ЗАКОН №1» (код подтверждения).
+>
+> Добитые «новые тесты» из списка ниже: порядок списка на уровне **стора**
+> (`records.spec.ts` → «порядок списка (F4)»: умолчание `recent`, `stale`, `alpha` и то, что
+> блокировка не сбрасывает выбранный порядок) и **Закон №1 для кода TOTP**
+> (`useTotpCode.spec.ts`: код не попадает в Pinia; ответ ядра — `code` / `seconds_left` /
+> `period_s` и ключа записи в нём нет).
+
 ### Contract changes to confirm with the backend agent
 
 > NOTE: `TASKS.md` was deleted mid-refactor (see `CLAUDE.md`, which now points at this file as the

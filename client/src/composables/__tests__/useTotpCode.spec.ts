@@ -5,6 +5,7 @@ import { effectScope, ref } from 'vue'
 import type { RecordId } from '@/core/contract'
 import { setCoreClient } from '@/core/ipc'
 import { createMockCoreClient, type MockCoreClient } from '@/core/mock'
+import { useRecordsStore } from '@/stores/useRecordsStore'
 
 import { useTotpCode } from '../useTotpCode'
 
@@ -131,5 +132,31 @@ describe('useTotpCode', () => {
     expect(totp.error.value).toContain('ключа подтверждения')
 
     stop()
+  })
+})
+
+describe('ЗАКОН №1', () => {
+  it('код не попадает в Pinia', async () => {
+    const list = useRecordsStore()
+    await list.load()
+    list.select(GITHUB)
+
+    const { totp, stop } = run()
+    await totp.reveal()
+
+    // Код на экране — а в состоянии приложения его нет.
+    const code = totp.code.value
+    expect(code).toMatch(/^\d{6}$/)
+    expect(JSON.stringify(list.$state)).not.toContain(code)
+
+    stop()
+  })
+
+  it('ядро отдаёт код, а не ключ: секрета в ответе нет', async () => {
+    const answer = await core.getTotpCode(GITHUB)
+
+    expect(Object.keys(answer).sort()).toEqual(['code', 'period_s', 'seconds_left'])
+    // Ключ записи из сида не должен просвечивать через ответ.
+    expect(JSON.stringify(answer)).not.toContain('MOCKTOTPSECRET')
   })
 })
