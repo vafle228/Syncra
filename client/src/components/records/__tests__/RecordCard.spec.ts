@@ -81,18 +81,19 @@ describe('RecordCard · метаданные', () => {
     const { wrapper } = await mountCard(STEAM)
 
     expect(secretField(wrapper, 'Заметки').text()).toContain('Заметок нет')
-    expect(secretField(wrapper, 'Ключ TOTP').text()).toContain('Не подключён')
-    // Пустое поле нечего открывать — кнопки «Показать» у него нет.
-    expect(secretField(wrapper, 'Заметки').find('.sy-secret__toggle').exists()).toBe(false)
+    expect(wrapper.find('.totp__empty').text()).toBe('Не подключён')
+    // Пустое поле нечего открывать — переключателя у него нет.
+    expect(secretField(wrapper, 'Заметки').find('.sy-secret__box--button').exists()).toBe(false)
+    expect(wrapper.find('.totp__box').exists()).toBe(false)
 
     wrapper.unmount()
   })
 
   it('показывает секцию записи и говорит, уезжает ли она (F7, §4.2)', async () => {
-    const { wrapper } = await mountCard()
+    const { wrapper } = await mountCard(STEAM)
 
     expect(wrapper.text()).toContain('Личное')
-    expect(wrapper.text()).toContain('синхронизируется')
+    expect(wrapper.find('.card__sync').text()).toContain('синхронизировано')
 
     wrapper.unmount()
   })
@@ -105,8 +106,29 @@ describe('RecordCard · метаданные', () => {
     const wrapper = mount(RecordCard, { props: { record }, attachTo: document.body })
     await flushPromises()
 
-    expect(wrapper.find('.card__foot-note').text()).toContain('копии этой записи на других')
+    expect(wrapper.find('.card__foot-note').text()).toContain('копий этой записи больше нигде нет')
     expect(wrapper.text()).toContain('только это устройство')
+
+    wrapper.unmount()
+  })
+
+  it('подвал считает устройства и говорит, чья версия показана', async () => {
+    const { wrapper } = await mountCard()
+
+    // Подвал считает действующие устройства сида, а не говорит «копии есть».
+    expect(wrapper.find('.card__foot-note').text()).toBe(
+      'хранится на 3 устройствах · последняя версия отсюда',
+    )
+
+    wrapper.unmount()
+  })
+
+  it('не показывает номер версии — его нет и в макете', async () => {
+    const { wrapper } = await mountCard()
+
+    expect(wrapper.text()).not.toContain('Версия')
+    // Данные контракта при этом на месте: карточка их просто не рисует.
+    expect(useRecordsStore().records[0]?.version).toBeGreaterThan(0)
 
     wrapper.unmount()
   })
@@ -168,6 +190,66 @@ describe('RecordCard · reveal (ЗАКОН №1)', () => {
     wrapper.unmount()
   })
 
+  it('показывает КОД подтверждения, а не ключ, и группирует его 3+3', async () => {
+    const { wrapper } = await mountCard()
+
+    // Закрытое поле — маска той же формы, что и код: 3+3, а не десять точек.
+    expect(wrapper.find('.totp__mask').text()).toBe('••• •••')
+
+    await wrapper.find('.totp__box').trigger('click')
+    await flushPromises()
+
+    const code = wrapper.find('.totp__code').text()
+    expect(code).toMatch(/^\d{3} \d{3}$/)
+    // Ключ остаётся в ядре: карточка его не показывает и не получает.
+    expect(wrapper.html()).not.toContain('MOCKTOTPSECRET')
+    expect(wrapper.find('.totp__seconds').text()).toMatch(/^\d+ с$/)
+
+    wrapper.unmount()
+  })
+
+  it('код подтверждения не попадает ни в один стор (ЗАКОН №1)', async () => {
+    const { wrapper, list } = await mountCard()
+
+    await wrapper.find('.totp__box').trigger('click')
+    await flushPromises()
+
+    const code = wrapper.find('.totp__code').text().replace(' ', '')
+    expect(code).toHaveLength(6)
+    expect(JSON.stringify(list.$state)).not.toContain(code)
+
+    wrapper.unmount()
+  })
+
+  it('повторное нажатие закрывает код', async () => {
+    const { wrapper } = await mountCard()
+
+    await wrapper.find('.totp__box').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.totp__code').exists()).toBe(true)
+
+    await wrapper.find('.totp__box').trigger('click')
+    expect(wrapper.find('.totp__code').exists()).toBe(false)
+    expect(wrapper.find('.totp__mask').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('заметка открывается нажатием на весь бокс и не копируется', async () => {
+    const { wrapper } = await mountCard()
+    const notes = secretField(wrapper, 'Заметки')
+
+    expect(notes.findAll('.sy-secret__bar')).toHaveLength(2)
+    expect(notes.find('.sy-copy').exists()).toBe(false)
+
+    await notes.find('.sy-secret__box--button').trigger('click')
+    await flushPromises()
+
+    expect(notes.find('.sy-secret__value').text()).toContain('Recovery codes')
+
+    wrapper.unmount()
+  })
+
   it('прячет открытое, когда хранилище заблокировалось', async () => {
     const { wrapper } = await mountCard()
     await secretField(wrapper, 'Пароль').find('.sy-secret__toggle').trigger('click')
@@ -205,6 +287,35 @@ describe('RecordCard · удаление', () => {
 
     expect(list.total).toBe(3)
     expect(list.records.some((record) => record.record_id === GITHUB)).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('строит диалог в порядке макета: мета, цена решения, потом оговорка', async () => {
+    const { wrapper } = await mountCard()
+
+    await wrapper.find('.card__foot .sy-button--danger').trigger('click')
+    await flushPromises()
+
+    const dialog = document.body.querySelector('.sy-modal__dialog')!
+    expect([...dialog.classList]).toContain('sy-modal__dialog--confirm')
+
+    const text = dialog.textContent ?? ''
+    expect(text.indexOf('изменена')).toBeLessThan(text.indexOf('Восстановить её из Syncra'))
+    expect(text.indexOf('Восстановить её из Syncra')).toBeLessThan(
+      text.indexOf('пропадёт и её код подтверждения'),
+    )
+
+    // Оговорка про TOTP — янтарная внутри красной карточки: это второй риск,
+    // а не тот же самый.
+    const strip = dialog.querySelector('.sy-modal__warning')!
+    expect([...strip.classList]).toContain('sy-modal__warning--warning')
+
+    // Подсказка живёт в своём слоте и не распирает ряд кнопок.
+    expect(dialog.querySelector('.sy-modal__note')?.textContent).toContain(
+      'Подтвердите повторным нажатием',
+    )
+    expect(dialog.querySelector('.sy-modal__buttons')?.textContent).not.toContain('Подтвердите')
 
     wrapper.unmount()
   })
@@ -287,7 +398,7 @@ describe('подвал карточки (F10)', () => {
     await useRecordsStore().update(record.record_id, { login: 'demo_player_2' })
     await flushPromises()
 
-    expect(wrapper.find('.card__foot-note').text()).toContain('уедет, когда рядом')
+    expect(wrapper.find('.card__foot-note').text()).toContain('ещё никуда не уехала')
 
     wrapper.unmount()
   })

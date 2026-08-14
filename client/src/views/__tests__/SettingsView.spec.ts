@@ -4,7 +4,12 @@ import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import { securityPolicy } from '@/composables/securityPolicy'
 import { PREVIEW_DEBOUNCE_MS } from '@/composables/usePasswordGenerator'
 import { setCoreClient } from '@/core/ipc'
-import { createMockCoreClient, DEFAULT_GENERATOR_PROFILE, type MockCoreClient } from '@/core/mock'
+import {
+  createMockCoreClient,
+  MOCK_MASTER_PASSWORD,
+  DEFAULT_GENERATOR_PROFILE,
+  type MockCoreClient,
+} from '@/core/mock'
 import { useGeneratorStore } from '@/stores/useGeneratorStore'
 import { useToastStore } from '@/stores/useToastStore'
 import { mountWithRouter } from '@/test/mountWithRouter'
@@ -49,7 +54,7 @@ async function mountView(path = '/settings') {
 }
 
 /** Открыть вкладку по её ярлыку. */
-async function openTab(wrapper: VueWrapper, id: 'security' | 'generator' | 'data') {
+async function openTab(wrapper: VueWrapper, id: 'security' | 'generator' | 'data' | 'appearance') {
   await wrapper.find(`[data-test="tab-${id}"]`).trigger('click')
   await flushPromises()
 }
@@ -178,12 +183,74 @@ describe('SettingsView · вкладки (F13)', () => {
     expect(wrapper.find('[data-test="pane-data"]').exists()).toBe(true)
   })
 
+  it('связывает вкладку с панелью для диктора', async () => {
+    // Полоса с `role="tablist"` без `aria-controls` и `role="tabpanel"` — это
+    // набор кнопок: диктор не сообщает, что переключилась именно панель.
+    const { wrapper } = await mountView()
+
+    const tab = wrapper.find('[data-test="tab-security"]')
+    const panel = wrapper.find('[data-test="pane-security"]')
+
+    expect(panel.attributes('role')).toBe('tabpanel')
+    expect(tab.attributes('aria-controls')).toBe(panel.attributes('id'))
+    expect(panel.attributes('aria-labelledby')).toBe(tab.attributes('id'))
+    // По Tab полоса вкладок — одна остановка, а не четыре.
+    expect(wrapper.find('[data-test="tab-data"]').attributes('tabindex')).toBe('-1')
+  })
+
   it('принимает старые ссылки `/data?tab=import`', async () => {
     // До F13 импорт и экспорт жили на отдельном экране; закладки должны открыть
     // ту вкладку, ради которой их сохраняли.
     const { wrapper } = await mountView('/settings?tab=import')
 
     expect(wrapper.find('[data-test="pane-data"]').exists()).toBe(true)
+  })
+})
+
+describe('SettingsView · оформление', () => {
+  it('переключает тему и пишет её в data-theme', async () => {
+    const { wrapper } = await mountView()
+    await openTab(wrapper, 'appearance')
+
+    const pane = wrapper.find('[data-test="pane-appearance"]')
+    expect(pane.exists()).toBe(true)
+
+    await button(wrapper, 'Светлая').trigger('click')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+
+    await button(wrapper, 'Тёмная').trigger('click')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+
+    wrapper.unmount()
+  })
+
+  it('переключает акцент и показывает образец его же палитрой', async () => {
+    const { wrapper } = await mountView()
+    await openTab(wrapper, 'appearance')
+
+    await button(wrapper, 'Янтарь').trigger('click')
+
+    expect(document.documentElement.getAttribute('data-accent')).toBe('amber')
+    expect(localStorage.getItem('syncra.accent')).toBe('amber')
+    // Образец красится тем же атрибутом, что и документ, — второго списка
+    // цветов рядом с токенами нет.
+    const swatch = wrapper.findAll('.settings__accent-dot')[2]!
+    expect(swatch.attributes('data-accent')).toBe('amber')
+
+    await button(wrapper, 'Мята').trigger('click')
+    expect(document.documentElement.hasAttribute('data-accent')).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('строки безопасности не сдвинулись: у оформления своя вкладка', async () => {
+    const { wrapper } = await mountView()
+
+    // Тесты безопасности смотрят на порядок `.settings__option` — новая
+    // вкладка на него влиять не должна.
+    expect(wrapper.findAll('.settings__option')).toHaveLength(3)
+
+    wrapper.unmount()
   })
 })
 
@@ -250,6 +317,33 @@ describe('SettingsView · данные (F12)', () => {
     expect(rows[2]!.text()).toContain('Экспорт в CSV')
     expect(rows[2]!.text()).toContain('не шифруется')
     expect(rows[2]!.classes()).toContain('settings__data-row--danger')
+  })
+
+  it('после экспорта оставляет след в карточке, а не только в тосте', async () => {
+    const { wrapper } = await mountView('/settings?tab=data')
+
+    await wrapper.find('[data-test="open-backup"]').trigger('click')
+    await flushPromises()
+
+    const dialog = document.body.querySelector('[data-test="backup-modal"]')!
+    const password = dialog.querySelector<HTMLInputElement>('input[type="password"]')!
+    password.value = MOCK_MASTER_PASSWORD
+    password.dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const save = [...document.body.querySelectorAll('.sy-modal__actions button')].find((node) =>
+      node.textContent?.includes('Сохранить бэкап'),
+    ) as HTMLButtonElement
+    save.click()
+    await flushPromises()
+
+    // Тост уедет, а файл на диске останется: строка стоит в самой карточке.
+    const receipt = wrapper.findAll('.settings__data-row')[1]!.find('.settings__data-receipt')
+    expect(receipt.exists()).toBe(true)
+    expect(receipt.text()).toContain('сохранено · ')
+    expect(receipt.text()).toContain('.syncra')
+
+    wrapper.unmount()
   })
 
   it('обещает, что ни импорт, ни экспорт не ходят в сеть', async () => {

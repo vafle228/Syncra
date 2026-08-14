@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 
 import SyButton from '../SyButton.vue'
 import SyCopyButton from '../SyCopyButton.vue'
@@ -196,6 +197,111 @@ describe('SyModal', () => {
 
     wrapper.unmount()
   })
+
+  it('оговорка внутри опасного диалога окрашена отдельно от рамки', async () => {
+    // Уровней риска два: карточка красная, а оговорка про TOTP — янтарная.
+    const wrapper = mount(SyModal, {
+      props: {
+        open: true,
+        title: 'Удалить запись?',
+        tone: 'danger',
+        warningTone: 'warning',
+        warning: 'Вместе с записью пропадёт и её код подтверждения.',
+      },
+      attachTo: document.body,
+    })
+
+    const strip = () => document.body.querySelector('.sy-modal__warning')!
+    expect([...strip().classList]).toContain('sy-modal__warning--warning')
+    expect([...strip().classList]).not.toContain('sy-modal__warning--danger')
+
+    // Без своего тона полоска по-прежнему идёт в тон рамке.
+    await wrapper.setProps({ warningTone: undefined })
+    expect([...strip().classList]).toContain('sy-modal__warning--danger')
+
+    wrapper.unmount()
+  })
+
+  it('полосный диалог кладёт шапку, тело и кнопки в отдельные полосы', () => {
+    const wrapper = mount(SyModal, {
+      props: { open: true, title: 'Две версии одной записи', size: 'wide', banded: true },
+      slots: {
+        lead: 'Запись правили офлайн на двух устройствах.',
+        default: 'две колонки',
+        actions: '<button>Решить позже</button>',
+      },
+      attachTo: document.body,
+    })
+
+    const dialog = document.body.querySelector('.sy-modal__dialog')!
+    expect([...dialog.classList]).toContain('sy-modal__dialog--banded')
+
+    const head = dialog.querySelector('.sy-modal__head')!
+    expect(head.querySelector('.sy-modal__title')?.textContent).toBe('Две версии одной записи')
+    expect(head.querySelector('.sy-modal__lead')?.textContent).toContain('правили офлайн')
+
+    // Тело и кнопки — соседние полосы, а не вложенные друг в друга.
+    expect(dialog.querySelector('.sy-modal__content')?.textContent).toContain('две колонки')
+    expect(dialog.querySelector('.sy-modal__content .sy-modal__actions')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('без слота lead подзаголовка в шапке нет', () => {
+    const wrapper = mount(SyModal, {
+      props: { open: true, title: 'Диалог' },
+      attachTo: document.body,
+    })
+
+    expect(document.body.querySelector('.sy-modal__lead')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('фокус не уходит за пределы диалога по Tab', async () => {
+    const wrapper = mount(SyModal, {
+      props: { open: true, title: 'Удалить запись?' },
+      slots: { actions: '<button>Отмена</button><button>Удалить</button>' },
+      attachTo: document.body,
+    })
+    await nextTick()
+
+    const buttons = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('.sy-modal__actions button'),
+    ]
+    const [first, last] = [buttons[0]!, buttons[buttons.length - 1]!]
+
+    // От диалога Shift+Tab уводит на последнюю кнопку, а не на подложку.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))
+    expect(document.activeElement).toBe(last)
+
+    last.focus()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
+    expect(document.activeElement).toBe(first)
+
+    wrapper.unmount()
+  })
+
+  it('после закрытия фокус возвращается туда, откуда диалог открыли', async () => {
+    const opener = document.createElement('button')
+    document.body.append(opener)
+    opener.focus()
+
+    const wrapper = mount(SyModal, {
+      props: { open: false, title: 'Диалог' },
+      attachTo: document.body,
+    })
+
+    await wrapper.setProps({ open: true })
+    await nextTick()
+    expect(document.activeElement).not.toBe(opener)
+
+    await wrapper.setProps({ open: false })
+    expect(document.activeElement).toBe(opener)
+
+    wrapper.unmount()
+    opener.remove()
+  })
 })
 
 describe('SyEmptyState', () => {
@@ -251,7 +357,7 @@ describe('SyCopyButton', () => {
       props: { label: 'Копировать пароль', copied: true, seconds: 14 },
     })
 
-    expect(wrapper.text()).toBe('Скопировано · 14')
+    expect(wrapper.text()).toBe('Скопировано · 14 с')
     expect(wrapper.classes()).toContain('sy-copy--copied')
   })
 
@@ -293,6 +399,34 @@ describe('SySecretField', () => {
     expect(wrapper.text()).toBe('ЗаметкиЗаметок нет')
     expect(wrapper.find('.sy-secret__toggle').exists()).toBe(false)
     expect(wrapper.find('.sy-copy').exists()).toBe(false)
+  })
+
+  it('закрытое поле говорит, ЧТО скопирует; открытое — просто «Копировать»', async () => {
+    const wrapper = mount(SySecretField, {
+      props: { label: 'Пароль', copyLabel: 'Копировать пароль' },
+    })
+
+    expect(wrapper.find('.sy-copy').text()).toBe('Копировать пароль')
+
+    await wrapper.setProps({ value: 'секрет-на-экране' })
+    expect(wrapper.find('.sy-copy').text()).toBe('Копировать')
+  })
+
+  it('скелет заменяет маску и оставляет одно действие на всё поле', async () => {
+    const wrapper = mount(SySecretField, { props: { label: 'Заметки', skeleton: true } })
+
+    // Ни маски, ни копирования, ни отдельной кнопки внутри бокса.
+    expect(wrapper.find('.sy-secret__mask').exists()).toBe(false)
+    expect(wrapper.find('.sy-copy').exists()).toBe(false)
+    expect(wrapper.find('.sy-secret__toggle').exists()).toBe(false)
+    expect(wrapper.findAll('.sy-secret__bar')).toHaveLength(2)
+
+    await wrapper.find('.sy-secret__box--button').trigger('click')
+    expect(wrapper.emitted('toggle')).toHaveLength(1)
+
+    await wrapper.setProps({ value: 'заметка на экране' })
+    expect(wrapper.find('.sy-secret__value').text()).toBe('заметка на экране')
+    expect(wrapper.find('.sy-secret__bar').exists()).toBe(false)
   })
 })
 

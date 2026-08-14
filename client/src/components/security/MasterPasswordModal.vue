@@ -53,9 +53,7 @@ function reset(): void {
   busy.value = false
 }
 
-const tooShort = computed(
-  () => next.value !== '' && next.value.length < MASTER_PASSWORD_MIN_LENGTH,
-)
+const tooShort = computed(() => next.value !== '' && next.value.length < MASTER_PASSWORD_MIN_LENGTH)
 const mismatch = computed(() => repeat.value !== '' && repeat.value !== next.value)
 const same = computed(() => next.value !== '' && next.value === current.value)
 
@@ -113,6 +111,7 @@ async function submit(): Promise<void> {
         v-model="current"
         label="Текущий мастер-пароль"
         type="password"
+        :revealable="false"
         autocomplete="current-password"
       />
 
@@ -120,6 +119,7 @@ async function submit(): Promise<void> {
         v-model="next"
         label="Новый мастер-пароль"
         type="password"
+        :revealable="false"
         autocomplete="new-password"
         :error="
           tooShort
@@ -139,6 +139,7 @@ async function submit(): Promise<void> {
         v-model="repeat"
         label="Новый пароль ещё раз"
         type="password"
+        :revealable="false"
         autocomplete="new-password"
         :error="mismatch ? 'Пароли не совпадают.' : null"
       />

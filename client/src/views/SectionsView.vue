@@ -378,9 +378,15 @@ async function confirmDelete(): Promise<void> {
       </div>
     </div>
 
+    <!--
+      Ширина `confirm` — размер по назначению, а не на глаз. Кнопка подтверждения
+      намеренно НЕЙТРАЛЬНАЯ, как в макете (`Прототип:2285-2296`): удаление секции
+      не удаляет записи, и красная кнопка обещала бы потерю, которой не будет.
+    -->
     <SyModal
       :open="doomed !== null"
       :title="`Удалить секцию «${doomed?.name ?? ''}»?`"
+      size="confirm"
       @close="doomed = null"
     >
       <p>{{ deleteText }}</p>
@@ -413,14 +419,18 @@ async function confirmDelete(): Promise<void> {
   background: var(--sy-bg-1);
 }
 
+/*
+ * У шапки НЕТ своей заливки: в макете (`Прототип:1914`, `2027`, `2085`) она
+ * часть панели и отделена только линией. `--sy-bg-0` — цвет шасси окна, и на
+ * правой панели он читался как чужая полоса, приклеенная сверху.
+ */
 .sections-view__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--sy-space-6);
-  padding: var(--sy-space-8) var(--sy-space-9) var(--sy-space-7);
+  padding: var(--sy-space-7) var(--sy-space-8) var(--sy-space-6);
   border-bottom: 1px solid var(--sy-border);
-  background: var(--sy-bg-0);
 }
 
 .sections-view__intro {
@@ -437,7 +447,7 @@ async function confirmDelete(): Promise<void> {
 }
 
 .sections-view__lead {
-  font-size: var(--sy-text-body);
+  font-size: var(--sy-text-note);
   line-height: 1.55;
   color: var(--sy-text-2);
   text-wrap: pretty;

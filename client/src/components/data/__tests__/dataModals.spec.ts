@@ -71,12 +71,15 @@ function button(wrapper: View, text: string) {
   return found
 }
 
-/** Заполнить три подтверждения CSV-экспорта и нажать кнопку. */
+/**
+ * Пройти единственные ворота CSV-экспорта — мастер-пароль — и нажать кнопку.
+ *
+ * Ворот именно один: галочка и слово «ЭКСПОРТ» убраны, потому что три
+ * подтверждения подряд учат нажимать не глядя. Пароль требует контракт.
+ */
 async function confirmCsv(wrapper: View, password = MOCK_MASTER_PASSWORD): Promise<void> {
-  await wrapper.find('.csv__ack-box').setValue(true)
-  await wrapper.find('.csv input[type="text"]').setValue('ЭКСПОРТ')
   await wrapper.find('.csv input[type="password"]').setValue(password)
-  await button(wrapper, 'в CSV').trigger('click')
+  await button(wrapper, 'Сохранить CSV').trigger('click')
   await flushPromises()
 }
 
@@ -84,28 +87,30 @@ describe('CsvExportModal · экспорт в открытый текст (§6.2
   it('предупреждает об открытом тексте до того, как файл создан', async () => {
     const wrapper = await mountCsv()
 
-    expect(wrapper.text()).toContain('В файле все пароли и заметки открытым текстом')
-    expect(wrapper.text()).toContain('их прочитает любая программа на компьютере')
-    expect(wrapper.text()).toContain('TOTP-ключи в CSV не переносятся')
+    // Формулировка §6.2 дословно, в янтарной полосе.
+    expect(wrapper.text()).toContain('Файл не будет зашифрован')
+    expect(wrapper.text()).toContain('читаются как обычный текст')
+    expect(wrapper.text()).toContain('Удалите его сразу после переноса')
+    expect(wrapper.find('.sy-modal__warning--warning').exists()).toBe(true)
+    // Рамка диалога при этом нейтральная: красная здесь только кнопка.
+    expect(wrapper.find('.sy-modal__dialog--tone-danger').exists()).toBe(false)
 
     wrapper.unmount()
   })
 
-  it('не отдаёт файл без всех трёх подтверждений', async () => {
+  it('ворота одни — мастер-пароль, и без него кнопка не работает', async () => {
     const wrapper = await mountCsv()
 
-    expect(button(wrapper, 'в CSV').attributes('disabled')).toBeDefined()
-
-    // Галочка есть, слова нет.
-    await wrapper.find('.csv__ack-box').setValue(true)
-    expect(button(wrapper, 'в CSV').attributes('disabled')).toBeDefined()
-
-    // Слово есть, мастер-пароля нет.
-    await wrapper.find('.csv input[type="text"]').setValue('ЭКСПОРТ')
-    expect(button(wrapper, 'в CSV').attributes('disabled')).toBeDefined()
+    // Ни галочки, ни слова-подтверждения: они были третьим и четвёртым «да».
+    expect(wrapper.find('.csv__ack-box').exists()).toBe(false)
+    expect(wrapper.find('.csv input[type="text"]').exists()).toBe(false)
+    expect(button(wrapper, 'Сохранить CSV').attributes('disabled')).toBeDefined()
 
     await wrapper.find('.csv input[type="password"]').setValue(MOCK_MASTER_PASSWORD)
-    expect(button(wrapper, 'в CSV').attributes('disabled')).toBeUndefined()
+    expect(button(wrapper, 'Сохранить CSV').attributes('disabled')).toBeUndefined()
+
+    // У поля мастер-пароля нет «Показать»: в макетах его нет ни у одного.
+    expect(wrapper.find('.sy-input__reveal').exists()).toBe(false)
 
     wrapper.unmount()
   })
@@ -136,8 +141,8 @@ describe('CsvExportModal · экспорт в открытый текст (§6.2
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('Открытый файл лежит на диске')
-    // Подтверждения одноразовые: следующий такой файл — следующее решение.
-    expect(button(wrapper, 'в CSV').attributes('disabled')).toBeDefined()
+    // Пароль спрашивается заново: следующий такой файл — следующее решение.
+    expect(button(wrapper, 'Сохранить CSV').attributes('disabled')).toBeDefined()
 
     wrapper.unmount()
   })
@@ -154,6 +159,22 @@ describe('BackupModal · зашифрованный бэкап', () => {
     expect(wrapper.text()).toContain('Бэкап сохранён')
     expect(wrapper.text()).toContain('.syncra')
     expect(wrapper.text()).toContain('Сохранить ещё раз')
+    // Наверх уходит след файла — карточка настроек показывает его у себя.
+    expect(wrapper.emitted('done')).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it('заголовок один, а состав файла — сводка, а не столбик рамок', async () => {
+    const wrapper = await mountBackup()
+
+    // «Зашифрованный бэкап» рисует сам диалог; второй такой же в теле был
+    // остатком спек-страницы.
+    expect(wrapper.findAll('.sy-modal__title')).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('Спокойный вариант')
+    expect(wrapper.findAll('.backup__spec')).toHaveLength(4)
+    // Действие живёт в подвале диалога, как у остальных модалок.
+    expect(wrapper.find('.sy-modal__actions').text()).toContain('Сохранить бэкап')
 
     wrapper.unmount()
   })

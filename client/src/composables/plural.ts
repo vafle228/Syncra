@@ -23,3 +23,9 @@ export function pluralize(count: number, forms: [string, string, string]): strin
 export const RECORD_FORMS: [string, string, string] = ['запись', 'записи', 'записей']
 export const SERVICE_FORMS: [string, string, string] = ['сервис', 'сервиса', 'сервисов']
 export const ACCOUNT_FORMS: [string, string, string] = ['аккаунт', 'аккаунта', 'аккаунтов']
+/** Предложный падеж — «хранится НА 1 устройствЕ · НА 3 устройствАХ». */
+export const DEVICE_AT_FORMS: [string, string, string] = [
+  'устройстве',
+  'устройствах',
+  'устройствах',
+]

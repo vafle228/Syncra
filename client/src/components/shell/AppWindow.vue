@@ -2,7 +2,7 @@
 import { computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { SyThemeToggle, SyToast } from '@/components/ui'
+import { SyToast } from '@/components/ui'
 import { useVaultStore } from '@/stores/useVaultStore'
 
 import WindowControls from './WindowControls.vue'
@@ -15,9 +15,11 @@ import WindowControls from './WindowControls.vue'
  * (тосты, модалки), лежит здесь: `position: relative` на шасси делает окно
  * системой координат для них, как в прототипе.
  *
- * Здесь же единственный на всё приложение `SyThemeToggle`. До F13 их было шесть
- * — по одному в шапке каждого экрана; переключатель темы это свойство окна, а не
- * страницы, и шесть его копий были следствием того, что окна не существовало.
+ * Переключателя темы здесь НЕТ. До F13 их было шесть — по одному в шапке
+ * каждого экрана; F13 свёл их в один, в полосе заголовка. Теперь тема живёт
+ * во вкладке «Оформление» вместе с акцентом: это две настройки одного и того
+ * же, и держать одну из них кнопкой в шасси окна, а вторую в настройках —
+ * значит прятать половину выбора.
  */
 
 const router = useRouter()
@@ -71,7 +73,6 @@ watch(
       </div>
 
       <div class="app-window__controls">
-        <SyThemeToggle />
         <WindowControls />
       </div>
     </header>

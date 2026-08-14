@@ -16,6 +16,7 @@ import {
   type GeneratePasswordsResponse,
   type GeneratorProfile,
   type GetConflictSecretResponse,
+  type GetTotpCodeResponse,
   type ImportOptions,
   type ImportPreview,
   type ImportResult,
@@ -110,6 +111,15 @@ export interface CoreClient {
    * дольше показа. Показал / скопировал — отпустил.
    */
   getSecret(recordId: RecordId): Promise<RecordSecrets>
+
+  /**
+   * Текущий код подтверждения записи (F5). Считает его ЯДРО: `totp_secret`
+   * границу не пересекает, во фронте криптографии нет.
+   *
+   * ЗАКОН №1: код — тоже секрет, просто короткоживущий. Не в стор, не в
+   * localStorage; исчезает вместе с показом.
+   */
+  getTotpCode(recordId: RecordId): Promise<GetTotpCodeResponse>
 
   createRecord(draft: RecordDraft): Promise<RecordMeta>
 
@@ -317,6 +327,7 @@ export function createTauriCoreClient(): CoreClient {
       }),
     listRecords: (request = {}) => call('listRecords', request),
     getSecret: (recordId) => call('getSecret', { record_id: recordId }),
+    getTotpCode: (recordId) => call('getTotpCode', { record_id: recordId }),
     createRecord: (draft) => call('createRecord', { draft }),
     updateRecord: (recordId, patch) => call('updateRecord', { record_id: recordId, patch }),
     deleteRecord: (recordId) => call('deleteRecord', { record_id: recordId }),

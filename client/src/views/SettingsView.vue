@@ -9,6 +9,12 @@ import GeneratorProfileForm from '@/components/generator/GeneratorProfileForm.vu
 import MasterPasswordModal from '@/components/security/MasterPasswordModal.vue'
 import { SyButton } from '@/components/ui'
 import { securityPolicy } from '@/composables/securityPolicy'
+import {
+  ACCENTS,
+  useTheme,
+  type AccentPreference,
+  type ThemePreference,
+} from '@/composables/useTheme'
 import { useClipboard } from '@/composables/useClipboard'
 import {
   useDebounced,
@@ -60,6 +66,7 @@ const TABS = [
   { id: 'security', name: 'Безопасность' },
   { id: 'generator', name: 'Генератор' },
   { id: 'data', name: 'Данные' },
+  { id: 'appearance', name: 'Оформление' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -67,11 +74,20 @@ type TabId = (typeof TABS)[number]['id']
 /** Старые ссылки `/data?tab=import|export` вели сюда же — принимаем их. */
 function readTab(raw: unknown): TabId {
   if (raw === 'generator') return 'generator'
+  if (raw === 'appearance') return 'appearance'
   if (raw === 'data' || raw === 'import' || raw === 'export') return 'data'
   return 'security'
 }
 
 const tab = ref<TabId>(readTab(route.query.tab))
+
+/**
+ * Связка вкладки и панели для диктора. Без `aria-controls`/`role="tabpanel"`
+ * полоса вкладок озвучивается как набор кнопок, а панель — как «что-то ниже»:
+ * связи между ними нет, и переход по вкладке ничего не сообщает.
+ */
+const tabId = (id: TabId): string => `settings-tab-${id}`
+const panelId = (id: TabId): string => `settings-panel-${id}`
 
 watch(
   () => route.query.tab,
@@ -84,6 +100,32 @@ function pickTab(next: TabId): void {
   tab.value = next
   void router.replace({ name: 'settings', query: next === 'security' ? {} : { tab: next } })
 }
+
+// ---------------------------------------------------------------------------
+// Оформление
+//
+// Макета у этой вкладки нет: до сих пор тема переключалась кнопкой в полосе
+// заголовка, а акцент не переключался вовсе. Собрана она в том же идиоме, что
+// и «Безопасность» (`Прототип:2142-2159`): строка-карточка с объяснением слева
+// и сегментом вариантов справа.
+// ---------------------------------------------------------------------------
+
+const { preference: themePreference, setTheme, accent, setAccent } = useTheme()
+
+const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
+  { value: 'dark', label: 'Тёмная' },
+  { value: 'light', label: 'Светлая' },
+  { value: 'system', label: 'Системная' },
+]
+
+const ACCENT_LABELS: Record<AccentPreference, string> = {
+  mint: 'Мята',
+  cyan: 'Циан',
+  amber: 'Янтарь',
+  indigo: 'Индиго',
+}
+
+const accentOptions = ACCENTS.map((value) => ({ value, label: ACCENT_LABELS[value] }))
 
 // ---------------------------------------------------------------------------
 // Безопасность
@@ -208,6 +250,22 @@ const backing = ref(false)
 const exporting = ref(false)
 
 /**
+ * След последнего экспорта — в карточке, а не в тосте (`Прототип:2118`,
+ * `2129`). Тост уедет через три секунды, а файл на диске останется; про
+ * незашифрованный CSV об этом надо помнить дольше.
+ *
+ * Хранится только имя файла: это не секрет, но и не содержимое — путь целиком
+ * показывает сам диалог, пока он открыт.
+ */
+const backupFile = ref<string | null>(null)
+const csvFile = ref<string | null>(null)
+
+/** Имя файла из пути: разделители у платформ разные. */
+function fileName(path: string): string {
+  return path.split(/[\/]/).pop() ?? path
+}
+
+/**
  * Импорт закончился — показываем, что приехало. Фильтр списка ставим на свежую
  * секцию: 300 чужих записей вперемешку со своими нельзя ни проверить, ни
  * разобрать. Баннер над списком договаривает главное: они пока только здесь.
@@ -227,7 +285,9 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
     <header class="settings__header">
       <div class="settings__brand">
         <h1 class="settings__title">Настройки</h1>
-        <p class="settings__lead">Каждый пункт объясняет цену выбора, а не просто включает галочку.</p>
+        <p class="settings__lead">
+          Каждый пункт объясняет цену выбора, а не просто включает галочку.
+        </p>
       </div>
 
       <div class="settings__tabs" role="tablist" aria-label="Разделы настроек">
@@ -235,10 +295,13 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
           v-for="item in TABS"
           :key="item.id"
           type="button"
+          :id="tabId(item.id)"
           role="tab"
           class="settings__tab"
           :class="{ 'settings__tab--on': tab === item.id }"
           :aria-selected="tab === item.id"
+          :aria-controls="panelId(item.id)"
+          :tabindex="tab === item.id ? undefined : -1"
           :data-test="`tab-${item.id}`"
           @click="pickTab(item.id)"
         >
@@ -249,7 +312,14 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
 
     <div class="settings__body">
       <!-- Безопасность -->
-      <section v-if="tab === 'security'" class="settings__pane" data-test="pane-security">
+      <section
+        v-if="tab === 'security'"
+        :id="panelId('security')"
+        class="settings__pane"
+        role="tabpanel"
+        :aria-labelledby="tabId('security')"
+        data-test="pane-security"
+      >
         <p v-if="security.error" class="settings__error" role="alert">{{ security.error }}</p>
         <p v-if="securityError" class="settings__error" role="alert">{{ securityError }}</p>
 
@@ -286,8 +356,78 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
         </div>
       </section>
 
+      <!-- Оформление -->
+      <section
+        v-else-if="tab === 'appearance'"
+        :id="panelId('appearance')"
+        class="settings__pane"
+        role="tabpanel"
+        :aria-labelledby="tabId('appearance')"
+        data-test="pane-appearance"
+      >
+        <div class="settings__option">
+          <div class="settings__option-text">
+            <span class="settings__option-name">Тема</span>
+            <span class="settings__option-desc">
+              Системная следует за настройкой ОС и переключается вместе с ней. Тёмная и светлая
+              фиксируют выбор независимо от системы.
+            </span>
+          </div>
+
+          <div class="settings__choices" role="group" aria-label="Тема">
+            <button
+              v-for="option in THEME_OPTIONS"
+              :key="option.value"
+              type="button"
+              class="settings__choice"
+              :class="{ 'settings__choice--on': themePreference === option.value }"
+              :aria-pressed="themePreference === option.value"
+              @click="setTheme(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="settings__option">
+          <div class="settings__option-text">
+            <span class="settings__option-name">Акцент</span>
+            <span class="settings__option-desc">
+              Цвет, которым помечено выбранное и открытое. На то, что и как хранится, он не влияет —
+              это единственная настройка здесь, у которой нет цены.
+            </span>
+          </div>
+
+          <div class="settings__choices" role="group" aria-label="Акцент">
+            <button
+              v-for="option in accentOptions"
+              :key="option.value"
+              type="button"
+              class="settings__choice settings__accent"
+              :class="{ 'settings__choice--on': accent === option.value }"
+              :aria-pressed="accent === option.value"
+              @click="setAccent(option.value)"
+            >
+              <span
+                class="settings__accent-dot"
+                :data-accent="option.value === 'mint' ? undefined : option.value"
+                aria-hidden="true"
+              />
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+      </section>
+
       <!-- Генератор -->
-      <section v-else-if="tab === 'generator'" class="settings__pane" data-test="pane-generator">
+      <section
+        v-else-if="tab === 'generator'"
+        :id="panelId('generator')"
+        class="settings__pane"
+        role="tabpanel"
+        :aria-labelledby="tabId('generator')"
+        data-test="pane-generator"
+      >
         <div class="settings__intro">
           <h2 class="settings__pane-title">Профиль генератора</h2>
           <p class="settings__pane-text">
@@ -340,7 +480,14 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
       </section>
 
       <!-- Данные -->
-      <section v-else class="settings__pane" data-test="pane-data">
+      <section
+        v-else
+        :id="panelId('data')"
+        class="settings__pane"
+        role="tabpanel"
+        :aria-labelledby="tabId('data')"
+        data-test="pane-data"
+      >
         <div class="settings__data-row">
           <div class="settings__data-text">
             <span class="settings__data-title">Импорт из другого менеджера</span>
@@ -349,7 +496,7 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
               удалить — внутри пароли открытым текстом.
             </span>
           </div>
-          <SyButton variant="primary" size="sm" data-test="open-import" @click="importing = true">
+          <SyButton variant="primary" data-test="open-import" @click="importing = true">
             Выбрать файл
           </SyButton>
         </div>
@@ -361,10 +508,11 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
               Один файл, который открывается только вашим мастер-паролем. Подходит для флешки в
               ящике стола.
             </span>
+            <span v-if="backupFile" class="settings__data-receipt">
+              сохранено · {{ backupFile }}
+            </span>
           </div>
-          <SyButton size="sm" data-test="open-backup" @click="backing = true">
-            Создать бэкап
-          </SyButton>
+          <SyButton data-test="open-backup" @click="backing = true">Создать бэкап</SyButton>
         </div>
 
         <div class="settings__data-row settings__data-row--danger">
@@ -374,23 +522,36 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
               Файл не шифруется: пароли внутри читаются как обычный текст. Нужен только для переезда
               в другой менеджер.
             </span>
+            <span v-if="csvFile" class="settings__data-receipt settings__data-receipt--danger">
+              сохранено · {{ csvFile }} · удалите файл после переноса
+            </span>
           </div>
-          <SyButton variant="danger" size="sm" data-test="open-csv" @click="exporting = true">
+          <SyButton variant="danger" data-test="open-csv" @click="exporting = true">
             Экспортировать CSV
           </SyButton>
         </div>
 
         <p class="settings__data-note">
-          Ни импорт, ни экспорт не обращаются к сети. Единственный канал, по которому данные покидают
-          это устройство, — прямая синхронизация с вашими же устройствами в одной локальной сети.
+          Ни импорт, ни экспорт не обращаются к сети. Единственный канал, по которому данные
+          покидают это устройство, — прямая синхронизация с вашими же устройствами в одной локальной
+          сети.
         </p>
       </section>
     </div>
 
     <MasterPasswordModal :open="changingMaster" @close="changingMaster = false" />
     <ImportModal :open="importing" @close="importing = false" @imported="onImported" />
-    <BackupModal :open="backing" @close="backing = false" />
-    <CsvExportModal :open="exporting" @close="exporting = false" />
+    <BackupModal
+      :open="backing"
+      @close="backing = false"
+      @done="backupFile = fileName($event.path)"
+    />
+    <CsvExportModal
+      :open="exporting"
+      @close="exporting = false"
+      @done="csvFile = fileName($event.path)"
+      @forgotten="csvFile = null"
+    />
   </main>
 </template>
 
@@ -409,13 +570,17 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
   background: var(--sy-bg-1);
 }
 
+/*
+ * У шапки НЕТ своей заливки: в макете (`Прототип:1914`, `2027`, `2085`) она
+ * часть панели и отделена только линией. `--sy-bg-0` — цвет шасси окна, и на
+ * правой панели он читался как чужая полоса, приклеенная сверху.
+ */
 .settings__header {
   display: flex;
   flex-direction: column;
   gap: var(--sy-space-6);
-  padding: var(--sy-space-6) var(--sy-space-8) 0;
+  padding: var(--sy-space-7) var(--sy-space-8) 0;
   border-bottom: 1px solid var(--sy-border);
-  background: var(--sy-bg-0);
 }
 
 .settings__brand {
@@ -431,9 +596,27 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
 }
 
 .settings__lead {
-  font-size: var(--sy-text-body);
+  font-size: var(--sy-text-note);
   color: var(--sy-text-2);
   text-wrap: pretty;
+}
+
+/*
+ * Свотч акцента красит себя ТЕМ ЖЕ атрибутом `data-accent`, что и документ:
+ * образец обязан показывать ровно ту палитру, которую включит нажатие, и
+ * второй список цветов рядом с токенами разъехался бы с ними при первой правке.
+ */
+.settings__accent-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--sy-accent);
+}
+
+.settings__accent {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sy-space-3);
 }
 
 /* Вкладки: подчёркивание, а не кнопки — это навигация внутри экрана. */
@@ -679,15 +862,31 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
 }
 
 .settings__data-title {
-  font-size: 15px;
+  font-size: var(--sy-text-body-strong);
   font-weight: var(--sy-weight-semibold);
 }
 
 .settings__data-body {
-  font-size: var(--sy-text-body);
+  font-size: var(--sy-text-note);
   line-height: 1.55;
   color: var(--sy-text-2);
   text-wrap: pretty;
+}
+
+/*
+ * След экспорта живёт В КАРТОЧКЕ, а не в тосте: тост уедет, а файл на диске
+ * останется — и про CSV об этом надо помнить дольше трёх секунд.
+ */
+.settings__data-receipt {
+  padding-top: 2px;
+  font-family: var(--sy-font-mono);
+  font-size: var(--sy-text-label);
+  color: var(--sy-accent);
+  word-break: break-all;
+}
+
+.settings__data-receipt--danger {
+  color: var(--sy-danger);
 }
 
 .settings__data-note {
@@ -695,7 +894,7 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
   border: 1px solid var(--sy-border);
   border-radius: var(--sy-radius);
   background: var(--sy-bg-0);
-  font-size: 12.5px;
+  font-size: var(--sy-text-small);
   line-height: 1.55;
   color: var(--sy-text-2);
   text-wrap: pretty;

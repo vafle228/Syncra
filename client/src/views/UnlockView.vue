@@ -39,7 +39,9 @@ const pinNote = ref<string | null>(null)
 const lockNote = computed(() => {
   if (vault.lockReason === 'timeout') return 'Хранилище закрылось само — не было действий.'
   if (vault.lockReason === 'system') return 'Хранилище закрылось: компьютер уходил в сон.'
-  return mode.value === 'pin' ? 'Быстрый вход на этом устройстве.' : 'Первый вход после запуска — только паролем.'
+  return mode.value === 'pin'
+    ? 'Быстрый вход на этом устройстве.'
+    : 'Первый вход после запуска — только паролем.'
 })
 
 const canSubmit = computed(() => masterPassword.value.length > 0 && !vault.busy)
@@ -200,6 +202,7 @@ function toPin(): void {
             v-model="masterPassword"
             label="Пароль от хранилища"
             type="password"
+            :revealable="false"
             autocomplete="current-password"
             autofocus
             :error="vault.error"

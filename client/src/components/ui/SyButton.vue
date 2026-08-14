@@ -15,7 +15,7 @@ withDefaults(
      * Высота. `header` — 34px из шапок панелей прототипа: на ладдере 30/36/42
      * такой ступени не было, поэтому каждая шапка рисовала её числом у себя.
      */
-    size?: 'md' | 'sm' | 'lg' | 'header'
+    size?: 'md' | 'sm' | 'field' | 'lg' | 'header'
     type?: 'button' | 'submit'
     disabled?: boolean
     loading?: boolean
@@ -90,6 +90,18 @@ withDefaults(
 
   padding: 0 var(--sy-space-5);
   font-size: var(--sy-text-small);
+}
+
+/*
+ * Кнопка вровень с полем формы: 38px — та же высота, что у `SyInput`. Нужна
+ * там, где кнопка стоит в одной строке с полем (форма секции, `Прототип:2004`),
+ * и низ у них обязан совпасть.
+ */
+.sy-button--field {
+  --button-height: var(--sy-control-height-field);
+
+  padding: 0 var(--sy-space-6);
+  font-size: var(--sy-text-note);
 }
 
 /* Действие в шапке панели: 34px, подпись 13px — размеры прототипа. */

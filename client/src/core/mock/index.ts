@@ -10,6 +10,7 @@ import type {
   GeneratePasswordsResponse,
   GeneratorProfile,
   GetConflictSecretResponse,
+  GetTotpCodeResponse,
   ImportOptions,
   ImportPreview,
   ImportPreviewRow,
@@ -131,6 +132,9 @@ export {
  * Здесь нет и не должно быть никакой крипты: фейк-ядро не шифрует, оно
  * притворяется. Настоящие шифрование/KDF живут в Rust.
  */
+
+/** Длина окна TOTP. Тридцать секунд — то, что рисует макет и ждут сервисы. */
+const MOCK_TOTP_PERIOD_S = 30
 
 export interface MockCoreOptions {
   /** Задержка каждой команды, мс. Эмулирует реальный IPC. */
@@ -872,6 +876,42 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
       return cloneSecrets(found)
     },
 
+    /**
+     * Код подтверждения. Настоящее ядро считает его по RFC 6238; мок считает
+     * стабильный-по-записи «код» и настоящий отсчёт по часам — этого хватает,
+     * чтобы кольцо в карточке крутилось, а код менялся раз в период.
+     *
+     * Ключ наружу не отдаётся даже в моке: форма ответа — часть договора, и
+     * поддаваться соблазну «в моке-то можно» здесь нельзя.
+     */
+    async getTotpCode(recordId: RecordId): Promise<GetTotpCodeResponse> {
+      await enter({ requiresUnlock: true })
+
+      liveRecord(recordId)
+      const found = secrets.get(recordId)
+      if (!found) throw new CoreError('NOT_FOUND', 'Запись не найдена.')
+      if (found.totp_secret === null || found.totp_secret === '') {
+        throw new CoreError('VALIDATION', 'У записи нет ключа подтверждения.')
+      }
+
+      const periodS = MOCK_TOTP_PERIOD_S
+      const now = Date.now()
+      const step = Math.floor(now / (periodS * 1000))
+
+      // Детерминированная «свёртка» ключа и номера окна: не крипта, а способ
+      // получить правдоподобно меняющееся шестизначное число.
+      let hash = 0
+      for (const char of `${found.totp_secret}:${step}`) {
+        hash = (hash * 31 + char.charCodeAt(0)) % 1_000_000
+      }
+
+      return {
+        code: String(hash).padStart(6, '0'),
+        seconds_left: periodS - Math.floor((now % (periodS * 1000)) / 1000),
+        period_s: periodS,
+      }
+    },
+
     async createRecord(draft: RecordDraft): Promise<RecordMeta> {
       await enter({ requiresUnlock: true })
 
@@ -1200,6 +1240,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
         kind: handshake.peer_kind,
         is_this_device: false,
         paired_at: pairedAt,
+        fingerprint_words: [...handshake.fingerprint_words],
         last_seen_at: pairedAt,
         revoked_at: null,
       }
@@ -1615,6 +1656,7 @@ export function createMockCoreClient(options: MockCoreOptions = {}): MockCoreCli
           kind: 'mobile',
           is_this_device: false,
           paired_at: pairedAt,
+          fingerprint_words: fingerprintWords(name),
           last_seen_at: pairedAt,
           revoked_at: null,
         }

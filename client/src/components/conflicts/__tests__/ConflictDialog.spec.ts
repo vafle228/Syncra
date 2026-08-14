@@ -70,6 +70,26 @@ describe('полный diff (§5.5)', () => {
     wrapper.unmount()
   })
 
+  it('собран полосами: вопрос в шапке, версии в теле, ответ в подвале', async () => {
+    const wrapper = await mountDialog()
+
+    const dialog = document.body.querySelector('.sy-modal__dialog')!
+    expect([...dialog.classList]).toContain('sy-modal__dialog--banded')
+
+    // Заголовок и пояснение — одна шапка, а не два абзаца в теле.
+    const head = dialog.querySelector('.sy-modal__head')!
+    expect(head.querySelector('.sy-modal__title')?.textContent).toBe('Две версии одной записи')
+    expect(head.querySelector('.sy-modal__lead')?.textContent).toContain('правили офлайн')
+
+    // Строка «что разошлось» стоит в подвале рядом с кнопками, а не в теле.
+    expect(dialog.querySelector('.sy-modal__actions .conflict__diff-line')?.textContent).toContain(
+      'отличаются:',
+    )
+    expect(dialog.querySelector('.sy-modal__content .conflict__grid')).not.toBeNull()
+
+    wrapper.unmount()
+  })
+
   it('не выводит ни одного секрета, пока их не открыли (Закон №1)', async () => {
     const wrapper = await mountDialog()
 

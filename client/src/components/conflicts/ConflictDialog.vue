@@ -117,11 +117,16 @@ async function resolve(): Promise<void> {
 </script>
 
 <template>
-  <SyModal open size="wide" title="Две версии одной записи" @close="emit('close')">
-    <p class="conflict__lead">
+  <!--
+    Полосный диалог макета (`Прототип:2378-2438`): вопрос в шапке, обе версии в
+    прокручиваемом теле, ответ в подвале. Шапка и кнопки не уезжают вместе с
+    содержимым — выбирать версию, потеряв из виду вопрос, не приходится.
+  -->
+  <SyModal open banded size="wide" title="Две версии одной записи" @close="emit('close')">
+    <template #lead>
       Запись правили офлайн на двух устройствах. Ничего не потеряно: обе версии целы — выберите одну
       целиком. Syncra не выбирает за вас и не склеивает версии по полям.
-    </p>
+    </template>
 
     <div class="conflict__grid" role="radiogroup" aria-label="Какую версию оставить">
       <!--
@@ -171,7 +176,6 @@ async function resolve(): Promise<void> {
             :class="{
               'conflict__cell--differs': differs(field),
               'conflict__cell--on': side === which,
-              'conflict__cell--secret': isSecretField(field),
             }"
           >
             {{ cellValue(which, field) }}
@@ -185,8 +189,11 @@ async function resolve(): Promise<void> {
     </p>
     <p v-if="error" class="conflict__error" role="alert">{{ error }}</p>
 
-    <template #actions>
+    <template #note>
       <span class="conflict__diff-line">{{ differingLine(conflict) }}</span>
+    </template>
+
+    <template #actions>
       <SyButton size="sm" :disabled="saving" @click="emit('close')">Решить позже</SyButton>
       <SyButton
         variant="primary"
@@ -202,19 +209,11 @@ async function resolve(): Promise<void> {
 </template>
 
 <style scoped>
-.conflict__lead {
-  font-size: var(--sy-text-body);
-  line-height: 1.55;
-  color: var(--sy-text-2);
-  text-wrap: pretty;
-}
-
 .conflict__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sy-space-6);
   align-items: start;
-  margin-top: var(--sy-space-5);
 }
 
 .conflict__card {
@@ -263,7 +262,7 @@ async function resolve(): Promise<void> {
 .conflict__device {
   flex: 1;
   min-width: 0;
-  font-size: 14.5px;
+  font-size: var(--sy-text-item-title);
   font-weight: var(--sy-weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -274,7 +273,7 @@ async function resolve(): Promise<void> {
 .conflict__when {
   flex: none;
   font-family: var(--sy-font-mono);
-  font-size: 10.5px;
+  font-size: var(--sy-text-meta);
   color: var(--sy-text-3);
 }
 
@@ -295,7 +294,7 @@ async function resolve(): Promise<void> {
   justify-content: space-between;
   gap: var(--sy-space-4);
   font-family: var(--sy-font-mono);
-  font-size: var(--sy-text-label);
+  font-size: var(--sy-text-tag);
   line-height: var(--sy-text-label-lh);
   letter-spacing: var(--sy-tracking-label);
   text-transform: uppercase;
@@ -320,38 +319,39 @@ async function resolve(): Promise<void> {
   cursor: default;
 }
 
+/*
+ * Все значения — моноширинные: их сравнивают посимвольно, а не читают.
+ * Совпавшее поле остаётся БЕЗ рамки и приглушено (`Прототип:2400`): рамка
+ * здесь означает «вот тут и разошлось», и раздавать её всем подряд — значит
+ * заставить искать различие глазами.
+ */
 .conflict__cell {
   display: flex;
   align-items: center;
   min-height: 32px;
-  padding: var(--sy-space-3) var(--sy-space-5);
+  padding: var(--sy-space-3) 11px;
   border: 1px solid transparent;
-  border-radius: var(--sy-radius-xs);
-  font-size: var(--sy-text-body);
+  border-radius: var(--sy-radius-inner);
+  font-family: var(--sy-font-mono);
+  font-size: var(--sy-text-small);
   color: var(--sy-text-3);
   overflow-wrap: anywhere;
 }
 
-/* Совпавшее поле — приглушено: смотреть надо на то, что разошлось. */
 .conflict__cell--differs {
   border-color: var(--sy-border-strong);
   background: var(--sy-surface);
-  color: var(--sy-text);
-}
-
-.conflict__cell--secret {
-  font-family: var(--sy-font-mono);
-  font-size: 12.5px;
+  color: var(--sy-text-2);
 }
 
 .conflict__cell--on.conflict__cell--differs {
   border-color: var(--sy-accent-border);
+  color: var(--sy-text);
 }
 
 .conflict__diff-line {
-  flex: 1;
   font-family: var(--sy-font-mono);
-  font-size: 10.5px;
+  font-size: var(--sy-text-meta);
   color: var(--sy-text-3);
 }
 

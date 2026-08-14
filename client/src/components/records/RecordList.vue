@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-import { SyButton, SyEmptyState, SyListItem } from '@/components/ui'
+import { SyButton, SyEmptyState, SyListItem, SySelect } from '@/components/ui'
+import type { SySelectOption } from '@/components/ui'
 import { ACCOUNT_FORMS, pluralize, RECORD_FORMS, SERVICE_FORMS } from '@/composables/plural'
+import type { RecordOrder } from '@/composables/useRecordList'
 import { securityPolicy } from '@/composables/securityPolicy'
 import { useRecordSecrets } from '@/composables/useRecordSecrets'
 import type { RecordId } from '@/core/contract'
@@ -76,6 +78,22 @@ const countLine = computed(() => {
 
 function groupCount(count: number): string {
   return pluralize(count, ACCOUNT_FORMS)
+}
+
+/**
+ * Порядок списка (`Прототип:1427`). Три варианта, и третий — не про удобство, а
+ * про гигиену: «старые пароли» показывают, что давно не меняли.
+ */
+const ORDER_OPTIONS: (SySelectOption & { value: RecordOrder })[] = [
+  { value: 'recent', label: 'Недавние' },
+  { value: 'alpha', label: 'По алфавиту' },
+  { value: 'stale', label: 'Старые пароли' },
+]
+
+/** Список отдаёт строку; в стор уходит только знакомый нам ключ порядка. */
+function changeOrder(value: string): void {
+  const next = ORDER_OPTIONS.find((option) => option.value === value)
+  if (next) list.setOrder(next.value)
 }
 
 const importText = computed(() =>
@@ -159,9 +177,22 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
+      <!--
+        Справа от счётчика — порядок списка. Подсказки про Ctrl+K тут больше нет:
+        строки «Ctrl» нет ни в одном макете, а сам хоткей остался — он ничего не
+        занимает на экране.
+      -->
       <div class="record-list__count">
         <span>{{ countLine }}</span>
-        <span class="record-list__hotkey">Ctrl + K</span>
+        <SySelect
+          class="record-list__order"
+          variant="inline"
+          aria-label="Порядок списка"
+          :model-value="list.order"
+          :options="ORDER_OPTIONS"
+          data-test="list-order"
+          @update:model-value="changeOrder"
+        />
       </div>
 
       <!--
@@ -364,6 +395,9 @@ onBeforeUnmount(() => {
 }
 
 .record-list__search {
+  /* Поиск занимает всю строку, кроме 34×34 кнопки «+» (`Прототип:1417`). */
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--sy-space-4);
@@ -419,11 +453,10 @@ onBeforeUnmount(() => {
   color: var(--sy-text-3);
 }
 
-.record-list__hotkey {
+/* Счётчик набран моноширинным; подпись порядка — нет, и шрифт ей надо вернуть. */
+.record-list__order {
   flex: none;
-  padding: 2px var(--sy-space-2);
-  border: 1px solid var(--sy-border);
-  border-radius: var(--sy-radius-xs);
+  font-family: var(--sy-font-sans);
 }
 
 .record-list__local {
@@ -521,7 +554,7 @@ onBeforeUnmount(() => {
   width: 30px;
   height: 30px;
   border: 1px solid var(--sy-accent-border);
-  border-radius: 7px;
+  border-radius: var(--sy-radius-inner);
   background: transparent;
   cursor: pointer;
   transform: translateY(-50%);

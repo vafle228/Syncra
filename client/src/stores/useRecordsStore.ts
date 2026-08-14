@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { useRecordList } from '@/composables/useRecordList'
+import { useRecordList, type RecordOrder } from '@/composables/useRecordList'
 import type { RecordDraft, RecordId, RecordMeta, RecordPatch, VaultId } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useCore, type Unsubscribe } from '@/core/ipc'
@@ -30,6 +30,12 @@ function sortRecords(records: RecordMeta[]): RecordMeta[] {
 export const useRecordsStore = defineStore('records', () => {
   const records = ref<RecordMeta[]>([])
   const query = ref('')
+  /**
+   * Порядок списка (F4). Умолчание макета — «Недавние»: чаще всего человек
+   * возвращается к тому, что правил последним. Это настройка показа, а не
+   * содержимое хранилища, поэтому блокировка её не сбрасывает.
+   */
+  const order = ref<RecordOrder>('recent')
   /** Сообщение ядра для показа пользователю. Секретов не содержит по контракту. */
   const error = ref<string | null>(null)
   const loading = ref(false)
@@ -50,7 +56,7 @@ export const useRecordsStore = defineStore('records', () => {
       : records.value.filter((record) => record.vault_id === vaultFilter.value),
   )
 
-  const { matched, groups, isSearching } = useRecordList(scoped, query)
+  const { matched, groups, isSearching } = useRecordList(scoped, query, order)
 
   /** Сколько записей в секции — для счётчиков сайдбара. */
   const countByVault = computed(() => {
@@ -183,6 +189,10 @@ export const useRecordsStore = defineStore('records', () => {
     query.value = next
   }
 
+  function setOrder(next: RecordOrder): void {
+    order.value = next
+  }
+
   function clearQuery(): void {
     query.value = ''
   }
@@ -196,6 +206,7 @@ export const useRecordsStore = defineStore('records', () => {
   return {
     records,
     query,
+    order,
     error,
     loading,
     loaded,
@@ -219,6 +230,7 @@ export const useRecordsStore = defineStore('records', () => {
     replace,
     remove,
     setQuery,
+    setOrder,
     clearQuery,
     clear,
     dispose,

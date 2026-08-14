@@ -130,6 +130,16 @@ const steps = [
   'Сверьте четыре слова на обоих экранах — и подтвердите.',
 ]
 
+/**
+ * Метка шага в шапке (`Прототип:2304`). Мастер не линейный: путей два, и номер
+ * шага должен называть, где человек сейчас, а не выдумывать общую нумерацию.
+ */
+const stepLabel = computed(() => {
+  if (scan.result.value !== null) return 'готово'
+  if (scan.handshake.value !== null) return 'шаг 2 из 2 · сверка слов'
+  return mode.value === 'show' ? 'шаг 1 из 2 · ваш код' : 'шаг 1 из 2 · чужой код'
+})
+
 const manualCode = computed(() =>
   offer.offer.value === null ? '' : formatManualCode(offer.offer.value.manual_code),
 )
@@ -141,29 +151,24 @@ function formatDuration(ms: number): string {
 </script>
 
 <template>
-  <SyModal
-    :open="open"
-    size="wide"
-    title="Знакомство устройств"
-    @close="emit('close')"
-  >
+  <!--
+    Полосный мастер на 560px (`Прототип:2298-2376`): шаг назван в шапке, сцена и
+    объяснение идут одной колонкой, а выбор режима лежит в подвале — там, где у
+    диалога и положено быть ответом «что дальше». Отдельного сегментного
+    контрола над содержимым в макете нет, и он только спорил с кнопками.
+  -->
+  <SyModal :open="open" banded size="wizard" title="Знакомство устройств" @close="emit('close')">
+    <template #title-aside>{{ stepLabel }}</template>
+
+    <template #head-actions>
+      <button type="button" class="pairing__close" aria-label="Закрыть" @click="emit('close')">
+        ✕
+      </button>
+    </template>
+
     <div class="pairing" data-test="pairing-modal">
-      <p class="pairing__lead">
-        Аккаунта нет, входить некуда. Второе устройство добавляется тем, что два экрана смотрят
-        друг на друга: одно показывает код, другое его читает.
-      </p>
-
-      <div v-if="scan.result.value === null" class="pairing__modes">
-        <SyButton size="sm" :variant="mode === 'show' ? 'primary' : 'secondary'" @click="showCode">
-          Показываю код
-        </SyButton>
-        <SyButton size="sm" :variant="mode === 'scan' ? 'primary' : 'secondary'" @click="startScan">
-          Ввожу код
-        </SyButton>
-      </div>
-
-      <div class="pairing__panes">
-        <!-- Левая панель: сам код, рамка ввода или итог. -->
+      <div class="pairing__column">
+        <!-- Сцена: сам код, рамка ввода или итог знакомства. -->
         <div class="pairing__stage">
           <template v-if="scan.result.value !== null">
             <div class="pairing__pair">
@@ -197,7 +202,7 @@ function formatDuration(ms: number): string {
           <PairingScanBox v-else :busy="scan.busy.value" @submit="submitScanned" />
         </div>
 
-        <!-- Правая панель: что сейчас происходит и что делать. -->
+        <!-- Объяснение: что сейчас происходит и что делать. -->
         <div class="pairing__pane">
           <template v-if="scan.result.value !== null">
             <div class="pairing__pane-head">
@@ -231,11 +236,6 @@ function formatDuration(ms: number): string {
               Записи локальных секций не поехали: выключенная синхронизация означает «никуда», в том
               числе на только что сопряжённое устройство. Их единственная копия — здесь.
             </p>
-
-            <div class="pairing__actions">
-              <SyButton variant="primary" @click="emit('close')">Готово</SyButton>
-              <SyButton @click="pairAnother">Добавить ещё устройство</SyButton>
-            </div>
           </template>
 
           <template v-else-if="mode === 'show'">
@@ -272,17 +272,6 @@ function formatDuration(ms: number): string {
                 {{ manualCode }}
               </span>
             </div>
-
-            <div class="pairing__actions">
-              <SyButton
-                :variant="offer.isExpired.value ? 'primary' : 'secondary'"
-                :loading="offer.busy.value"
-                @click="offer.request()"
-              >
-                Обновить код
-              </SyButton>
-              <SyButton @click="startScan">Прочитать код здесь</SyButton>
-            </div>
           </template>
 
           <template v-else-if="scan.handshake.value !== null">
@@ -313,13 +302,6 @@ function formatDuration(ms: number): string {
             <p v-if="scan.error.value" class="pairing__error" role="alert">
               {{ scan.error.value }}
             </p>
-
-            <div class="pairing__actions">
-              <SyButton variant="primary" :loading="scan.busy.value" @click="confirm">
-                Слова совпадают
-              </SyButton>
-              <SyButton :disabled="scan.busy.value" @click="scan.cancel()">Отмена</SyButton>
-            </div>
           </template>
 
           <template v-else>
@@ -337,14 +319,55 @@ function formatDuration(ms: number): string {
             <p v-if="scan.isExpired.value" class="pairing__pane-note">
               Коды живут несколько минут. Попросите второе устройство показать новый.
             </p>
-
-            <div class="pairing__actions">
-              <SyButton @click="showCode">Показать свой код</SyButton>
-            </div>
           </template>
         </div>
       </div>
     </div>
+
+    <!--
+      Подвал — единственное место с кнопками. Пара из макета: широкая вторичная
+      слева уводит в другой режим, узкая основная справа двигает сценарий.
+    -->
+    <template #actions>
+      <template v-if="scan.result.value !== null">
+        <SyButton class="pairing__wide" size="field" @click="pairAnother">
+          Добавить ещё устройство
+        </SyButton>
+        <SyButton variant="primary" size="field" @click="emit('close')">Готово</SyButton>
+      </template>
+
+      <template v-else-if="scan.handshake.value !== null">
+        <SyButton
+          class="pairing__wide"
+          size="field"
+          :disabled="scan.busy.value"
+          @click="scan.cancel()"
+        >
+          Отмена
+        </SyButton>
+        <SyButton variant="primary" size="field" :loading="scan.busy.value" @click="confirm">
+          Слова совпадают
+        </SyButton>
+      </template>
+
+      <template v-else-if="mode === 'show'">
+        <SyButton class="pairing__wide" size="field" @click="startScan">
+          Прочитать код здесь
+        </SyButton>
+        <SyButton
+          :variant="offer.isExpired.value ? 'primary' : 'secondary'"
+          size="field"
+          :loading="offer.busy.value"
+          @click="offer.request()"
+        >
+          Обновить код
+        </SyButton>
+      </template>
+
+      <SyButton v-else class="pairing__wide" size="field" @click="showCode">
+        Показать свой код
+      </SyButton>
+    </template>
   </SyModal>
 </template>
 
@@ -355,49 +378,53 @@ function formatDuration(ms: number): string {
   gap: var(--sy-space-6);
 }
 
-.pairing__lead {
-  font-size: var(--sy-text-body);
-  line-height: 1.55;
-  color: var(--sy-text-2);
-  text-wrap: pretty;
-}
-
-.pairing__modes {
-  display: flex;
-  gap: var(--sy-space-3);
-}
-
-.pairing__panes {
-  display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
+/* Закрыть — 30×30 в шапке (`Прототип:2305`). */
+.pairing__close {
+  width: 30px;
+  height: 30px;
   border: 1px solid var(--sy-border);
-  border-radius: var(--sy-radius-lg);
-  background: var(--sy-bg-0);
-  overflow: hidden;
+  border-radius: var(--sy-radius-inner);
+  background: var(--sy-bg-1);
+  color: var(--sy-text-2);
+  font-family: inherit;
+  font-size: var(--sy-text-note);
+  cursor: pointer;
 }
 
-/* Узкая модалка: код встаёт над объяснением, а не рядом с ним. */
-@media (max-width: 900px) {
-  .pairing__panes {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.pairing__close:hover {
+  background: var(--sy-surface-2);
+  color: var(--sy-text);
+}
+
+.pairing__close:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+/* Одна колонка: сцена сверху, объяснение под ней. */
+.pairing__column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sy-space-6);
 }
 
 .pairing__stage {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--sy-space-6);
-  padding: var(--sy-space-7) var(--sy-space-6);
-  border-right: 1px solid var(--sy-border);
+  gap: var(--sy-space-5);
+}
+
+/* Широкая половина пары кнопок — как в макете. */
+.pairing__wide {
+  flex: 1;
 }
 
 .pairing__stage-empty {
   display: grid;
   place-items: center;
-  width: 240px;
-  height: 240px;
+  width: 196px;
+  height: 196px;
   border: 1px dashed var(--sy-border-strong);
   border-radius: var(--sy-radius-lg);
   font-size: var(--sy-text-small);
@@ -446,7 +473,6 @@ function formatDuration(ms: number): string {
   display: flex;
   flex-direction: column;
   gap: var(--sy-space-6);
-  padding: var(--sy-space-7);
 }
 
 .pairing__pane-head {
@@ -501,7 +527,7 @@ function formatDuration(ms: number): string {
   width: 22px;
   height: 22px;
   border: 1px solid var(--sy-border-strong);
-  border-radius: 7px;
+  border-radius: var(--sy-radius-inner);
   background: var(--sy-surface);
   font-family: var(--sy-font-mono);
   font-size: 11px;
@@ -579,7 +605,8 @@ function formatDuration(ms: number): string {
   border-radius: var(--sy-radius-sm);
   background: var(--sy-bg-0);
   font-family: var(--sy-font-mono);
-  font-size: 13.5px;
+  font-size: var(--sy-text-note);
+  letter-spacing: 0.12em;
 }
 
 .pairing__stats {
@@ -614,12 +641,6 @@ function formatDuration(ms: number): string {
 .pairing__stat-note {
   font-size: var(--sy-text-small);
   color: var(--sy-text-2);
-}
-
-.pairing__actions {
-  display: flex;
-  gap: var(--sy-space-4);
-  margin-top: auto;
 }
 
 .pairing__error {

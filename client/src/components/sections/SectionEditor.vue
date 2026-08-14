@@ -73,10 +73,10 @@ const colorsLabelId = useId()
     </div>
 
     <div class="section-editor__actions">
-      <SyButton variant="primary" size="sm" type="submit" :loading="saving">
+      <SyButton variant="primary" size="field" type="submit" :loading="saving">
         {{ submitLabel }}
       </SyButton>
-      <SyButton size="sm" :disabled="saving" @click="emit('cancel')">Отмена</SyButton>
+      <SyButton size="field" :disabled="saving" @click="emit('cancel')">Отмена</SyButton>
     </div>
   </form>
 </template>
@@ -126,24 +126,37 @@ const colorsLabelId = useId()
   color: var(--sy-text-3);
 }
 
+/*
+ * Ряд, а не колонка. Раньше кружки выстраивались в строку только потому, что
+ * каждый был `inline-block` с полем справа: стоило одному стать блочным — и
+ * ряд рассыпался бы. Высота фиксирована по полю ввода, чтобы кружки стояли
+ * вровень с ним и с кнопками справа.
+ */
 .section-editor__colors {
   grid-column: 2;
   grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--sy-space-3);
+  height: var(--sy-control-height-field);
 }
 
 .section-editor__color {
   position: relative;
-  display: inline-block;
+  flex: none;
   width: 24px;
   height: 24px;
-  margin-right: var(--sy-space-3);
   border: 1px solid var(--sy-border);
-  border-radius: 7px;
+  border-radius: var(--sy-radius-inner);
   cursor: pointer;
 }
 
+/*
+ * Выбор рисуется тенью ВНУТРЬ, а не второй рамкой: рамка в 2px увеличила бы
+ * кружок и сдвинула соседей — метка «выбрано» не должна двигать вёрстку.
+ */
 .section-editor__color--on {
-  border: 2px solid var(--sy-text);
+  box-shadow: inset 0 0 0 2px var(--sy-text);
 }
 
 .section-editor__color:focus-visible {

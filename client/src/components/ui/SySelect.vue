@@ -25,13 +25,24 @@ export type SySelectOption = {
   dot?: string
 }
 
-const props = defineProps<{
-  modelValue: string
-  label?: string
-  options: SySelectOption[]
-  hint?: string
-  disabled?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    modelValue: string
+    label?: string
+    options: SySelectOption[]
+    hint?: string
+    disabled?: boolean
+    /**
+     * `field` — поле формы в рамке. `inline` — подпись со стрелкой прямо в
+     * строке (сортировка списка, `Прототип:1427`): у такого управления рамки
+     * нет, оно читается как текст, по которому можно щёлкнуть.
+     */
+    variant?: 'field' | 'inline'
+    /** Имя для диктора там, где видимой подписи нет (вариант `inline`). */
+    ariaLabel?: string
+  }>(),
+  { variant: 'field' },
+)
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
@@ -150,7 +161,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentPointe
 </script>
 
 <template>
-  <div class="sy-select">
+  <div class="sy-select" :class="`sy-select--${variant}`">
     <span v-if="label" :id="labelId" class="sy-select__label">{{ label }}</span>
 
     <div ref="root" class="sy-select__box">
@@ -164,6 +175,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentPointe
         :aria-controls="open ? listId : undefined"
         :aria-activedescendant="open ? optionId(activeIndex) : undefined"
         :aria-labelledby="label ? `${labelId} ${triggerId}` : undefined"
+        :aria-label="label ? undefined : ariaLabel"
         :aria-describedby="hint ? describedById : undefined"
         :disabled="unavailable"
         @click="toggle"
@@ -182,7 +194,13 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentPointe
       </button>
 
       <div v-if="open" ref="panel" class="sy-select__panel">
-        <div :id="listId" class="sy-select__list" role="listbox" :aria-labelledby="labelId">
+        <div
+          :id="listId"
+          class="sy-select__list"
+          role="listbox"
+          :aria-labelledby="label ? labelId : undefined"
+          :aria-label="label ? undefined : ariaLabel"
+        >
           <!--
             `tabindex="-1"`: фокус остаётся на триггере, а какой вариант «под
             рукой», диктору сообщает `aria-activedescendant`. Иначе Tab уводил бы
@@ -270,8 +288,53 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentPointe
   border-color: var(--sy-border-strong);
 }
 
+.sy-select__trigger:focus-visible {
+  outline: none;
+  border-color: var(--sy-accent);
+  box-shadow: var(--sy-focus-ring);
+}
+
 .sy-select__trigger:disabled {
   cursor: not-allowed;
+}
+
+/*
+ * Вариант без рамки. Управление порядком списка стоит в строке счётчика, где
+ * рамка спорила бы с полем поиска над ней: там она означает «сюда вводят», а
+ * здесь вводить нечего.
+ */
+.sy-select--inline .sy-select__trigger {
+  width: auto;
+  height: auto;
+  gap: var(--sy-space-2);
+  padding: 0;
+  border: none;
+  border-radius: var(--sy-radius-xs);
+  background: transparent;
+}
+
+.sy-select--inline .sy-select__value-text {
+  font-size: var(--sy-text-small);
+  color: var(--sy-text-2);
+}
+
+.sy-select--inline .sy-select__trigger:hover:not(:disabled) .sy-select__value-text {
+  color: var(--sy-text);
+}
+
+.sy-select--inline .sy-select__chevron {
+  width: 6px;
+  height: 6px;
+}
+
+/*
+ * Панель шире триггера и прижата к его правому краю: подпись «Недавние» узкая,
+ * а варианты в неё не влезают.
+ */
+.sy-select--inline .sy-select__panel {
+  top: calc(100% + var(--sy-space-2));
+  left: auto;
+  min-width: 176px;
 }
 
 .sy-select__value {

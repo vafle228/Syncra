@@ -6,7 +6,9 @@ import {
   DEVICE_STALE_DAYS,
   daysSilent,
   deviceKindLabel,
+  devicePresence,
   deviceSubtitle,
+  fingerprintLine,
   formatAgo,
   isStale,
 } from '../deviceFormat'
@@ -27,11 +29,63 @@ function device(patch: Partial<Device> = {}): Device {
     kind: 'mobile',
     is_this_device: false,
     paired_at: ago(400 * DAY),
+    fingerprint_words: ['сокол', 'медь', 'январь', 'парус'],
     last_seen_at: ago(6 * MINUTE),
     revoked_at: null,
     ...patch,
   }
 }
+
+describe('присутствие устройства', () => {
+  it('у своего устройства не считает время — оно здесь', () => {
+    expect(devicePresence(device({ is_this_device: true }), NOW)).toEqual({
+      text: 'это устройство',
+      live: true,
+    })
+  })
+
+  it('связь в пределах суток — «рядом», и точка горит', () => {
+    expect(devicePresence(device({ last_seen_at: ago(20 * 1000) }), NOW)).toEqual({
+      text: 'рядом · только что',
+      live: true,
+    })
+
+    const recent = devicePresence(device({ last_seen_at: ago(6 * MINUTE) }), NOW)
+    expect(recent.text).toMatch(/^рядом · \d{2}:\d{2}$/)
+    expect(recent.live).toBe(true)
+  })
+
+  it('долгое молчание меряется крупной мерой, а точка гаснет', () => {
+    expect(devicePresence(device({ last_seen_at: ago(3 * DAY) }), NOW)).toEqual({
+      text: 'не в сети 3 дня',
+      live: false,
+    })
+    expect(devicePresence(device({ last_seen_at: ago(21 * DAY) }), NOW).text).toBe(
+      'не в сети 3 недели',
+    )
+    expect(devicePresence(device({ last_seen_at: ago(120 * DAY) }), NOW).text).toBe(
+      'не в сети 4 месяца',
+    )
+  })
+
+  it('ни разу не выходившее на связь так и говорит', () => {
+    expect(devicePresence(device({ last_seen_at: null }), NOW)).toEqual({
+      text: 'ни разу не выходило на связь',
+      live: false,
+    })
+  })
+
+  it('у отозванного присутствие говорит про отзыв, а не про связь', () => {
+    const presence = devicePresence(device({ revoked_at: ago(DAY) }), NOW)
+
+    expect(presence.text).toContain('доступ отозван')
+    expect(presence.live).toBe(false)
+  })
+
+  it('отпечаток печатается словами через точку — их и сверяют глазами', () => {
+    expect(fingerprintLine(device())).toBe('сокол · медь · январь · парус')
+  })
+})
 
 describe('«когда виделись»', () => {
   it('склоняет по-русски и не врёт про точность', () => {
@@ -77,35 +131,21 @@ describe('давно пропавшее устройство', () => {
 })
 
 describe('подпись под именем устройства', () => {
-  it('у своего устройства говорит, что вы на нём и работаете', () => {
-    const line = deviceSubtitle(device({ kind: 'desktop', is_this_device: true }), NOW)
+  it('говорит, что это за устройство и когда его завели', () => {
+    const line = deviceSubtitle(device({ kind: 'desktop' }))
 
     expect(line).toContain('Компьютер')
-    expect(line).toContain('вы работаете здесь')
-  })
-
-  it('у обычного показывает, когда оно последний раз было рядом', () => {
-    expect(deviceSubtitle(device(), NOW)).toContain('был рядом 6 минут назад')
-  })
-
-  it('у пропавшего считает срок в днях — так тревожнее и точнее', () => {
-    expect(deviceSubtitle(device({ last_seen_at: ago(41 * DAY) }), NOW)).toContain(
-      'не появлялся 41 день',
-    )
-  })
-
-  it('у ни разу не выходившего на связь так и говорит', () => {
-    expect(deviceSubtitle(device({ last_seen_at: null }), NOW)).toContain(
-      'ни разу не выходил на связь',
-    )
+    expect(line).toContain('сопряжено')
+    // «Когда виделись» переехало в присутствие справа — здесь его больше нет.
+    expect(line).not.toContain('рядом')
   })
 
   it('у отозванного замещает всё: важно, что копия больше не обновляется (§2.3)', () => {
-    const line = deviceSubtitle(device({ revoked_at: ago(DAY) }), NOW)
+    const line = deviceSubtitle(device({ revoked_at: ago(DAY) }))
 
     expect(line).toContain('доступ отозван')
     expect(line).toContain('копия на устройстве больше не обновляется')
-    expect(line).not.toContain('был рядом')
+    expect(line).not.toContain('сопряжено')
   })
 
   it('называет тип устройства словом, а не техническим kind', () => {

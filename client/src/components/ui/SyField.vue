@@ -35,6 +35,12 @@ withDefaults(
       <span class="sy-field__control"><slot /></span>
     </label>
 
+    <!--
+      Действие в строке ПОДПИСИ, а не рядом с рамкой: так оно читается как часть
+      поля, а не как отдельная кнопка формы, и не отбирает у поля ширину.
+    -->
+    <div v-if="$slots.aside" class="sy-field__aside"><slot name="aside" /></div>
+
     <div v-if="$slots.action" class="sy-field__action"><slot name="action" /></div>
   </div>
 </template>
@@ -74,6 +80,12 @@ withDefaults(
   display: flex;
   flex-direction: column;
   gap: var(--sy-space-2);
+}
+
+.sy-field__aside {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
 }
 
 /* Та же строка, что и у контрола, — отсюда и выравнивание. */

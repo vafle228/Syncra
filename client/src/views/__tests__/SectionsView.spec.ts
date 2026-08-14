@@ -163,6 +163,31 @@ describe('SectionsView · создание и правка', () => {
     wrapper.unmount()
   })
 
+  it('цвета стоят рядом, а выбор не двигает соседей', async () => {
+    const { wrapper } = await mountSections()
+
+    await wrapper.find('.sections-view__new').trigger('click')
+    await flushPromises()
+
+    const swatches = wrapper.findAll('.section-editor__color')
+    expect(swatches).toHaveLength(5)
+
+    // Выбор — это класс с тенью внутрь, а не вторая рамка: геометрия ряда от
+    // него не меняется, и кружки не прыгают при переключении.
+    const selected = swatches.filter((node) => node.classes().includes('section-editor__color--on'))
+    expect(selected).toHaveLength(1)
+
+    await swatches[3]!.trigger('click')
+    await flushPromises()
+
+    expect(swatches[3]!.classes()).toContain('section-editor__color--on')
+    expect(
+      swatches.filter((node) => node.classes().includes('section-editor__color--on')),
+    ).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
   it('не создаёт секцию без имени', async () => {
     const { wrapper } = await mountSections()
 

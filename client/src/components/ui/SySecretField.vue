@@ -39,6 +39,20 @@ const props = withDefaults(
     multiline?: boolean
     /** Пояснение под полем. */
     hint?: string
+    /**
+     * Подпись кнопки копирования в ЗАКРЫТОМ состоянии. У пароля это «Копировать
+     * пароль» (`Прототип:1639`): пока значения на экране нет, из подписи должно
+     * быть понятно, что именно уедет в буфер. Открытое поле говорит само за
+     * себя, и подпись там всегда короткая.
+     */
+    copyLabel?: string
+    /**
+     * Заметки (`Прототип:1682-1689`). Закрытое поле показывает не маску, а две
+     * полосы-скелета: у заметки нет «длины пароля», которую надо прятать, — есть
+     * только факт, что текст там есть. Копирования у такого поля нет: заметку
+     * читают, а не вставляют в форму входа, — и весь бокс работает переключателем.
+     */
+    skeleton?: boolean
   }>(),
   {
     value: null,
@@ -50,6 +64,8 @@ const props = withDefaults(
     copySeconds: 0,
     clipboardUnavailable: false,
     multiline: false,
+    copyLabel: 'Копировать',
+    skeleton: false,
   },
 )
 
@@ -68,7 +84,35 @@ const MASK = '••••••••••'
     <div v-if="!present" class="sy-secret__empty">{{ emptyText }}</div>
 
     <template v-else>
+      <!--
+        Вариант со скелетом: одно действие на всё поле, поэтому переключателем
+        работает сам бокс. Вложенных кнопок в нём нет — ни копирования, ни
+        отдельного «Показать».
+      -->
+      <button
+        v-if="skeleton"
+        type="button"
+        class="sy-secret__box sy-secret__box--button"
+        :class="{
+          'sy-secret__box--open': revealed,
+          'sy-secret__box--multiline': multiline && revealed,
+        }"
+        :disabled="busy"
+        :aria-pressed="revealed"
+        @click="emit('toggle')"
+      >
+        <span v-if="revealed" class="sy-secret__value sy-secret__value--wrap">{{ value }}</span>
+        <template v-else>
+          <span class="sy-secret__bars" aria-hidden="true">
+            <span class="sy-secret__bar" />
+            <span class="sy-secret__bar sy-secret__bar--short" />
+          </span>
+          <span class="sy-secret__chip">Показать</span>
+        </template>
+      </button>
+
       <div
+        v-else
         class="sy-secret__box"
         :class="{
           'sy-secret__box--open': revealed,
@@ -95,7 +139,7 @@ const MASK = '••••••••••'
           </button>
 
           <SyCopyButton
-            :label="`Копировать`"
+            :label="revealed ? 'Копировать' : copyLabel"
             :copied="copied"
             :seconds="copySeconds"
             :unavailable="clipboardUnavailable"
@@ -110,7 +154,10 @@ const MASK = '••••••••••'
         Открыт · скроется автоматически через {{ hideIn }} с
       </p>
       <p v-else class="sy-secret__note">
-        {{ hint ?? 'Скрыт · копировать можно, не открывая' }}
+        {{
+          hint ??
+          (skeleton ? 'Скрыт · откроется по нажатию' : 'Скрыт · копировать можно, не открывая')
+        }}
       </p>
     </template>
   </div>
@@ -158,6 +205,61 @@ const MASK = '••••••••••'
 .sy-secret__box--open {
   border-color: var(--sy-accent-border);
   background: var(--sy-accent-quiet);
+}
+
+/* Бокс-переключатель: кнопка, которая выглядит ровно как обычный бокс. */
+.sy-secret__box--button {
+  width: 100%;
+  justify-content: space-between;
+  gap: var(--sy-space-5);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sy-secret__box--button:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+.sy-secret__box--button:disabled {
+  cursor: progress;
+}
+
+/*
+ * Скелет вместо маски. Точки говорили бы про длину, которой у заметки нет;
+ * две полосы говорят ровно то, что известно из метаданных: текст здесь есть.
+ */
+.sy-secret__bars {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sy-space-2);
+}
+
+.sy-secret__bar {
+  width: 70%;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--sy-surface-2);
+}
+
+.sy-secret__bar--short {
+  width: 45%;
+}
+
+.sy-secret__chip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--sy-border-strong);
+  border-radius: var(--sy-radius-inner);
+  background: var(--sy-surface-2);
+  color: var(--sy-text);
+  font-size: var(--sy-text-small);
 }
 
 .sy-secret__box--multiline {

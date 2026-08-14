@@ -154,6 +154,47 @@ describe('getSecret', () => {
   })
 })
 
+describe('getTotpCode', () => {
+  /** Запись с подключённым ключом — код есть только у неё. */
+  async function withTotp(): Promise<RecordMeta> {
+    const records = await core.listRecords()
+    const found = records.find((record) => record.has_totp)
+    expect(found).toBeDefined()
+    return found!
+  }
+
+  it('отдаёт готовый код и окно, но не сам ключ', async () => {
+    const record = await withTotp()
+
+    const result = await core.getTotpCode(record.record_id)
+
+    expect(result.code).toMatch(/^\d{6}$/)
+    expect(result.period_s).toBe(30)
+    expect(result.seconds_left).toBeGreaterThan(0)
+    expect(result.seconds_left).toBeLessThanOrEqual(result.period_s)
+    // Ключ через границу не идёт — ни в каком поле ответа.
+    expect(JSON.stringify(result)).not.toContain('MOCKTOTPSECRET')
+  })
+
+  it('в пределах одного окна код не меняется', async () => {
+    const record = await withTotp()
+
+    const first = await core.getTotpCode(record.record_id)
+    const second = await core.getTotpCode(record.record_id)
+
+    expect(second.code).toBe(first.code)
+  })
+
+  it('без ключа кода нет, а на чужой записи — NOT_FOUND', async () => {
+    const records = await core.listRecords()
+    const without = records.find((record) => !record.has_totp)
+    expect(without).toBeDefined()
+
+    await expectCoreError(core.getTotpCode(without!.record_id), 'VALIDATION')
+    await expectCoreError(core.getTotpCode('нет-такого'), 'NOT_FOUND')
+  })
+})
+
 describe('CRUD', () => {
   function create(): Promise<RecordMeta> {
     return core.createRecord({

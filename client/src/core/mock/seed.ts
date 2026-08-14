@@ -1,6 +1,6 @@
 import type { Device, RecordMeta, RecordSecrets, Vault } from '../contract'
 import type { MockConflictEntry } from './conflicts'
-import { createThisDevice } from './pairing'
+import { createThisDevice, fingerprintWords } from './pairing'
 
 /**
  * Одна запись фейк-ядра: метаданные + секреты живут раздельно, как в ядре.
@@ -103,6 +103,7 @@ export function createDeviceSeed(now: Date): Device[] {
       kind: 'mobile',
       is_this_device: false,
       paired_at: at(627),
+      fingerprint_words: fingerprintWords(MOCK_DEVICE_PHONE),
       last_seen_at: at(0, 6 * 60 * 1000),
       revoked_at: null,
     },
@@ -115,6 +116,7 @@ export function createDeviceSeed(now: Date): Device[] {
       kind: 'desktop',
       is_this_device: false,
       paired_at: at(1003),
+      fingerprint_words: fingerprintWords(MOCK_DEVICE_LAPTOP),
       last_seen_at: at(41),
       revoked_at: null,
     },

@@ -57,6 +57,9 @@ describe('список устройств', () => {
 
     expect(Object.keys(device ?? {}).sort()).toEqual([
       'device_id',
+      // Отпечаток — слова для сверки глазами (§2.2), а не ключ: из них ничего
+      // не восстанавливается, и в списке они стоят намеренно.
+      'fingerprint_words',
       'is_this_device',
       'kind',
       'last_seen_at',
@@ -64,6 +67,7 @@ describe('список устройств', () => {
       'paired_at',
       'revoked_at',
     ])
+    expect(device?.fingerprint_words.length).toBeGreaterThan(0)
   })
 
   it('на закрытом хранилище списка нет: это тоже его содержимое', async () => {

@@ -230,6 +230,55 @@ describe('RecordList · поиск', () => {
   })
 })
 
+describe('RecordList · порядок списка', () => {
+  /** Открыть выпадающий список порядка и вернуть его варианты. */
+  async function openOrder(wrapper: VueWrapper) {
+    await wrapper.find('[data-test="list-order"] .sy-select__trigger').trigger('click')
+    return wrapper.findAll('[data-test="list-order"] .sy-select__option')
+  }
+
+  it('по умолчанию показывает недавние и не рисует подсказку про Ctrl', async () => {
+    const { wrapper } = await mountList()
+
+    expect(wrapper.find('[data-test="list-order"]').text()).toContain('Недавние')
+    // Строки «Ctrl» нет ни в одном макете — сам хоткей при этом остался.
+    expect(wrapper.find('.record-list__count').text()).not.toContain('Ctrl')
+
+    // Свежее всего правили GitHub (`seed.ts`), он и стоит первым.
+    expect(wrapper.findAll('[data-test="row"]')[0]?.text()).toContain('GitHub')
+  })
+
+  it('«Старые пароли» действительно переставляют список', async () => {
+    const { wrapper } = await mountList()
+
+    const options = await openOrder(wrapper)
+    expect(options.map((option) => option.text())).toEqual([
+      'Недавние',
+      'По алфавиту',
+      'Старые пароли',
+    ])
+
+    await options.find((option) => option.text() === 'Старые пароли')!.trigger('click')
+    await flushPromises()
+
+    expect(useRecordsStore().order).toBe('stale')
+    // Дольше всех не менялся пароль рабочего Google — его группа встала наверх
+    // (внутри группы порядок прежний, по метке: «Личный» перед «Рабочим»).
+    expect(wrapper.findAll('[data-test="row"]')[0]?.text()).toContain('Google')
+  })
+
+  it('хоткей поиска работает без видимой подсказки', async () => {
+    const { wrapper } = await mountList()
+
+    const input = wrapper.find<HTMLInputElement>('.record-list__search-input').element
+    const focus = vi.spyOn(input, 'focus')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))
+
+    expect(focus).toHaveBeenCalled()
+  })
+})
+
 describe('RecordList · секции', () => {
   it('фильтрует список по выбранной секции и предупреждает о локальной', async () => {
     const { wrapper } = await mountList()

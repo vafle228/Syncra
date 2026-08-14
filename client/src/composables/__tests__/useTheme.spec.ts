@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initTheme, resetTheme, useTheme } from '../useTheme'
 
 const STORAGE_KEY = 'syncra.theme'
+const ACCENT_KEY = 'syncra.accent'
 
 /** jsdom не реализует matchMedia — подсовываем управляемую заглушку. */
 function stubMatchMedia(prefersLight: boolean): void {
@@ -20,6 +21,7 @@ beforeEach(() => {
   resetTheme()
   localStorage.clear()
   document.documentElement.removeAttribute('data-theme')
+  document.documentElement.removeAttribute('data-accent')
   stubMatchMedia(false)
 })
 
@@ -73,16 +75,51 @@ describe('useTheme', () => {
     expect(useTheme().preference.value).toBe('system')
   })
 
-  it('гоняет переключатель по кругу тёмная → светлая → системная', () => {
+  it('умолчание акцента — мята, и атрибута у неё нет', () => {
     initTheme()
-    const { preference, cycleTheme, setTheme } = useTheme()
 
-    setTheme('dark')
-    cycleTheme()
-    expect(preference.value).toBe('light')
-    cycleTheme()
-    expect(preference.value).toBe('system')
-    cycleTheme()
-    expect(preference.value).toBe('dark')
+    expect(useTheme().accent.value).toBe('mint')
+    // У мяты палитра лежит в `:root`: лишний атрибут потребовал бы её копии.
+    expect(document.documentElement.hasAttribute('data-accent')).toBe(false)
+  })
+
+  it('акцент ставит data-accent и переживает перезапуск', () => {
+    initTheme()
+    useTheme().setAccent('amber')
+
+    expect(document.documentElement.getAttribute('data-accent')).toBe('amber')
+    expect(localStorage.getItem(ACCENT_KEY)).toBe('amber')
+
+    resetTheme()
+    initTheme()
+    expect(useTheme().accent.value).toBe('amber')
+    expect(document.documentElement.getAttribute('data-accent')).toBe('amber')
+  })
+
+  it('возврат к мяте снимает атрибут, а не пишет его пустым', () => {
+    initTheme()
+    const { setAccent } = useTheme()
+
+    setAccent('indigo')
+    setAccent('mint')
+
+    expect(document.documentElement.hasAttribute('data-accent')).toBe(false)
+  })
+
+  it('незнакомый акцент в хранилище игнорируется', () => {
+    localStorage.setItem(ACCENT_KEY, 'бирюза')
+    initTheme()
+
+    expect(useTheme().accent.value).toBe('mint')
+  })
+
+  it('тема и акцент — единственное, что фронт кладёт в localStorage', () => {
+    initTheme()
+    const { setTheme, setAccent } = useTheme()
+
+    setTheme('light')
+    setAccent('cyan')
+
+    expect(Object.keys(localStorage).sort()).toEqual([ACCENT_KEY, STORAGE_KEY])
   })
 })

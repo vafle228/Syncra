@@ -44,10 +44,16 @@ const emit = defineEmits<{ close: []; confirm: [] }>()
       <p v-if="error" class="revoke__error" role="alert">{{ error }}</p>
     </div>
 
+    <!--
+      Сноска называет ту самую кнопку, которой подтверждают (`Прототип:2508`):
+      подтверждение — это не «ещё раз кликнуть куда-нибудь», а нажать именно её.
+    -->
+    <template #note>Подтвердите повторным нажатием «Отозвать»</template>
+
     <template #actions>
-      <SyButton size="sm" :disabled="busy" @click="emit('close')">Оставить</SyButton>
+      <SyButton size="sm" :disabled="busy" @click="emit('close')">Отмена</SyButton>
       <SyButton size="sm" variant="danger" :loading="busy" @click="emit('confirm')">
-        Отозвать доступ
+        Отозвать
       </SyButton>
     </template>
   </SyModal>

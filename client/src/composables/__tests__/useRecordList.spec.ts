@@ -8,6 +8,7 @@ import {
   normalizeHost,
   parseQuery,
   useRecordList,
+  type RecordOrder,
 } from '../useRecordList'
 
 let counter = 0
@@ -191,6 +192,114 @@ describe('группировка нескольких аккаунтов одн�
 
   it('пустой список даёт пустой результат', () => {
     expect(groupRecords([])).toEqual([])
+  })
+})
+
+describe('порядок списка', () => {
+  const github = record({
+    service_name: 'GitHub',
+    urls: ['github.com'],
+    updated_at: '2026-05-01T10:00:00.000Z',
+    password_updated_at: '2026-04-01T10:00:00.000Z',
+  })
+  const steam = record({
+    service_name: 'Steam',
+    urls: ['store.steampowered.com'],
+    updated_at: '2026-06-01T10:00:00.000Z',
+    password_updated_at: '2025-01-01T10:00:00.000Z',
+  })
+  const acme = record({
+    service_name: 'Acme',
+    urls: ['acme.test'],
+    updated_at: '2026-02-01T10:00:00.000Z',
+    password_updated_at: '2026-05-20T10:00:00.000Z',
+  })
+
+  it('«недавние» ставят наверх последнее изменённое', () => {
+    const groups = groupRecords([github, steam, acme], 'recent')
+
+    expect(groups.map((group) => group.title)).toEqual(['Steam', 'GitHub', 'Acme'])
+  })
+
+  it('«по алфавиту» — прежний порядок по имени сервиса', () => {
+    const groups = groupRecords([github, steam, acme], 'alpha')
+
+    expect(groups.map((group) => group.title)).toEqual(['Acme', 'GitHub', 'Steam'])
+  })
+
+  it('«старые пароли» ставят наверх самый давно не менянный пароль', () => {
+    const groups = groupRecords([github, steam, acme], 'stale')
+
+    expect(groups.map((group) => group.title)).toEqual(['Steam', 'GitHub', 'Acme'])
+  })
+
+  it('группа представлена крайней записью, а не первой попавшейся', () => {
+    // У сервиса два аккаунта: один правили вчера, второй — год назад. В
+    // «недавних» группа идёт по свежему, в «старых паролях» — по забытому.
+    const fresh = record({
+      service_name: 'Google',
+      login: 'a',
+      urls: ['accounts.google.com'],
+      updated_at: '2026-07-01T10:00:00.000Z',
+      password_updated_at: '2026-07-01T10:00:00.000Z',
+    })
+    const forgotten = record({
+      service_name: 'Google',
+      login: 'b',
+      urls: ['accounts.google.com'],
+      updated_at: '2024-01-01T10:00:00.000Z',
+      password_updated_at: '2024-01-01T10:00:00.000Z',
+    })
+
+    expect(groupRecords([steam, fresh, forgotten], 'recent').map((g) => g.title)).toEqual([
+      'Google',
+      'Steam',
+    ])
+    expect(groupRecords([steam, fresh, forgotten], 'stale').map((g) => g.title)).toEqual([
+      'Google',
+      'Steam',
+    ])
+  })
+
+  it('порядок внутри группы не зависит от выбранного ключа', () => {
+    const early = record({
+      service_name: 'Google',
+      login: 'work@syncra.example',
+      account_label: 'Рабочий',
+      urls: ['accounts.google.com'],
+      updated_at: '2026-07-01T10:00:00.000Z',
+    })
+    const late = record({
+      service_name: 'Google',
+      login: 'personal@gmail.com',
+      account_label: 'Личный',
+      urls: ['accounts.google.com'],
+      updated_at: '2024-01-01T10:00:00.000Z',
+    })
+
+    for (const order of ['recent', 'alpha', 'stale'] as const) {
+      const groups = groupRecords([early, late], order)
+      expect(titles(groups[0]?.records ?? [])).toEqual([
+        'personal@gmail.com',
+        'work@syncra.example',
+      ])
+    }
+  })
+
+  it('без ключа сортировки поведение прежнее — по алфавиту', () => {
+    const list = useRecordList(ref([github, steam, acme]), ref(''))
+
+    expect(list.groups.value.map((group) => group.title)).toEqual(['Acme', 'GitHub', 'Steam'])
+  })
+
+  it('смена ключа переупорядочивает список на лету', () => {
+    const order = ref<RecordOrder>('alpha')
+    const list = useRecordList(ref([github, steam, acme]), ref(''), order)
+
+    expect(list.groups.value.map((group) => group.title)).toEqual(['Acme', 'GitHub', 'Steam'])
+
+    order.value = 'recent'
+    expect(list.groups.value.map((group) => group.title)).toEqual(['Steam', 'GitHub', 'Acme'])
   })
 })
 

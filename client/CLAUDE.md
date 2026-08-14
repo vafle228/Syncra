@@ -75,7 +75,7 @@ Vue SPA — **единственная «морда» на все платфор
 - Макеты (Claude Design): `./design/`
 - IPC-контракт: `src/core/contract.ts`
 - Мок-ядро: `src/core/mock/`
-- План работ: `TASKS.md`
+- План работ: `CLIENT_REFACTOR.md`
 
 ## Границы
 

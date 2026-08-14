@@ -24,7 +24,12 @@ function onImported(vaultId: string, count: number): void {
 </script>
 
 <template>
-  <SyModal :open="props.open" size="wizard" title="Импорт из другого менеджера" @close="emit('close')">
+  <SyModal
+    :open="props.open"
+    size="wizard"
+    title="Импорт из другого менеджера"
+    @close="emit('close')"
+  >
     <div v-if="props.open" class="import-modal" data-test="import-modal">
       <ImportWizard @imported="onImported" />
     </div>

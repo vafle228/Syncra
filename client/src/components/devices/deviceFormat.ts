@@ -70,29 +70,69 @@ export function formatAgo(iso: string, now: Date = new Date()): string {
   return `${days} ${plural(days, DAY_FORMS)} назад`
 }
 
+const WEEK_FORMS: [string, string, string] = ['неделю', 'недели', 'недель']
+const MONTH_FORMS: [string, string, string] = ['месяц', 'месяца', 'месяцев']
+
+/** «3 дня» · «3 недели» · «4 месяца» — крупная мера для крупного молчания. */
+function gapText(days: number): string {
+  if (days < 14) return pluralize(days, DAY_FORMS)
+  if (days < 60) return pluralize(Math.floor(days / 7), WEEK_FORMS)
+  return pluralize(Math.floor(days / 30), MONTH_FORMS)
+}
+
+/** Часы и минуты последнего сеанса связи — «12:04». */
+function clock(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return 'недавно'
+  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+}
+
 /**
- * Строка под именем устройства.
+ * Присутствие устройства — то, что стоит справа в строке (`Прототип:2554-2558`).
  *
- * У отозванного она полностью замещает обычную: «когда виделись» перестало быть
- * важным в тот момент, когда доступ отрезали, — важно, что копия на нём больше
- * не обновляется (§2.3).
+ * Макет не печатает дат: человеку важно не «когда именно», а «рядом ли оно
+ * сейчас». Отсюда словарь из четырёх состояний — «это устройство», «рядом ·
+ * 12:04», «рядом · только что», «не в сети 3 недели» — и точка, цветом
+ * повторяющая тот же ответ: акцент, пока связь живая, и серая, когда нет.
  */
-export function deviceSubtitle(device: Device, now: Date = new Date()): string {
+export function devicePresence(
+  device: Device,
+  now: Date = new Date(),
+): { text: string; live: boolean } {
+  if (device.revoked_at !== null) {
+    return { text: `доступ отозван ${formatDate(device.revoked_at)}`, live: false }
+  }
+  if (device.is_this_device) return { text: 'это устройство', live: true }
+
+  const seen = device.last_seen_at
+  const days = daysSilent(device, now)
+  if (seen === null || days === null) return { text: 'ни разу не выходило на связь', live: false }
+
+  const elapsed = now.getTime() - Date.parse(seen)
+  if (elapsed < MINUTE_MS) return { text: 'рядом · только что', live: true }
+  if (elapsed < DAY_MS) return { text: `рядом · ${clock(seen)}`, live: true }
+
+  return { text: `не в сети ${gapText(days)}`, live: false }
+}
+
+/**
+ * Строка под именем устройства: чем оно является и когда его завели.
+ *
+ * «Когда виделись» здесь больше НЕТ — это ответ на другой вопрос, и он стоит
+ * справа в строке (`devicePresence`). У отозванного вместо всего этого — то
+ * единственное, что теперь про него важно: копия на нём больше не обновляется
+ * (§2.3).
+ */
+export function deviceSubtitle(device: Device): string {
   if (device.revoked_at !== null) {
     return `доступ отозван ${formatDate(device.revoked_at)} · копия на устройстве больше не обновляется`
   }
 
   const paired = `сопряжено ${formatDate(device.paired_at)}`
-  const kind = deviceKindLabel(device.kind)
+  return `${deviceKindLabel(device.kind)} · ${paired}`
+}
 
-  if (device.is_this_device) return `${kind} · ${paired} · вы работаете здесь`
-
-  const seen = device.last_seen_at
-  const days = daysSilent(device, now)
-  if (seen === null || days === null) return `${kind} · ${paired} · ни разу не выходил на связь`
-  if (days >= DEVICE_STALE_DAYS) {
-    return `${kind} · ${paired} · не появлялся ${pluralize(days, DAY_FORMS)}`
-  }
-
-  return `${kind} · ${paired} · был рядом ${formatAgo(seen, now)}`
+/** Отпечаток под именем: «сокол · медь · январь · парус» (`Прототип:2056`). */
+export function fingerprintLine(device: Device): string {
+  return device.fingerprint_words.join(' · ')
 }

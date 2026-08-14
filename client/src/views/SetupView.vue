@@ -412,7 +412,7 @@ async function restore(): Promise<void> {
   width: 22px;
   height: 22px;
   border: 1px solid var(--sy-border);
-  border-radius: 7px;
+  border-radius: var(--sy-radius-inner);
   font-family: var(--sy-font-mono);
   font-size: 11px;
 }

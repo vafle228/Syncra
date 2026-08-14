@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 /**
  * Модальный диалог (F2).
@@ -12,12 +12,33 @@ const props = withDefaults(
   defineProps<{
     open: boolean
     title: string
-    /** Окраска рамки предупреждения над содержимым. */
+    /** Окраска рамки диалога целиком. */
     tone?: 'neutral' | 'warning' | 'danger'
     /** Текст предупреждения. Формулировки из спека НЕ смягчать. */
     warning?: string
+    /**
+     * Окраска полоски предупреждения. По умолчанию совпадает с `tone`, но
+     * уровней риска в макете два, а не один: диалог удаления обведён красным
+     * (`Прототип:2263`) и содержит ЯНТАРНУЮ оговорку (`Прототип:2267`). Красная
+     * оговорка внутри красной рамки — это уже не предупреждение, а фон.
+     */
+    warningTone?: 'neutral' | 'warning' | 'danger'
+    /**
+     * Где стоит полоска. `top` — предупреждение о том, что человек собирается
+     * сделать (экспорт в CSV): его читают ДО текста. `bottom` — оговорка о
+     * побочном следствии уже объяснённого действия (`Прототип:2267`): сначала
+     * цена решения, потом сноска, иначе сноска перебивает главное.
+     */
+    warningPlacement?: 'top' | 'bottom'
     /** Запретить закрытие по Escape и клику по подложке. */
     persistent?: boolean
+    /**
+     * Полосный диалог: шапка с разделителем, прокручиваемое тело и панель
+     * кнопок на `--sy-bg-1` (`Прототип:2298-2376`, `2378-2438`). Такую форму
+     * держат крупные диалоги — сопряжение, импорт, конфликт версий, — где тело
+     * длиннее экрана и кнопки не должны уезжать вместе с ним.
+     */
+    banded?: boolean
     /**
      * Ширина по НАЗНАЧЕНИЮ, а не по пикселям: размер диалога — следствие того,
      * что в нём делают, и подбирать его на глаз в каждом месте нельзя.
@@ -34,19 +55,91 @@ const props = withDefaults(
      */
     size?: 'default' | 'confirm' | 'form' | 'wizard' | 'wide'
   }>(),
-  { tone: 'neutral', persistent: false, size: 'default' },
+  {
+    tone: 'neutral',
+    persistent: false,
+    size: 'default',
+    banded: false,
+    warningPlacement: 'top',
+  },
 )
 
 const emit = defineEmits<{ close: [] }>()
 
 const dialog = ref<HTMLElement | null>(null)
 
+/** Полоска предупреждения по умолчанию идёт в тон рамке. */
+const stripTone = computed(() => props.warningTone ?? props.tone)
+
+/**
+ * Куда вернуть фокус после закрытия. Диалог забирает фокус на себя, и без
+ * возврата пользователь после «Отмены» оказывается в начале страницы — в
+ * продукте про безопасность это ещё и потеря места в списке записей.
+ */
+let focusOrigin: HTMLElement | null = null
+
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+function focusable(): HTMLElement[] {
+  const root = dialog.value
+  if (!root) return []
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (node) => !node.hasAttribute('hidden') && node.getAttribute('aria-hidden') !== 'true',
+  )
+}
+
 function requestClose(): void {
   if (!props.persistent) emit('close')
 }
 
+/**
+ * Фокус не выходит за пределы диалога: пока задан вопрос про необратимое
+ * действие, Tab не должен уводить в интерфейс за подложкой.
+ */
+function trapFocus(event: KeyboardEvent): void {
+  const root = dialog.value
+  if (!root) return
+
+  const items = focusable()
+  const active = globalThis.document?.activeElement as HTMLElement | null
+
+  if (items.length === 0) {
+    event.preventDefault()
+    root.focus()
+    return
+  }
+
+  const first = items[0]!
+  const last = items[items.length - 1]!
+
+  if (!active || !root.contains(active)) {
+    event.preventDefault()
+    ;(event.shiftKey ? last : first).focus()
+  } else if (event.shiftKey && (active === first || active === root)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') requestClose()
+  else if (event.key === 'Tab') trapFocus(event)
+}
+
+function restoreFocus(): void {
+  const origin = focusOrigin
+  focusOrigin = null
+  if (origin?.isConnected) origin.focus()
 }
 
 watch(
@@ -56,11 +149,13 @@ watch(
     if (!doc) return
 
     if (open) {
+      focusOrigin = doc.activeElement as HTMLElement | null
       doc.addEventListener('keydown', onKeydown)
       await nextTick()
       dialog.value?.focus()
     } else {
       doc.removeEventListener('keydown', onKeydown)
+      restoreFocus()
     }
   },
   { immediate: true },
@@ -68,6 +163,7 @@ watch(
 
 onBeforeUnmount(() => {
   globalThis.document?.removeEventListener('keydown', onKeydown)
+  restoreFocus()
 })
 </script>
 
@@ -77,21 +173,52 @@ onBeforeUnmount(() => {
       <div
         ref="dialog"
         class="sy-modal__dialog"
-        :class="[`sy-modal__dialog--${size}`, `sy-modal__dialog--tone-${tone}`]"
+        :class="[
+          `sy-modal__dialog--${size}`,
+          `sy-modal__dialog--tone-${tone}`,
+          { 'sy-modal__dialog--banded': banded },
+        ]"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
         tabindex="-1"
       >
-        <h2 class="sy-modal__title">{{ title }}</h2>
+        <div class="sy-modal__head">
+          <div class="sy-modal__head-row">
+            <h2 class="sy-modal__title">{{ title }}</h2>
+            <!-- Приписка ВОЗЛЕ заголовка: номер шага — часть вопроса, а не ответ. -->
+            <span v-if="$slots['title-aside']" class="sy-modal__title-aside">
+              <slot name="title-aside" />
+            </span>
+            <span v-if="$slots['head-actions']" class="sy-modal__head-actions">
+              <slot name="head-actions" />
+            </span>
+          </div>
+          <p v-if="$slots.lead" class="sy-modal__lead"><slot name="lead" /></p>
+        </div>
 
-        <p v-if="warning" class="sy-modal__warning" :class="`sy-modal__warning--${tone}`">
-          <span class="sy-modal__dot" aria-hidden="true" />
-          <span>{{ warning }}</span>
-        </p>
+        <div class="sy-modal__content">
+          <p
+            v-if="warning && warningPlacement === 'top'"
+            class="sy-modal__warning"
+            :class="`sy-modal__warning--${stripTone}`"
+          >
+            <span class="sy-modal__dot" aria-hidden="true" />
+            <span>{{ warning }}</span>
+          </p>
 
-        <div class="sy-modal__body">
-          <slot />
+          <div class="sy-modal__body">
+            <slot />
+          </div>
+
+          <p
+            v-if="warning && warningPlacement === 'bottom'"
+            class="sy-modal__warning"
+            :class="`sy-modal__warning--${stripTone}`"
+          >
+            <span class="sy-modal__dot" aria-hidden="true" />
+            <span>{{ warning }}</span>
+          </p>
         </div>
 
         <!--
@@ -167,6 +294,72 @@ onBeforeUnmount(() => {
 
 .sy-modal__dialog:focus {
   outline: none;
+}
+
+/*
+ * Полосный диалог. Отступы уезжают с диалога внутрь полос, и тело получает
+ * собственную прокрутку: шапка с вопросом и кнопки ответа остаются на месте,
+ * сколько бы содержимого ни было между ними.
+ */
+.sy-modal__dialog--banded {
+  gap: 0;
+  padding: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.sy-modal__dialog--banded .sy-modal__head {
+  padding: var(--sy-space-7) var(--sy-space-8);
+  border-bottom: 1px solid var(--sy-border);
+}
+
+.sy-modal__dialog--banded .sy-modal__content {
+  padding: var(--sy-space-7) var(--sy-space-8);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sy-modal__dialog--banded .sy-modal__actions {
+  padding: var(--sy-space-6) var(--sy-space-8);
+  border-top: 1px solid var(--sy-border);
+  background: var(--sy-bg-1);
+}
+
+.sy-modal__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sy-space-2);
+}
+
+.sy-modal__head-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sy-space-5);
+}
+
+.sy-modal__title-aside {
+  flex: 1;
+  font-family: var(--sy-font-mono);
+  font-size: var(--sy-text-meta);
+  color: var(--sy-text-3);
+}
+
+.sy-modal__head-actions {
+  flex: none;
+  margin-left: auto;
+}
+
+.sy-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sy-space-5);
+}
+
+.sy-modal__lead {
+  font-size: var(--sy-text-note);
+  line-height: 1.5;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
 }
 
 .sy-modal__title {

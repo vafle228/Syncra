@@ -108,14 +108,18 @@ function repair(device: Device): void {
   background: var(--sy-bg-1);
 }
 
+/*
+ * У шапки НЕТ своей заливки: в макете (`Прототип:1914`, `2027`, `2085`) она
+ * часть панели и отделена только линией. `--sy-bg-0` — цвет шасси окна, и на
+ * правой панели он читался как чужая полоса, приклеенная сверху.
+ */
 .devices__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sy-space-6);
-  padding: var(--sy-space-6) var(--sy-space-8);
+  padding: var(--sy-space-7) var(--sy-space-8) var(--sy-space-6);
   border-bottom: 1px solid var(--sy-border);
-  background: var(--sy-bg-0);
 }
 
 .devices__brand {
@@ -132,7 +136,7 @@ function repair(device: Device): void {
 }
 
 .devices__lead {
-  font-size: var(--sy-text-body);
+  font-size: var(--sy-text-note);
   color: var(--sy-text-2);
   text-wrap: pretty;
 }

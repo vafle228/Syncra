@@ -56,12 +56,14 @@ describe('App', () => {
     expect(wrapper.find('[data-test="titlebar"]').text()).toContain('Syncra — знакомство')
   })
 
-  it('переключатель темы один на всё приложение, а не по одному на экран', async () => {
+  it('в полосе заголовка нет переключателя темы: она уехала в настройки', async () => {
+    // Тема и акцент — две настройки одного и того же. Держать одну кнопкой в
+    // шасси окна, а вторую во вкладке «Оформление» значило бы прятать половину
+    // выбора; полоса заголовка осталась управлением окном.
     const { wrapper } = await mountWithRouter(App)
 
-    expect(wrapper.findAll('.sy-theme-toggle')).toHaveLength(1)
-    // И живёт он в полосе заголовка: тема — свойство окна, не страницы.
-    expect(wrapper.find('[data-test="titlebar"] .sy-theme-toggle').exists()).toBe(true)
+    expect(wrapper.findAll('.sy-theme-toggle')).toHaveLength(0)
+    expect(wrapper.find('[data-test="titlebar"]').exists()).toBe(true)
   })
 
   it('автоблокировка сама уводит на экран входа', async () => {

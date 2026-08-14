@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 
+import { useRouter } from 'vue-router'
+
 import PasswordGenerator from '@/components/generator/PasswordGenerator.vue'
-import { SyButton, SyField, SyInput, SySelect } from '@/components/ui'
+import { SyButton, SyField, SyInput, SySecretField, SySelect, vaultColorVar } from '@/components/ui'
 import { normalizeHost } from '@/composables/useRecordList'
 import type { RecordDraft, RecordMeta, RecordPatch, SecretField, VaultId } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
@@ -34,6 +36,7 @@ const emit = defineEmits<{ saved: [record: RecordMeta]; cancel: [] }>()
 const list = useRecordsStore()
 const sections = useSectionsStore()
 const toast = useToastStore()
+const router = useRouter()
 
 const isEdit = computed(() => props.record != null)
 
@@ -71,11 +74,16 @@ const vaultOptions = computed(() => {
   const options = sections.vaults.map((vault) => ({
     value: vault.vault_id,
     label: vault.sync ? vault.name : `${vault.name} · локальная`,
+    dot: vaultColorVar(vault.color),
   }))
   // Пока ядро не ответило, список не должен молча подменять секцию записи
   // первой попавшейся строкой.
   if (shownVault.value !== '' && !options.some((option) => option.value === shownVault.value)) {
-    options.unshift({ value: shownVault.value, label: 'Текущая секция' })
+    options.unshift({
+      value: shownVault.value,
+      label: 'Текущая секция',
+      dot: 'var(--sy-text-3)',
+    })
   }
   return options
 })
@@ -95,6 +103,15 @@ const vaultHint = computed(() => {
 onMounted(() => {
   void sections.ensure()
 })
+
+/**
+ * Уход на экран секций из выпадающего списка. Черновик при этом теряется, и
+ * поэтому уход — явное действие человека, а не побочный эффект выбора секции.
+ */
+function manageSections(): void {
+  emit('cancel')
+  void router.push('/sections')
+}
 
 /** Всегда есть хотя бы одна строка адреса — иначе не за что нажать. */
 const urls = ref<string[]>(props.record?.urls.length ? [...props.record.urls] : [''])
@@ -178,6 +195,47 @@ async function loadCurrent(field: SecretField): Promise<void> {
 function changed(field: SecretField): boolean {
   const draft = secrets[field]
   return draft.original === null ? draft.value !== '' : draft.value !== draft.original
+}
+
+/**
+ * Заметка есть в записи, но её ещё не открывали. Ровно этот случай и рисуется
+ * закрытым видом: показывать пустую текстовую область там, где на самом деле
+ * лежит текст, — врать про содержимое записи.
+ */
+const notesHidden = computed(
+  () => isEdit.value && props.record?.has_notes === true && secrets.notes.original === null,
+)
+
+// ---------------------------------------------------------------------------
+// Ключ TOTP (`Прототип:1888-1906`)
+//
+// Три состояния вместо одного поля: «не подключён», «вводим ключ» и «подключён».
+// Значение ключа в форму НЕ загружается никогда — ни при открытии, ни по
+// нажатию: чтобы сменить ключ, его вводят заново, а чтобы убрать — убирают.
+// ---------------------------------------------------------------------------
+
+/** Пользователь открыл ручной ввод ключа. */
+const totpManual = ref(false)
+/** Ключ решили убрать: в патч уйдёт `null`. */
+const totpRemoved = ref(false)
+
+const totpAttached = computed(
+  () => isEdit.value && props.record?.has_totp === true && !totpRemoved.value && !totpManual.value,
+)
+
+function dropTotp(): void {
+  totpRemoved.value = true
+  secrets.totp_secret.value = ''
+}
+
+/**
+ * Что уйдёт в патч: `undefined` — не трогать, `null` — убрать, строка — новый
+ * ключ. Отдельная функция, потому что «пусто» здесь значит два разных дела.
+ */
+function totpPatch(): string | null | undefined {
+  const value = secrets.totp_secret.value.trim()
+  if (value !== '') return value
+  return totpRemoved.value ? null : undefined
 }
 
 function secretHint(field: SecretField, whenEmpty: string): string {
@@ -304,9 +362,8 @@ async function save(): Promise<void> {
       // тронул: иначе каждое сохранение переписывало бы пароль сам собой.
       if (changed('password')) patch.password = secrets.password.value
       if (changed('notes')) patch.notes = secrets.notes.value === '' ? null : secrets.notes.value
-      if (changed('totp_secret')) {
-        patch.totp_secret = secrets.totp_secret.value === '' ? null : secrets.totp_secret.value
-      }
+      const totp = totpPatch()
+      if (totp !== undefined) patch.totp_secret = totp
 
       const updated = await list.update(props.record.record_id, patch)
       toast.push('Изменения сохранены', 'success')
@@ -379,7 +436,16 @@ async function save(): Promise<void> {
             :options="vaultOptions"
             :hint="vaultHint"
             @update:model-value="chooseVault"
-          />
+          >
+            <!--
+              Ссылка в подвале списка (`Прототип:1768`). Секции заводят там же,
+              где выбирают, — иначе за новой секцией приходится выходить из формы
+              наугад.
+            -->
+            <template #footer>
+              <button type="button" @click="manageSections()">Управление секциями…</button>
+            </template>
+          </SySelect>
         </div>
       </div>
 
@@ -450,13 +516,21 @@ async function save(): Promise<void> {
             @submit="save"
           />
 
-          <template v-if="isEdit && secrets.password.original === null" #action>
-            <SyButton
-              size="sm"
-              :loading="secrets.password.loading"
+          <!--
+            Действие стоит в строке подписи, а не отдельной кнопкой сбоку:
+            «показать текущий» — свойство этого поля, а не шаг формы. Полем
+            остаётся обычный ввод: сюда чаще набирают новый пароль, чем читают
+            старый, и превращать его в закрытую плашку нельзя.
+          -->
+          <template v-if="isEdit && secrets.password.original === null" #aside>
+            <button
+              type="button"
+              class="form__inline-action"
+              :disabled="secrets.password.loading"
               @click="loadCurrent('password')"
-              >Показать текущий</SyButton
             >
+              Показать текущий
+            </button>
           </template>
         </SyField>
 
@@ -464,7 +538,22 @@ async function save(): Promise<void> {
       </PasswordGenerator>
 
       <div class="form__secrets-grid">
-        <SyField label="Заметки · хранятся как секрет">
+        <!--
+          Заметка, которую ещё не открывали, показывается своим же закрытым
+          видом из карточки: полосы и «Показать» ВНУТРИ поля. Кнопки-соседа
+          рядом с полем больше нет — одно поле, одно действие.
+        -->
+        <SySecretField
+          v-if="notesHidden"
+          label="Заметки · хранятся как секрет"
+          skeleton
+          multiline
+          hint="Пусто — останется как было"
+          :busy="secrets.notes.loading"
+          @toggle="loadCurrent('notes')"
+        />
+
+        <SyField v-else label="Заметки · хранятся как секрет">
           <textarea
             v-model="secrets.notes.value"
             class="form__textarea"
@@ -475,42 +564,41 @@ async function save(): Promise<void> {
           <p class="form__note">
             {{ secretHint('notes', 'Хранятся так же, как пароль: скрыты по умолчанию.') }}
           </p>
-
-          <template
-            v-if="isEdit && secrets.notes.original === null && record?.has_notes"
-            #action
-          >
-            <SyButton size="sm" :loading="secrets.notes.loading" @click="loadCurrent('notes')"
-              >Показать текущие</SyButton
-            >
-          </template>
         </SyField>
 
         <SyField label="Код TOTP · необязательно">
+          <!--
+            Ключ подключён (`Прототип:1892-1900`). Значения не показываем даже
+            владельцу записи: смотреть на ключ незачем — код собирается из него
+            в карточке. Отсюда можно только убрать его и завести заново.
+          -->
+          <div v-if="totpAttached" class="form__totp form__totp--on">
+            <span class="form__totp-badge" aria-hidden="true">QR</span>
+            <span class="form__totp-text">
+              <span class="form__totp-title">Ключ добавлен</span>
+              <span class="form__totp-sub">секрет скрыт · код появится в карточке</span>
+            </span>
+            <button type="button" class="form__totp-drop" @click="dropTotp()">Убрать</button>
+          </div>
+
           <SyInput
+            v-else-if="totpManual"
             v-model="secrets.totp_secret.value"
             mono
-            :placeholder="isEdit ? 'Оставить как было' : 'Ключ из настроек двухфакторной защиты'"
-            :hint="
-              secretHint(
-                'totp_secret',
-                'Ключ сохраним и синхронизируем · генерация кодов — в следующей версии.',
-              )
-            "
+            autofocus
+            placeholder="Ключ из настроек двухфакторной защиты"
+            hint="Ключ хранится как секрет · код считает ядро и показывает карточка."
             @submit="save"
           />
 
-          <template
-            v-if="isEdit && secrets.totp_secret.original === null && record?.has_totp"
-            #action
-          >
-            <SyButton
-              size="sm"
-              :loading="secrets.totp_secret.loading"
-              @click="loadCurrent('totp_secret')"
-              >Показать текущий</SyButton
-            >
-          </template>
+          <div v-else class="form__totp form__totp--empty">
+            <button type="button" class="form__totp-scan" @click="totpManual = true">
+              Сканировать QR
+            </button>
+            <button type="button" class="form__totp-manual" @click="totpManual = true">
+              Ввести ключ вручную
+            </button>
+          </div>
         </SyField>
       </div>
     </div>
@@ -756,6 +844,143 @@ async function save(): Promise<void> {
 
 .form__textarea::placeholder {
   color: var(--sy-text-3);
+}
+
+/* Действие в строке подписи: ссылка, а не кнопка — оно не про отправку формы. */
+.form__inline-action {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--sy-accent);
+  font-family: var(--sy-font-mono);
+  font-size: var(--sy-text-tag);
+  letter-spacing: var(--sy-tracking-label);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.form__inline-action:disabled {
+  color: var(--sy-text-3);
+  cursor: progress;
+}
+
+.form__inline-action:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
+}
+
+/* Ключ TOTP */
+
+.form__totp {
+  display: flex;
+  align-items: center;
+  gap: var(--sy-space-5);
+  min-height: 72px;
+  padding: 11px var(--sy-space-5);
+  border-radius: var(--sy-radius-sm);
+}
+
+/* Пунктир — «здесь пока ничего нет»: тот же словарь, что и у пустых полей. */
+.form__totp--empty {
+  border: 1px dashed var(--sy-border-strong);
+}
+
+.form__totp--on {
+  border: 1px solid var(--sy-accent-border);
+  background: var(--sy-accent-quiet);
+}
+
+.form__totp-scan {
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--sy-border-strong);
+  border-radius: var(--sy-radius-inner);
+  background: var(--sy-surface);
+  color: var(--sy-text);
+  font-family: inherit;
+  font-size: var(--sy-text-small);
+  cursor: pointer;
+}
+
+.form__totp-scan:hover {
+  background: var(--sy-surface-2);
+}
+
+.form__totp-manual {
+  height: 32px;
+  padding: 0 11px;
+  border: none;
+  border-radius: var(--sy-radius-inner);
+  background: transparent;
+  color: var(--sy-accent);
+  font-family: inherit;
+  font-size: var(--sy-text-small);
+  cursor: pointer;
+}
+
+.form__totp-manual:hover {
+  background: var(--sy-surface);
+}
+
+.form__totp-badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--sy-radius-sm);
+  background: var(--sy-surface);
+  color: var(--sy-accent);
+  font-family: var(--sy-font-mono);
+  font-size: 9px;
+}
+
+.form__totp-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.form__totp-title {
+  font-size: var(--sy-text-note);
+  font-weight: var(--sy-weight-medium);
+}
+
+.form__totp-sub {
+  font-family: var(--sy-font-mono);
+  font-size: var(--sy-text-label);
+  color: var(--sy-text-2);
+}
+
+.form__totp-drop {
+  flex: none;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--sy-border-strong);
+  border-radius: var(--sy-radius-inner);
+  background: var(--sy-surface);
+  color: var(--sy-text-2);
+  font-family: inherit;
+  font-size: var(--sy-text-small);
+  cursor: pointer;
+  transition:
+    border-color var(--sy-transition),
+    color var(--sy-transition);
+}
+
+/* Красной кнопка становится только под курсором — в покое это не угроза. */
+.form__totp-drop:hover {
+  border-color: var(--sy-danger);
+  color: var(--sy-danger);
+}
+
+.form__totp-scan:focus-visible,
+.form__totp-manual:focus-visible,
+.form__totp-drop:focus-visible {
+  outline: none;
+  box-shadow: var(--sy-focus-ring);
 }
 
 .form__error {

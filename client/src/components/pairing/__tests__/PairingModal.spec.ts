@@ -57,11 +57,41 @@ function button(wrapper: View, text: string) {
 
 /** Пройти путь «прочитал код» до экрана сверки слов. */
 async function scan(wrapper: View, code = FOREIGN_CODE): Promise<void> {
-  await button(wrapper, 'Ввожу код').trigger('click')
+  await button(wrapper, 'Прочитать код здесь').trigger('click')
   await wrapper.find('.scan input').setValue(code)
   await button(wrapper, 'Прочитать код').trigger('click')
   await flushPromises()
 }
+
+describe('PairingModal · форма диалога', () => {
+  it('это мастер на 560px с шагом в шапке и кнопками в подвале', async () => {
+    const wrapper = await mountPairing()
+
+    const dialog = wrapper.find('.sy-modal__dialog')
+    expect(dialog.classes()).toContain('sy-modal__dialog--wizard')
+    expect(dialog.classes()).toContain('sy-modal__dialog--banded')
+    expect(wrapper.find('.sy-modal__title-aside').text()).toContain('шаг 1 из 2')
+
+    // Сегментного переключателя над содержимым больше нет: выбор режима —
+    // это кнопка в подвале, рядом с остальными ответами.
+    expect(wrapper.find('.pairing__modes').exists()).toBe(false)
+    expect(wrapper.find('.sy-modal__actions .pairing__wide').text()).toBe('Прочитать код здесь')
+
+    wrapper.unmount()
+  })
+
+  it('шаг в шапке называет, где человек сейчас', async () => {
+    const wrapper = await mountPairing()
+
+    expect(wrapper.find('.sy-modal__title-aside').text()).toContain('ваш код')
+
+    // `scan()` сам уходит в режим чтения, вводит код и отправляет его.
+    await scan(wrapper)
+    expect(wrapper.find('.sy-modal__title-aside').text()).toContain('шаг 2 из 2')
+
+    wrapper.unmount()
+  })
+})
 
 describe('PairingModal · показ кода', () => {
   it('рисует код из ответа ядра и показывает его же символами', async () => {
@@ -119,7 +149,7 @@ describe('PairingModal · показ кода', () => {
   it('уход в режим чтения убирает свой код с экрана', async () => {
     const wrapper = await mountPairing()
 
-    await button(wrapper, 'Ввожу код').trigger('click')
+    await button(wrapper, 'Прочитать код здесь').trigger('click')
 
     expect(wrapper.find('.qr__module').exists()).toBe(false)
     expect(wrapper.find('.pairing__manual-code').exists()).toBe(false)
@@ -210,7 +240,7 @@ describe('PairingModal · чтение чужого кода', () => {
 
   it('читает код из файла: на десктопе камеры может не быть', async () => {
     const wrapper = await mountPairing()
-    await button(wrapper, 'Ввожу код').trigger('click')
+    await button(wrapper, 'Прочитать код здесь').trigger('click')
 
     const input = wrapper.find('.scan__file')
     const file = new File([`syncra-pair:4tq9mb.${'ab'.repeat(16)}`], 'pair.txt', {

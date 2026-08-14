@@ -26,6 +26,12 @@
  * Правило обращения общее для всех трёх: не в Pinia, не в localStorage, не в
  * логи; значение живёт в области видимости компонента, пока оно на экране.
  *
+ * Особняком стоит `get_totp_code`: он отдаёт не хранимый секрет, а ВЫЧИСЛЕННЫЙ
+ * ядром одноразовый код, живущий несколько секунд. Сам `totp_secret` при этом
+ * границу не пересекает — иначе считать код пришлось бы во фронте, то есть
+ * писать криптографию на JS и держать вечный ключ вместо секундного числа.
+ * Обращаться с кодом всё равно как с секретом: показал — отпустил.
+ *
  * Их по-прежнему три и после F12: экспорт (CSV и бэкап) файл СОБИРАЕТ И ПИШЕТ
  * сам, а UI получает только путь к нему — см. `ExportFile`. Импорт устроен
  * зеркально: разобранные чужие пароли остаются в ядре до подтверждения, через
@@ -300,6 +306,31 @@ export interface GetSecretRequest {
 }
 
 export type GetSecretResponse = RecordSecrets
+
+export interface GetTotpCodeRequest {
+  record_id: RecordId
+}
+
+/**
+ * Готовый код подтверждения (F5, карточка записи).
+ *
+ * ЗАКОН №1 в его самой важной здесь форме: код СЧИТАЕТ ЯДРО. Через границу
+ * идёт шестизначное число, действительное несколько секунд, а `totp_secret`,
+ * из которого оно получено, остаётся в ядре. Обратный вариант — отдать фронту
+ * ключ и посчитать код на JS — означал бы криптографию во фронте и вечный
+ * секрет в памяти вкладки вместо секундного.
+ *
+ * Сам `code` — тоже секрет, пусть и короткоживущий: не в Pinia, не в
+ * localStorage, не в логи.
+ */
+export interface GetTotpCodeResponse {
+  /** Текущий код, обычно шесть цифр. Показывается группами 3+3. */
+  code: string
+  /** Сколько секунд этот код ещё действителен. */
+  seconds_left: number
+  /** Длина окна, обычно 30 с. Нужна, чтобы нарисовать кольцо отсчёта. */
+  period_s: number
+}
 
 export interface CreateRecordRequest {
   draft: RecordDraft
@@ -588,6 +619,14 @@ export interface Device {
   /** Устройство, на котором открыт этот UI. Себя отозвать нельзя (F9). */
   is_this_device: boolean
   paired_at: IsoDateTime
+  /**
+   * Отпечаток устройства — те же слова, что сверялись при сопряжении
+   * (`PairingHandshake.fingerprint_words`, §2.2). Это МЕТАДАННЫЕ, а не ключ:
+   * из слов ничего не восстанавливается, они только называют вслух то, что
+   * человек сверяет глазами. Без них экран устройств советует сверить
+   * отпечаток, не показывая ни одного.
+   */
+  fingerprint_words: string[]
   /** Когда устройство последний раз выходило на связь. `null` — ни разу. */
   last_seen_at: IsoDateTime | null
   /** Отзыв доступа (§2.3). `null` у действующих устройств. */
@@ -1104,6 +1143,8 @@ export interface CommandMap {
   }
   listRecords: { request: ListRecordsRequest; response: ListRecordsResponse }
   getSecret: { request: GetSecretRequest; response: GetSecretResponse }
+  /** Код считает ядро; `totp_secret` границу не пересекает. */
+  getTotpCode: { request: GetTotpCodeRequest; response: GetTotpCodeResponse }
   createRecord: { request: CreateRecordRequest; response: RecordMeta }
   updateRecord: { request: UpdateRecordRequest; response: RecordMeta }
   /** Возвращает tombstone-метаданные удалённой записи (§5.4). */
@@ -1197,6 +1238,7 @@ export const COMMAND_NAMES: Record<CommandName, string> = {
   changeMasterPassword: 'change_master_password',
   listRecords: 'list_records',
   getSecret: 'get_secret',
+  getTotpCode: 'get_totp_code',
   createRecord: 'create_record',
   updateRecord: 'update_record',
   deleteRecord: 'delete_record',

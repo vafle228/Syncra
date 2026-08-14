@@ -68,10 +68,6 @@ const statusLabel = computed(() => {
       <span class="sy-list-item__status-dot" aria-hidden="true" />
       {{ statusLabel }}
     </span>
-
-    <span v-if="$slots.actions" class="sy-list-item__actions">
-      <slot name="actions" />
-    </span>
   </div>
 </template>
 
@@ -164,11 +160,5 @@ const statusLabel = computed(() => {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-}
-
-.sy-list-item__actions {
-  flex: none;
-  display: flex;
-  gap: var(--sy-space-2);
 }
 </style>

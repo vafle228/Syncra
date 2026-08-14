@@ -12,17 +12,21 @@ import {
   SySecretField,
   vaultColorVar,
 } from '@/components/ui'
+import { DEVICE_AT_FORMS, pluralize } from '@/composables/plural'
 import { securityPolicy } from '@/composables/securityPolicy'
 import { useRecordSecrets } from '@/composables/useRecordSecrets'
+import { useTotpCode } from '@/composables/useTotpCode'
 import type { RecordMeta } from '@/core/contract'
 import { isCoreError } from '@/core/errors'
 import { useConflictsStore } from '@/stores/useConflictsStore'
+import { useDevicesStore } from '@/stores/useDevicesStore'
 import { useRecordsStore } from '@/stores/useRecordsStore'
 import { useSectionsStore } from '@/stores/useSectionsStore'
 import { useSyncStore } from '@/stores/useSyncStore'
 import { useToastStore } from '@/stores/useToastStore'
 
 import { formatDate, hostOf, passwordAgeWarning } from './recordFormat'
+import RecordTotp from './RecordTotp.vue'
 
 /**
  * Карточка записи (F5, §3.3).
@@ -44,6 +48,7 @@ const list = useRecordsStore()
 const sections = useSectionsStore()
 const conflicts = useConflictsStore()
 const sync = useSyncStore()
+const devices = useDevicesStore()
 const toast = useToastStore()
 
 onMounted(() => {
@@ -51,6 +56,8 @@ onMounted(() => {
   void conflicts.ensure()
   // Подвал говорит, уехала ли запись; дальше состояние приезжает событиями.
   void sync.ensure()
+  // …и на скольких устройствах она лежит — это тоже строка подвала.
+  void devices.ensure()
 })
 
 /**
@@ -74,6 +81,8 @@ const section = computed(() => sections.byId(props.record.vault_id))
 const recordId = computed(() => props.record.record_id)
 const secrets = useRecordSecrets(recordId)
 const clipboard = secrets.clipboard
+/** Код подтверждения живёт отдельно от секретов: у него своё окно жизни. */
+const totp = useTotpCode(recordId)
 
 const hue = computed(() => iconHue(props.record.urls[0] ?? props.record.service_name))
 const initials = computed(() => iconInitials(props.record.service_name))
@@ -160,8 +169,13 @@ async function copyMeta(key: string, value: string, what: string): Promise<void>
   else toast.push('Буфер обмена недоступен', 'danger')
 }
 
-async function copySecret(field: 'password' | 'notes' | 'totp_secret'): Promise<void> {
-  const done = await secrets.copy(field)
+/**
+ * Копируется из карточки ровно одно секретное поле — пароль. Заметку читают
+ * глазами, а код подтверждения меняется быстрее, чем его успевают вставить из
+ * буфера: обе кнопки убраны по макету, а не забыты.
+ */
+async function copyPassword(): Promise<void> {
+  const done = await secrets.copy('password')
   if (done) {
     // Срок берём из действующей политики, а не из константы в тексте: с F13 его
     // выбирает пользователь, и зашитое «20 с» стало бы враньём при первом же
@@ -172,6 +186,28 @@ async function copySecret(field: 'password' | 'notes' | 'totp_secret'): Promise<
     toast.push('Буфер обмена недоступен', 'danger')
   }
 }
+
+// ---------------------------------------------------------------------------
+// Подвал
+// ---------------------------------------------------------------------------
+
+/**
+ * Строка подвала (`Прототип:2896`). Макет не успокаивает («копии есть»), а
+ * отвечает на два вопроса: СКОЛЬКО копий и ЧЬЯ версия сейчас показана. Обе
+ * оговорки — локальная секция и неуехавшая правка — остаются: без них счёт
+ * устройств обещал бы копии, которых нет.
+ */
+const storedLine = computed(() => {
+  if (section.value !== null && !section.value.sync) {
+    return `секция «${section.value.name}» локальная · копий этой записи больше нигде нет`
+  }
+  if (isPending.value) return 'изменена здесь · последняя версия ещё никуда не уехала'
+
+  // Пока ядро не ответило, устройств «ноль» — считать их вслух нельзя.
+  const count = devices.active.length
+  if (count <= 1) return 'хранится только на этом устройстве · последняя версия отсюда'
+  return `хранится на ${pluralize(count, DEVICE_AT_FORMS)} · последняя версия отсюда`
+})
 
 // ---------------------------------------------------------------------------
 // Удаление
@@ -373,21 +409,17 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
             </div>
           </div>
 
+          <!--
+            Номера версии в карточке нет и в макете: счётчик — служебная деталь
+            синхронизации, и человеку он говорит меньше, чем даты рядом. Сама
+            `record.version` остаётся в сторе — это данные контракта.
+          -->
           <div class="card__field">
             <span class="card__field-label">Создано · пароль изменён</span>
             <div class="card__dates">
               <span>{{ formatDate(record.created_at) }}</span>
               <span class="card__dates-sep" aria-hidden="true" />
               <span>{{ formatDate(record.password_updated_at) }}</span>
-            </div>
-          </div>
-
-          <div class="card__field">
-            <span class="card__field-label">Версия</span>
-            <div class="card__dates">
-              <span>№ {{ record.version }}</span>
-              <span class="card__dates-sep" aria-hidden="true" />
-              <span>изменена {{ formatDate(record.updated_at) }}</span>
             </div>
           </div>
         </div>
@@ -406,6 +438,7 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
 
         <SySecretField
           label="Пароль"
+          copy-label="Копировать пароль"
           :value="secrets.shown.password"
           :hide-in="secrets.hideIn.password"
           :busy="secrets.busy.value === 'password'"
@@ -413,7 +446,7 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
           :copy-seconds="clipboard.secondsLeft.value"
           :clipboard-unavailable="!clipboard.available.value"
           @toggle="secrets.toggle('password')"
-          @copy="copySecret('password')"
+          @copy="copyPassword()"
         />
 
         <div v-if="ageWarning" class="card__age" role="status">
@@ -421,57 +454,60 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
           <span>{{ ageWarning }}</span>
         </div>
 
+        <p v-if="totp.error.value" class="card__error" role="alert">{{ totp.error.value }}</p>
+
         <div class="card__grid card__grid--secrets">
-          <SySecretField
-            label="Ключ TOTP"
-            :value="secrets.shown.totp_secret"
+          <!--
+            Не ключ, а КОД: карточка показывает то, что вводят в чужую форму.
+            Сам `totp_secret` она не показывает вовсе — его редактируют в форме,
+            а считает код ядро.
+          -->
+          <RecordTotp
             :present="record.has_totp"
-            empty-text="Не подключён"
-            hint="Ключ хранится и синхронизируется · сами коды — в следующей версии"
-            :hide-in="secrets.hideIn.totp_secret"
-            :busy="secrets.busy.value === 'totp_secret'"
-            :copied="clipboard.copiedKey.value === 'totp_secret'"
-            :copy-seconds="clipboard.secondsLeft.value"
-            :clipboard-unavailable="!clipboard.available.value"
-            @toggle="secrets.toggle('totp_secret')"
-            @copy="copySecret('totp_secret')"
+            :code="totp.code.value"
+            :seconds-left="totp.secondsLeft.value"
+            :period-s="totp.periodS.value"
+            :busy="totp.busy.value"
+            @toggle="totp.toggle()"
           />
 
+          <!--
+            У заметок нет копирования и второй кнопки (`Прототип:1675-1692`):
+            заметку читают глазами, а бокс целиком открывает и закрывает её.
+          -->
           <SySecretField
             label="Заметки"
             multiline
+            skeleton
             :value="secrets.shown.notes"
             :present="record.has_notes"
             empty-text="Заметок нет"
             :hide-in="secrets.hideIn.notes"
             :busy="secrets.busy.value === 'notes'"
-            :copied="clipboard.copiedKey.value === 'notes'"
-            :copy-seconds="clipboard.secondsLeft.value"
-            :clipboard-unavailable="!clipboard.available.value"
             @toggle="secrets.toggle('notes')"
-            @copy="copySecret('notes')"
           />
         </div>
       </section>
     </div>
 
     <footer class="card__foot">
-      <span class="card__foot-note">
-        {{
-          section !== null && !section.sync
-            ? `Секция «${section.name}» локальная · копии этой записи на других устройствах нет`
-            : isPending
-              ? 'Изменение сохранено здесь и уедет, когда рядом окажется другое устройство'
-              : 'Хранится на этом устройстве · копии есть на сопряжённых устройствах'
-        }}
-      </span>
+      <span class="card__foot-note">{{ storedLine }}</span>
       <SyButton variant="danger" size="sm" @click="askDelete">Удалить запись</SyButton>
     </footer>
 
+    <!--
+      Порядок блоков — из макета (`Прототип:2262-2283`): имя, мета, цена
+      решения и только потом оговорка про TOTP. Оговорка идёт ЯНТАРНОЙ внутри
+      красной карточки: рамка говорит про потерю записи, полоска — про вход,
+      который придётся восстанавливать. Одним цветом эти два риска слиплись бы.
+    -->
     <SyModal
       :open="confirming"
       :title="deleteTitle"
+      size="confirm"
       tone="danger"
+      warning-tone="warning"
+      warning-placement="bottom"
       :warning="
         record.has_totp
           ? 'Вместе с записью пропадёт и её код подтверждения — без него вход в сервис придётся восстанавливать.'
@@ -482,14 +518,16 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
       <p class="card__confirm-meta">
         {{ record.login }} · изменена {{ formatDate(record.updated_at) }}
       </p>
-      <p>
+      <p class="card__confirm-text">
         Запись и её пароль удалятся с этого устройства и со всех остальных при следующей
         синхронизации. Восстановить её из Syncra будет нельзя.
       </p>
       <p v-if="deleteError" class="card__error" role="alert">{{ deleteError }}</p>
 
+      <!-- Сноска в своём слоте: в `#actions` она распирала бы ряд кнопок. -->
+      <template #note>Подтвердите повторным нажатием «Удалить запись»</template>
+
       <template #actions>
-        <span class="card__confirm-hint">Подтвердите повторным нажатием «Удалить запись»</span>
         <SyButton size="sm" :disabled="deleting" @click="confirming = false">Отмена</SyButton>
         <SyButton variant="danger" size="sm" :loading="deleting" @click="confirmDelete">
           Удалить запись
@@ -614,9 +652,15 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
   background: var(--sy-danger);
 }
 
+/*
+ * `align-items: center` — своё, не унаследованное от шапки: шапка выравнивает
+ * по верху ради иконки 46px, а две одинаковые кнопки рядом с ней от этого
+ * повисли бы под верхним краем блока имени.
+ */
 .card__head-actions {
   flex: none;
   display: flex;
+  align-items: center;
   gap: var(--sy-space-3);
 }
 
@@ -747,7 +791,13 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
   gap: var(--sy-space-6) var(--sy-space-7);
 }
 
+/*
+ * Код и заметка делят одну строку, но не поровну: коду хватает 280px под шесть
+ * цифр с отсчётом, а заметке нужно всё остальное (`Прототип:1651`).
+ */
 .card__grid--secrets {
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: var(--sy-space-6);
   align-items: start;
 }
 
@@ -925,16 +975,16 @@ const deleteTitle = computed(() => `Удалить «${props.record.service_name
 }
 
 .card__confirm-meta {
+  margin-bottom: var(--sy-space-5);
   font-family: var(--sy-font-mono);
-  font-size: 11px;
+  font-size: var(--sy-text-label);
   color: var(--sy-text-3);
-  margin-bottom: var(--sy-space-4);
 }
 
-.card__confirm-hint {
-  flex: 1;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--sy-text-3);
+.card__confirm-text {
+  font-size: var(--sy-text-body);
+  line-height: 1.55;
+  color: var(--sy-text-2);
+  text-wrap: pretty;
 }
 </style>

@@ -48,7 +48,9 @@ const disabled = computed(() => props.empty || props.unavailable || props.busy)
 const text = computed(() => {
   if (props.unavailable) return 'Буфер недоступен'
   if (props.empty) return 'Нечего копировать'
-  if (props.copied) return props.seconds > 0 ? `Скопировано · ${props.seconds}` : 'Скопировано'
+  // «с» из макета (`Прототип:2904`): без единицы число читается как счётчик
+  // копий, а не как «сколько ещё лежит в буфере».
+  if (props.copied) return props.seconds > 0 ? `Скопировано · ${props.seconds} с` : 'Скопировано'
   return props.label
 })
 

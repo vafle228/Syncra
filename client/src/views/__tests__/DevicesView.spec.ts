@@ -55,9 +55,7 @@ function revokeDialog(wrapper: View) {
 }
 
 function dialogButton(wrapper: View, text: string) {
-  const found = wrapper
-    .findAll('.sy-modal__actions button')
-    .find((node) => node.text() === text)
+  const found = wrapper.findAll('.sy-modal__actions button').find((node) => node.text() === text)
   if (!found) throw new Error(`Кнопка «${text}» не найдена в диалоге`)
   return found
 }
@@ -103,8 +101,32 @@ describe('DevicesView · доверенные устройства и отзыв
     const wrapper = await mountDevices()
 
     expect(card(wrapper, 'ThinkPad X1').text()).toContain('давно не появлялся')
-    expect(card(wrapper, 'ThinkPad X1').text()).toContain('не появлялся 41 день')
+    // Присутствие говорит словами и крупной мерой, а не датой.
+    expect(card(wrapper, 'ThinkPad X1').text()).toContain('не в сети 5 недель')
     expect(card(wrapper, 'iPhone 14').text()).not.toContain('давно не появлялся')
+    expect(card(wrapper, 'iPhone 14').text()).toContain('рядом')
+
+    wrapper.unmount()
+  })
+
+  it('показывает отпечаток под именем — его и предлагает сверить глазами', async () => {
+    const wrapper = await mountDevices()
+
+    const fingerprint = card(wrapper, 'iPhone 14').find('.trusted__fingerprint')
+    expect(fingerprint.exists()).toBe(true)
+    expect(fingerprint.text()).toContain(' · ')
+    expect(wrapper.text()).toContain('Отпечаток сверяется глазами')
+
+    wrapper.unmount()
+  })
+
+  it('«Отозвать» в покое нейтральна: красным помечают потерю, а не устройство', async () => {
+    const wrapper = await mountDevices()
+
+    const revoke = cardButton(wrapper, 'ThinkPad X1', 'Отозвать')
+    // Это не `SyButton variant="danger"`: краснеет она только под курсором.
+    expect(revoke.classes()).toContain('trusted__revoke')
+    expect(revoke.classes()).not.toContain('sy-button--danger')
 
     wrapper.unmount()
   })
@@ -129,11 +151,11 @@ describe('DevicesView · доверенные устройства и отзыв
     wrapper.unmount()
   })
 
-  it('«Оставить» закрывает подтверждение, ничего не отзывая', async () => {
+  it('«Отмена» закрывает подтверждение, ничего не отзывая', async () => {
     const wrapper = await mountDevices()
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
-    await dialogButton(wrapper, 'Оставить').trigger('click')
+    await dialogButton(wrapper, 'Отмена').trigger('click')
     await flushPromises()
 
     expect(revokeDialog(wrapper).exists()).toBe(false)
@@ -142,11 +164,11 @@ describe('DevicesView · доверенные устройства и отзыв
     wrapper.unmount()
   })
 
-  it('«Отозвать доступ» доезжает до ядра и оставляет устройство в списке', async () => {
+  it('«Отозвать» доезжает до ядра и оставляет устройство в списке', async () => {
     const wrapper = await mountDevices()
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
-    await dialogButton(wrapper, 'Отозвать доступ').trigger('click')
+    await dialogButton(wrapper, 'Отозвать').trigger('click')
     await flushPromises()
 
     const revoked = (await core.listDevices()).find(
@@ -168,7 +190,7 @@ describe('DevicesView · доверенные устройства и отзыв
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
     core.control.failNext('INTERNAL', 'Ядро недоступно.')
-    await dialogButton(wrapper, 'Отозвать доступ').trigger('click')
+    await dialogButton(wrapper, 'Отозвать').trigger('click')
     await flushPromises()
 
     // Отказ показывается в самом диалоге: решение принимают там же.
@@ -185,7 +207,7 @@ describe('DevicesView · доверенные устройства и отзыв
     const wrapper = await mountDevices()
 
     await cardButton(wrapper, 'ThinkPad X1', 'Отозвать').trigger('click')
-    await dialogButton(wrapper, 'Отозвать доступ').trigger('click')
+    await dialogButton(wrapper, 'Отозвать').trigger('click')
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'PairingModal' }).props('open')).toBe(false)

@@ -266,6 +266,7 @@ export function createThisDevice(pairedAt: string): Device {
     kind: 'desktop',
     is_this_device: true,
     paired_at: pairedAt,
+    fingerprint_words: fingerprintWords('device-this'),
     last_seen_at: pairedAt,
     revoked_at: null,
   }

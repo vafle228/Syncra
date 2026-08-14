@@ -111,7 +111,7 @@ These unblock everything else. Do them first.
   `SyField` wrapper (label + control slot + `#action` slot) that aligns by grid instead of by a
   hardcoded offset, and adopt it in all three places.
 
-- [ ] **1.5 `SyModal` — decouple the warning strip's colour, add a banded layout**
+- [X] **1.5 `SyModal` — decouple the warning strip's colour, add a banded layout**
   - The mockup's delete dialog is a **danger-bordered card containing an amber warn strip**
     (`Прототип:2262-2283`): two risk levels, two tokens. Today `.sy-modal__warning--danger`
     inherits from `tone`, so the caveat turns red. Add `warningTone?: 'warning' | 'danger'`
@@ -125,14 +125,14 @@ These unblock everything else. Do them first.
 
 ## Phase 2 — Vault list and record card
 
-- [ ] **2.1 Search field spans the column** *(user item 1)*
+- [X] **2.1 Search field spans the column** *(user item 1)*
   `.record-list__search` (`RecordList.vue:366`) has no `flex`, so it shrinks to the input's
   intrinsic width. Add `flex: 1; min-width: 0;`. Note that in the mockup (`Прототип:1416-1424`)
   the search sits at `flex:1` in a `gap:8px` row beside the 34×34 accent "+" button — so "full
   column width" means the *row* is full width and the search takes what the button does not
   (≈306px of the 376px column). That layout is already correct; only the grow is missing.
 
-- [ ] **2.2 Sort control replaces the Ctrl+K chip** *(user item 2)*
+- [X] **2.2 Sort control replaces the Ctrl+K chip** *(user item 2)*
   Remove `.record-list__hotkey` (`RecordList.vue:164`) — the string "Ctrl" appears nowhere in the
   mockups. **Keep the keydown handler** (`RecordList.vue:113-127`); it is a good affordance, just
   not a visible chip. In its place put the mockup's control (`Прототип:1425-1427`): right side of
@@ -149,17 +149,17 @@ These unblock everything else. Do them first.
 
   Group ordering follows the chosen key; in-group ordering stays `account_label` → `login`.
 
-- [ ] **2.3 Record card header buttons are the same height** *(user item 3)*
+- [X] **2.3 Record card header buttons are the same height** *(user item 3)*
   Delivered by 1.2. Additionally set `.card__head-actions` to `align-items: center` —
   `.card__head` is `align-items: flex-start`, which would still misalign two equal-height buttons
   against the 46px avatar block.
 
-- [ ] **2.4 Remove the «Версия» block** *(user item 4)*
+- [X] **2.4 Remove the «Версия» block** *(user item 4)*
   Delete `RecordCard.vue:384-391`. There is no version block anywhere in the desktop mockup; the
   only version-adjacent surfaces are the conflict banner and the mono footer line. Keep
   `record.version` in the store — it is contract data, simply not displayed.
 
-- [ ] **2.5 Copy button labels match the mockup** *(user item 5)*
+- [X] **2.5 Copy button labels match the mockup** *(user item 5)*
   The mockup uses two labels for the password (`Прототип:1623-1639`):
   - hidden state → **«Копировать пароль»**, accent-filled (`background var(--sy-accent)`,
     `color var(--sy-accent-fg)`, weight 600)
@@ -172,7 +172,7 @@ These unblock everything else. Do them first.
   (`Прототип:2904`): `Скопировано · {N} с`. Metadata rows keep «Скопировать адрес» /
   «Скопировать логин» — they are icon-only with the text in `title` (`Прототип:1568,1590`).
 
-- [ ] **2.6 Live TOTP code with 3+3 grouping and a countdown ring** *(user item 6)*
+- [X] **2.6 Live TOTP code with 3+3 grouping and a countdown ring** *(user item 6)*
   **Contract change — record it in `TASKS.md` and get the backend agent's confirmation.**
   - `src/core/contract.ts`: add `get_totp_code` → request `{ record_id }`, response
     `{ code: string; seconds_left: number; period_s: number }`. `code` is the **generated code**,
@@ -197,7 +197,7 @@ These unblock everything else. Do them first.
   - The raw TOTP **secret** is no longer surfaced in the card — the mockup never shows it. It
     stays editable in the form.
 
-- [ ] **2.7 Notes field matches the mockup** *(user item 7)*
+- [X] **2.7 Notes field matches the mockup** *(user item 7)*
   `Прототип:1675-1692`. The hidden state is **not** a masked value with buttons — it is
   **two skeleton bars** (8px tall, `border-radius:3px`, `background var(--sy-surface-2)`, widths
   70% and 45%, gap 6px) plus a single «Показать» chip, and the whole box is the toggle.
@@ -206,7 +206,7 @@ These unblock everything else. Do them first.
   **No copy button and no second button** — remove them for notes. Add a skeleton presentation
   mode to `SySecretField` rather than forking the component.
 
-- [ ] **2.8 Card footer copy** *(user item 8)*
+- [X] **2.8 Card footer copy** *(user item 8)*
   `.card__foot-note` (`RecordCard.vue:458-466`) currently reads "Хранится на этом устройстве ·
   копии есть на сопряжённых устройствах". The mockup's `storedLine` (`Прототип:2896`) is
   **«хранится на N устройствах · последняя версия отсюда»** — lowercase, mono 10.5px, stating a
@@ -216,7 +216,7 @@ These unblock everything else. Do them first.
   (`Прототип:1698`): 32px, `--sy-radius-sm`, `1px solid var(--sy-danger)`,
   `background var(--sy-danger-quiet)`, 12.5px/600, hover fills solid with `--sy-danger-fg`.
 
-- [ ] **2.9 Delete dialog — order, overflow, colours, type** *(user item 9)*
+- [X] **2.9 Delete dialog — order, overflow, colours, type** *(user item 9)*
   Four separate defects in `RecordCard.vue:470-497` against `Прототип:2262-2283`:
   1. **Order.** The mockup is title → mono meta → body → warn strip → footer. `SyModal` renders
      the `warning` prop *above* the body, so the strip currently precedes the meta line. Move the
@@ -231,11 +231,16 @@ These unblock everything else. Do them first.
      exactly this case; today it falls back to the 460px default). Meta line mono **11px**
      `--sy-text-3`; body 13.5px `--sy-text-2`, `line-height:1.55`; title 20px/600.
 
+  > NOTE: the caveat did not move into the default slot. Two dialogs need opposite orders — CSV
+  > (5.4) reads its strip *before* the body, delete reads it *after* — so `SyModal` grew
+  > `warningPlacement: 'top' | 'bottom'` instead, and the strip keeps its one styling. The rendered
+  > order is the mockup's either way.
+
   Run the same `size="confirm"` + `#note` audit over `SectionsView.vue:381-397`. Note that the
   mockup deliberately makes the **section**-delete confirm button *neutral*, not danger
   (`Прототип:2285-2296`) — verify the current implementation matches.
 
-- [ ] **2.10 "···" popover has round corners** *(user item 10)*
+- [X] **2.10 "···" popover has round corners** *(user item 10)*
   Root cause is 1.1. After the token fix the popover is `--sy-radius` (10px), border
   `--sy-border-strong`, shadow `--sy-shadow-window-2`, width 278px, padding 6px — matching
   `Прототип:1524`. The content stays the verbatim "Ещё думаем" placeholder.
@@ -244,7 +249,7 @@ These unblock everything else. Do them first.
 
 ## Phase 3 — Version / conflict dialog
 
-- [ ] **3.1 Rebuild `ConflictDialog.vue` against the mockup** *(user item 11)*
+- [X] **3.1 Rebuild `ConflictDialog.vue` against the mockup** *(user item 11)*
   The "version picker" is `ConflictDialog.vue`. There is **no separate version-history dialog
   anywhere in the designs** — history appears only in the "···" popover as an unbuilt idea. Do not
   invent one. Restructure against `Прототип:2378-2438`:
@@ -275,13 +280,13 @@ These unblock everything else. Do them first.
 
 ## Phase 4 — Forms, sections, devices
 
-- [ ] **4.1 Styled section picker in the record form** *(user item 12)*
+- [X] **4.1 Styled section picker in the record form** *(user item 12)*
   `RecordForm.vue:375-382` already uses `SySelect`, so it inherits the styled dropdown from phase
   1.3. Pass each section's colour as the option `dot`, and use the `#footer` slot for
   **«Управление секциями…»** (`Прототип:1768`) routing to `/sections`. Keep the existing
   `vaultOptions` / `vaultHint` logic (`RecordForm.vue:70-93`).
 
-- [ ] **4.2 Drop the "dumb button" next to the notes field** *(user item 13)*
+- [X] **4.2 Drop the "dumb button" next to the notes field** *(user item 13)*
   Today the form renders a `<textarea>` plus a sibling `SyButton` «Показать текущие» nudged down
   22px, and the same shape for password («Показать текущий») and TOTP. Replace with the **card's
   own idiom**: when editing a record that has stored notes which have not been loaded, the field
@@ -296,7 +301,14 @@ These unblock everything else. Do them first.
   Watch `RecordForm.spec.ts:73`, which matches the button by the exact string
   `'Показать текущий'` (the notes variant is the distinct string `'Показать текущие'`).
 
-- [ ] **4.3 TOTP field in the edit form** *(user item 14)*
+  > NOTE: notes got the in-field treatment exactly as described (skeleton + chip, `SySecretField`
+  > reused with `skeleton`). The **password** did not: that field is where a *new* password is
+  > typed, so turning it into a closed plate would block its main use. Its «Показать текущий»
+  > moved instead into the field's own label row via a new `SyField` `#aside` slot — inside the
+  > field, aligned by grid, no sibling button and no magic offset. The **TOTP** load-current button
+  > disappeared entirely with 4.3: the mockup never re-shows a stored key.
+
+- [X] **4.3 TOTP field in the edit form** *(user item 14)*
   `Прототип:1888-1906`, the right half of a `1fr 1fr` grid with gap 20px. Label
   **«Код TOTP · необязательно»**. Two states, not a plain `SyInput`:
   - **empty**: `min-height:72px`, `--sy-radius-sm`, **`1px dashed var(--sy-border-strong)`**, no
@@ -311,7 +323,7 @@ These unblock everything else. Do them first.
   «Сканировать QR» has no core command behind it in MVP 1 — wire it to the manual-key path and say
   so in `TASKS.md` rather than shipping a dead button.
 
-- [ ] **4.4 Right-pane header bars use the pane's own background** *(user item 15)*
+- [X] **4.4 Right-pane header bars use the pane's own background** *(user item 15)*
   `SectionsView.vue:423` and `SettingsView.vue:418` set `background: var(--sy-bg-0)` — the sidebar
   chassis colour. In the mockup (`Прототип:1914`, `2027`, `2085`) the header has **no background
   of its own**: it inherits the pane's `var(--bg1)` and is separated only by
@@ -319,7 +331,7 @@ These unblock everything else. Do them first.
   right-pane headers (Секции, Устройства, Настройки) so they read as one surface. Padding
   `22px 28px 18px`, title 22px/600 `letter-spacing:-0.01em`, subtitle 13px `--sy-text-2`.
 
-- [ ] **4.5 New-section form is one row with a row of swatches** *(user item 16)*
+- [X] **4.5 New-section form is one row with a row of swatches** *(user item 16)*
   `SectionEditor.vue`. The mockup (`Прототип:1979-2008`) is **one horizontal row**,
   `align-items:flex-end`, gap 12: name field (`flex:1`) | colour block | «Создать» | «Отмена».
   - **Swatches must be a row.** `.section-editor__colors` is `flex-direction: column`; the
@@ -348,7 +360,13 @@ These unblock everything else. Do them first.
   `SectionsView.spec.ts` triggers `submit` on `.section-editor`, so it must stay a `<form>` with
   that class.
 
-- [ ] **4.6 Devices — presence language, row geometry, hover, revoke dialog** *(user item 18)*
+  > NOTE: the two rule cards were already there and were left in their current wording. The mockup
+  > says records return «во «Все записи»» — in this build they return to the **default section**
+  > («Все записи» is a filter, not a section), and the picker lives in the record **form**, not the
+  > card. Copying the mockup verbatim here would have been a documented lie. The 38px buttons came
+  > from a new `SyButton size="field"` rung tied to `--sy-control-height-field`.
+
+- [X] **4.6 Devices — presence language, row geometry, hover, revoke dialog** *(user item 18)*
   - **Last-sync info.** The mockup never prints a raw timestamp; it is presence language plus a
     dot (`Прототип:2554-2558`): **«рядом · 12:04»**, **«рядом · только что»**,
     **«не в сети 3 недели»**, **«это устройство»** — with a 6px dot in `--sy-accent` when live and
@@ -369,7 +387,18 @@ These unblock everything else. Do them first.
     нажатием «Отозвать»»** in the `#note` slot, buttons «Отмена» / danger «Отозвать».
   - Keep the two explainer cards «Отпечаток сверяется глазами» / «Что делает отзыв».
 
-- [ ] **4.7 Pairing modal — check buttons, typography, geometry** *(user item 19; keep the better implementation)*
+  > NOTE: the mockup prints a hex fingerprint (`7C81 · 44AE · D902`) under the name, but `Device`
+  > carried no fingerprint at all — so the screen advised comparing one while showing none. Added
+  > `Device.fingerprint_words: string[]` to the contract (metadata, not a key: nothing is
+  > recoverable from four dictionary words) and rendered the **words** the pairing flow already
+  > uses rather than hex — two representations of one fingerprint would be worse than either.
+  > `deviceSubtitle` lost «когда виделись» to the new `devicePresence`, which is what the row's
+  > right side now shows. The revoke dialog's buttons went «Оставить»/«Отозвать доступ» →
+  > «Отмена»/«Отозвать» so its new `#note` («Подтвердите повторным нажатием «Отозвать»») names a
+  > button that exists. Sections' «Удалить» is `ghost` and never turns red — deliberate, and its
+  > own explainer card says why.
+
+- [X] **4.7 Pairing modal — check buttons, typography, geometry** *(user item 19; keep the better implementation)*
   Against `Прототип:2298-2376`: the modal is **`size="wizard"` (560px)**, not `wide` — check
   `PairingModal.vue:144`. Header `padding:16px 20px` with `border-bottom`, title 16px/600 plus a
   mono 10.5px step label, and a 30×30 close button (`border-radius:7px`, `--sy-border`,
@@ -383,7 +412,7 @@ These unblock everything else. Do them first.
 
 ## Phase 5 — Settings
 
-- [ ] **5.1 New "Оформление" tab: theme + accent palette** *(user item 24)*
+- [X] **5.1 New "Оформление" tab: theme + accent palette** *(user item 24)*
   `SettingsView.vue:59-63`. **No mockup exists** for this surface, so build it in the established
   settings-row idiom (`Прототип:2142-2159`): a row card with a 14.5px/500 title and a 12.5px
   `--sy-text-2` rationale on the left, and segmented 32px mono option buttons on the right — i.e.
@@ -403,7 +432,7 @@ These unblock everything else. Do them first.
   - While here: the tab strip has `role="tablist"` / `role="tab"` but no `aria-controls` or
     `role="tabpanel"` wiring, so the panes are not announced as tab panels. Fix it.
 
-- [ ] **5.2 "Данные" tab — typography, buttons, geometry** *(user item 21)*
+- [X] **5.2 "Данные" tab — typography, buttons, geometry** *(user item 21)*
   `SettingsView.vue` data pane against `Прототип:2101-2138`. Three cards, each
   `border-radius:10px; padding:18px; display:flex; align-items:flex-start; gap:16px`, with a
   `flex:1` text column (title **15px/600**, body **13px** `--sy-text-2` `line-height:1.55`) and a
@@ -423,7 +452,14 @@ These unblock everything else. Do them first.
   локальной сети.» `SettingsView.spec.ts` asserts `.settings__data-row` index 2 carries
   `--danger` — keep the order.
 
-- [ ] **5.3 Backup export dialog — no reveal, no duplicate title, compact shape** *(user item 22)*
+  > NOTE: card padding stayed at the token 16px rather than the mockup's 18px, and the closing note
+  > at `--sy-text-small` (12.5px) — both are the nearest rungs on the ladder, and ground rule 2 says
+  > tokens win over exact px. The receipts needed state the rows could not see: the export lived
+  > inside each modal's own `useVaultExport`. The modals now emit `done` (and CSV `forgotten`) with
+  > the `ExportFile`, and the view keeps just the file **name** — enough for the receipt, and the
+  > full path stays inside the dialog.
+
+- [X] **5.3 Backup export dialog — no reveal, no duplicate title, compact shape** *(user item 22)*
   `BackupModal.vue` + `BackupCard.vue`. No dialog for this exists in the mockups (the design fires
   the export immediately) and the password field is a contract requirement, so this stays a
   documented deviation — but three fixes:
@@ -439,7 +475,11 @@ These unblock everything else. Do them first.
     a two-column definition grid instead of four stacked bordered rows, and move the action button
     into `SyModal`'s `#actions`. Target a compact `size="form"` (520px) card.
 
-- [ ] **5.4 CSV export dialog — less frightening, more compact** *(user item 23)*
+  > NOTE: `BackupCard.vue` was folded into `BackupModal.vue` and deleted — with the title, the pill
+  > and the standalone actions gone, the split bought nothing and neither file had another caller.
+  > The two closing paragraphs became one. Same treatment for `CsvExportCard.vue` under 5.4.
+
+- [X] **5.4 CSV export dialog — less frightening, more compact** *(user item 23)*
   `CsvExportModal.vue` + `CsvExportCard.vue`. The mockup's dialog (`Прототип:2485-2500`) is
   **500px, flat, ~250px tall, four blocks**:
   1. title «Экспорт в CSV», 20px/600
@@ -462,10 +502,22 @@ These unblock everything else. Do them first.
   button — that is a real safety affordance and matches the spec page. `dataModals.spec.ts`
   asserts `[data-test="csv-modal"]`; keep the hook and expect to rewrite the gate assertions.
 
-- [ ] **5.5 Confirm the out-of-scope areas were left alone**
+  > NOTE: done as specified — one gate (master password), no checkbox, no typed word, no hatching,
+  > neutral card / amber strip / danger button. The receipt and «Удалить файл сейчас» stayed; the
+  > delete button moved into the dialog's footer with the rest of the actions. The risk list («их
+  > прочитает любая программа», «TOTP-ключи не переносятся») was dropped with the spec-page layout
+  > — its content survives in the amber strip and the receipt, both verbatim from the mockup.
+
+- [X] **5.5 Confirm the out-of-scope areas were left alone**
   User item 17 (sections management plate) and user item 20 (password/security settings) are
   explicitly better than the mockup and must not be touched. Tick this box only after verifying
   no diff landed in them.
+
+  > NOTE: verified by diff. `SectionsView.vue` changed in exactly two places, both in scope: the
+  > pane header (4.4) and `size="confirm"` on the delete dialog (2.9) — the section cards, the sync
+  > toggles and the explainer cards are byte-identical. In `SettingsView.vue` the security pane's
+  > rows and the master-password block are untouched; every added `.settings__option` belongs to
+  > the new Оформление tab, and `SettingsView.spec.ts` still counts three rows in Безопасность.
 
 ---
 
@@ -478,14 +530,14 @@ and here.
   `.card__menu-pop` renders at radius 0. This is the *cause* of user item 10, not a separate skin
   issue — worth stating because the same class of bug (an undefined token silently rendering as
   nothing) can recur. Grep for others. *(Covered by 1.1.)*
-- [ ] **E2. The copy verb is inconsistent** across the card: `SySecretField` hardcodes
+- [X] **E2. The copy verb is inconsistent** across the card: `SySecretField` hardcodes
   «Копировать» while metadata rows say «Скопировать адрес/логин». *(Covered by 2.5.)*
-- [ ] **E3. The delete dialog does not use `size="confirm"`** despite `SyModal`'s own prop doc
+- [X] **E3. The delete dialog does not use `size="confirm"`** despite `SyModal`'s own prop doc
   naming that size for exactly this case. *(Covered by 2.9.)*
 - [X] **E4. `margin-top: 22px` appears three times** as a label-height hack. *(Covered by 1.4.)*
-- [ ] **E5. `SyModal` has no focus trap and does not restore focus on close** — a real
+- [X] **E5. `SyModal` has no focus trap and does not restore focus on close** — a real
   accessibility gap in a security product. *(Suggested in 1.5.)*
-- [ ] **E6. `SyListItem` exposes an `#actions` slot that `RecordList` ignores**, absolutely
+- [X] **E6. `SyListItem` exposes an `#actions` slot that `RecordList` ignores**, absolutely
   positioning `.record-list__copy` instead, with a hardcoded `border-radius: 7px`. Fold into phase
   1.2's icon-button work.
   > NOTE: the slot cannot be used as described, and `RecordList` is not at fault. The row is itself
@@ -496,7 +548,11 @@ and here.
   > `--sy-radius-inner`, added in 1.1), and the fact that `SyListItem`'s `#actions` slot has no
   > callers anywhere in `src/` — it is dead API and should probably be deleted. Deliberately left
   > for phase 2, which restructures this file anyway (2.1, 2.2).
-- [ ] **E7. `TrustedDevices.vue` has a stray blank line (170) and an out-of-order import** —
+  >
+  > DONE: the dead `#actions` slot (and its styles) is deleted from `SyListItem`, and the hardcoded
+  > `border-radius: 7px` became `--sy-radius-inner` here and in the three other files that had
+  > copied the number (`PairingModal`, `ImportWizard`, `SetupView`).
+- [X] **E7. `TrustedDevices.vue` has a stray blank line (170) and an out-of-order import** —
   lint-adjacent noise; tidy while in the file.
 
 ---
@@ -546,7 +602,11 @@ compact CSV dialog, no «Показать» chip on master-password fields).
 Confirm in the built bundle: zero external URLs, no crypto in the frontend, `localStorage` holding
 only `syncra.theme` and `syncra.accent`, and no secret field in any store snapshot.
 
-### Contract change to record in `TASKS.md` and confirm with the backend agent
+### Contract changes to confirm with the backend agent
+
+> NOTE: `TASKS.md` was deleted mid-refactor (see `CLAUDE.md`, which now points at this file as the
+> план работ), so both contract additions are recorded here instead — `get_totp_code` below and
+> `Device.fingerprint_words` under 4.6.
 
 `get_totp_code { record_id } → { code, seconds_left, period_s }` — the code is generated by the
 core. The frontend must never receive the TOTP secret in order to display a code.

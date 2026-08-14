@@ -372,6 +372,85 @@ describe('RecordForm · секция (F7)', () => {
   })
 })
 
+describe('RecordForm · секции в списке и ключ TOTP', () => {
+  it('у каждой секции в списке своя цветная метка и ссылка на управление', async () => {
+    await useRecordsStore().load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    await wrapper.find('.form__vault .sy-select__trigger').trigger('click')
+
+    const dots = wrapper.findAll('.form__vault .sy-select__option .sy-select__dot')
+    expect(dots.length).toBeGreaterThan(0)
+    expect(dots[0]!.attributes('style')).toContain('--sy-vault-')
+    expect(wrapper.find('.form__vault .sy-select__footer').text()).toBe('Управление секциями…')
+
+    wrapper.unmount()
+  })
+
+  it('у новой записи ключ TOTP предлагают завести, а не вводят в пустое поле', async () => {
+    await useRecordsStore().load()
+    const wrapper = mount(RecordForm)
+    await flushPromises()
+
+    expect(wrapper.find('.form__totp--empty').exists()).toBe(true)
+    expect(wrapper.find('.form__totp-scan').text()).toBe('Сканировать QR')
+
+    // «Сканировать QR» ведёт в тот же ручной ввод: камеры в MVP 1 нет, и
+    // кнопка-пустышка была бы хуже честного пути.
+    await wrapper.find('.form__totp-scan').trigger('click')
+    expect(wrapper.find('.form__totp--empty').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('у записи с ключом форма не показывает сам ключ и даёт его убрать', async () => {
+    const { wrapper, list } = await mountEdit()
+
+    expect(wrapper.find('.form__totp--on').text()).toContain('Ключ добавлен')
+    expect(wrapper.html()).not.toContain('MOCKTOTPSECRET')
+
+    await wrapper.find('.form__totp-drop').trigger('click')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect((await core.getSecret(GITHUB)).totp_secret).toBeNull()
+    expect(list.records.find((item) => item.record_id === GITHUB)?.has_totp).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('ключ, который не трогали, остаётся на месте', async () => {
+    const { wrapper } = await mountEdit()
+
+    await fill(wrapper, 'Метка аккаунта', 'основной')
+    await submit(wrapper)
+    await flushPromises()
+
+    expect((await core.getSecret(GITHUB)).totp_secret).toBe('MOCKTOTPSECRET3')
+
+    wrapper.unmount()
+  })
+
+  it('заметка показывается закрытой и открывается прямо в поле', async () => {
+    const { wrapper } = await mountEdit()
+
+    // Кнопки-соседа больше нет: закрытая заметка сама и есть кнопка.
+    expect(wrapper.findAll('button').some((node) => node.text() === 'Показать текущие')).toBe(false)
+    expect(wrapper.findAll('.sy-secret__bar')).toHaveLength(2)
+    expect(wrapper.find('.form__textarea').exists()).toBe(false)
+
+    await wrapper.find('.sy-secret__box--button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find<HTMLTextAreaElement>('.form__textarea').element.value).toContain(
+      'Recovery codes',
+    )
+
+    wrapper.unmount()
+  })
+})
+
 describe('RecordForm · редактирование (ЗАКОН №1)', () => {
   it('открывается с метаданными, но без единого секрета', async () => {
     const { wrapper } = await mountEdit()
