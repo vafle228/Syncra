@@ -94,8 +94,9 @@ function apply(): void {
   if (!root) return
 
   root.setAttribute('data-theme', resolved.value)
-  // У мяты атрибута нет: её палитра — это `:root`, и лишний атрибут заставил бы
-  // держать для умолчания второй, дублирующий блок токенов.
+  // У мяты атрибута нет: её палитра и так лежит в `:root`. Блок
+  // `[data-accent='mint']` в токенах существует (им красит себя свотч в
+  // «Оформлении»), но документу он не нужен — это те же значения.
   if (accent.value === DEFAULT_ACCENT) root.removeAttribute('data-accent')
   else root.setAttribute('data-accent', accent.value)
 }

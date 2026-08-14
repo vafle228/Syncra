@@ -232,10 +232,19 @@ describe('SettingsView · оформление', () => {
 
     expect(document.documentElement.getAttribute('data-accent')).toBe('amber')
     expect(localStorage.getItem('syncra.accent')).toBe('amber')
+
     // Образец красится тем же атрибутом, что и документ, — второго списка
-    // цветов рядом с токенами нет.
-    const swatch = wrapper.findAll('.settings__accent-dot')[2]!
-    expect(swatch.attributes('data-accent')).toBe('amber')
+    // цветов рядом с токенами нет. Атрибут нужен КАЖДОМУ образцу, включая
+    // мяту: без него свотч наследует текущий акцент документа, и все четыре
+    // показывают один цвет вместо своего (в токенах за это отвечают правила
+    // `[data-accent=…]`, не привязанные к `:root`).
+    const swatches = wrapper.findAll('.settings__accent-dot')
+    expect(swatches.map((dot) => dot.attributes('data-accent'))).toEqual([
+      'mint',
+      'cyan',
+      'amber',
+      'indigo',
+    ])
 
     await button(wrapper, 'Мята').trigger('click')
     expect(document.documentElement.hasAttribute('data-accent')).toBe(false)

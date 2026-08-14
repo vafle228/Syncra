@@ -31,11 +31,20 @@
   --sy-text-2: oklch(0.735 0.008 255);
   --sy-text-3: oklch(0.575 0.009 255);
 
-  /* Акцент mint · 168. Остальные варианты (cyan/copper/indigo) — в макете. */
-  --sy-accent: oklch(0.8 0.13 168);
-  --sy-accent-quiet: oklch(0.8 0.13 168 / 0.14);
-  --sy-accent-border: oklch(0.8 0.13 168 / 0.38);
-  --sy-accent-fg: oklch(0.2 0.03 168);
+  /*
+   * Акцент mint · 168 — умолчание. Значения названы отдельно, чтобы палитру
+   * можно было включить и точечно (`[data-accent='mint']` ниже), не повторяя
+   * цвета вторым блоком: дублирующиеся литералы разъезжаются при первой правке.
+   */
+  --sy-accent-mint: oklch(0.8 0.13 168);
+  --sy-accent-mint-quiet: oklch(0.8 0.13 168 / 0.14);
+  --sy-accent-mint-border: oklch(0.8 0.13 168 / 0.38);
+  --sy-accent-mint-fg: oklch(0.2 0.03 168);
+
+  --sy-accent: var(--sy-accent-mint);
+  --sy-accent-quiet: var(--sy-accent-mint-quiet);
+  --sy-accent-border: var(--sy-accent-mint-border);
+  --sy-accent-fg: var(--sy-accent-mint-fg);
 
   /* Семантика — экономно. Красный зарезервирован за потерей данных. */
   --sy-ok: oklch(0.78 0.13 158);
@@ -91,10 +100,15 @@
   --sy-text-3: oklch(0.505 0.012 255);
 
   /* Акцент темнее на ~0.28 L при той же hue — контраст ≥ 4.5:1 на bg-0/bg-1. */
-  --sy-accent: oklch(0.52 0.12 168);
-  --sy-accent-quiet: oklch(0.52 0.12 168 / 0.1);
-  --sy-accent-border: oklch(0.52 0.12 168 / 0.32);
-  --sy-accent-fg: oklch(0.985 0.015 168);
+  --sy-accent-mint: oklch(0.52 0.12 168);
+  --sy-accent-mint-quiet: oklch(0.52 0.12 168 / 0.1);
+  --sy-accent-mint-border: oklch(0.52 0.12 168 / 0.32);
+  --sy-accent-mint-fg: oklch(0.985 0.015 168);
+
+  --sy-accent: var(--sy-accent-mint);
+  --sy-accent-quiet: var(--sy-accent-mint-quiet);
+  --sy-accent-border: var(--sy-accent-mint-border);
+  --sy-accent-fg: var(--sy-accent-mint-fg);
 
   --sy-ok: oklch(0.52 0.115 158);
   /* Жёлтый уходит в янтарь: на белом он иначе не читается. */
@@ -133,42 +147,64 @@
  * Светлые селекторы длиннее на один атрибут намеренно: без этого они проиграли
  * бы по специфичности тёмным и светлая тема получила бы тёмный акцент.
  */
-:root[data-accent='cyan'] {
+/*
+ * Селекторы намеренно НЕ привязаны к `:root`: палитру должен уметь включить и
+ * обычный элемент. На этом стоит свотч в «Оформлении» — он красит себя тем же
+ * атрибутом, что и документ, и потому показывает ровно ту палитру, которую
+ * включит нажатие. С `:root[data-accent=…]` свотчи совпадали бы с текущим
+ * акцентом вместо своего (все четыре разом), а не показывали выбор.
+ */
+[data-accent='mint'] {
+  --sy-accent: var(--sy-accent-mint);
+  --sy-accent-quiet: var(--sy-accent-mint-quiet);
+  --sy-accent-border: var(--sy-accent-mint-border);
+  --sy-accent-fg: var(--sy-accent-mint-fg);
+}
+
+[data-accent='cyan'] {
   --sy-accent: oklch(0.79 0.11 218);
   --sy-accent-quiet: oklch(0.79 0.11 218 / 0.14);
   --sy-accent-border: oklch(0.79 0.11 218 / 0.38);
   --sy-accent-fg: oklch(0.2 0.03 218);
 }
 
-:root[data-accent='amber'] {
+[data-accent='amber'] {
   --sy-accent: oklch(0.755 0.125 62);
   --sy-accent-quiet: oklch(0.755 0.125 62 / 0.14);
   --sy-accent-border: oklch(0.755 0.125 62 / 0.38);
   --sy-accent-fg: oklch(0.205 0.045 62);
 }
 
-:root[data-accent='indigo'] {
+[data-accent='indigo'] {
   --sy-accent: oklch(0.74 0.13 288);
   --sy-accent-quiet: oklch(0.74 0.13 288 / 0.14);
   --sy-accent-border: oklch(0.74 0.13 288 / 0.38);
   --sy-accent-fg: oklch(0.2 0.04 288);
 }
 
-:root[data-theme='light'][data-accent='cyan'] {
+/*
+ * Светлые варианты. Каждый описан двумя селекторами: первый — для самого
+ * документа, второй — для элемента с атрибутом внутри светлой темы (свотч).
+ * Оба длиннее тёмных ровно настолько, чтобы выиграть по специфичности.
+ */
+:root[data-theme='light'][data-accent='cyan'],
+[data-theme='light'] [data-accent='cyan'] {
   --sy-accent: oklch(0.52 0.1 218);
   --sy-accent-quiet: oklch(0.52 0.1 218 / 0.1);
   --sy-accent-border: oklch(0.52 0.1 218 / 0.32);
   --sy-accent-fg: oklch(0.985 0.015 218);
 }
 
-:root[data-theme='light'][data-accent='amber'] {
+:root[data-theme='light'][data-accent='amber'],
+[data-theme='light'] [data-accent='amber'] {
   --sy-accent: oklch(0.52 0.115 62);
   --sy-accent-quiet: oklch(0.52 0.115 62 / 0.1);
   --sy-accent-border: oklch(0.52 0.115 62 / 0.32);
   --sy-accent-fg: oklch(0.985 0.015 62);
 }
 
-:root[data-theme='light'][data-accent='indigo'] {
+:root[data-theme='light'][data-accent='indigo'],
+[data-theme='light'] [data-accent='indigo'] {
   --sy-accent: oklch(0.52 0.12 288);
   --sy-accent-quiet: oklch(0.52 0.12 288 / 0.1);
   --sy-accent-border: oklch(0.52 0.12 288 / 0.32);

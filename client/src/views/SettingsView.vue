@@ -408,11 +408,7 @@ async function onImported(vaultId: VaultId, count: number): Promise<void> {
               :aria-pressed="accent === option.value"
               @click="setAccent(option.value)"
             >
-              <span
-                class="settings__accent-dot"
-                :data-accent="option.value === 'mint' ? undefined : option.value"
-                aria-hidden="true"
-              />
+              <span class="settings__accent-dot" :data-accent="option.value" aria-hidden="true" />
               {{ option.label }}
             </button>
           </div>
