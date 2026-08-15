@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Syncra",
+  "version": "0.1.0",
+  "identifier": "dev.syncra.desktop",
+  "build": {
+    "frontendDist": "../../../client/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm --prefix ../../../client run dev -- --mode tauri",
+    "beforeBuildCommand": "npm --prefix ../../../client run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Syncra",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 940,
+        "minHeight": 620,
+        "resizable": true,
+        "decorations": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+  }
+}

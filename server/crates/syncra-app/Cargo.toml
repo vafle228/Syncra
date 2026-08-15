@@ -1,0 +1,24 @@
+[package]
+name = "syncra-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Оболочка Tauri: окно, IPC и больше ничего. Вся логика — в `syncra-core`,
+# здесь только обёртки команд (§8.2).
+
+[lib]
+name = "syncra_app_lib"
+# staticlib/cdylib нужны для мобильного таргета (MVP 2, iOS); на десктопе
+# используется rlib. Оставлено сразу, чтобы не переразбивать крейт потом.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+syncra-core = { path = "../syncra-core" }
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true

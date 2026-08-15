@@ -1,0 +1,26 @@
+[package]
+name = "syncra-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Ядро Syncra: хранилище, крипта, модель данных. Ни одной зависимости от Tauri —
+# всё здесь проверяется обычным `cargo test`, без webview и без оболочки (§8.2).
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rusqlite.workspace = true
+argon2.workspace = true
+chacha20poly1305.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Тест `at_rest.rs` лезет в файл хранилища мимо ядра — он проверяет именно то,
+# что увидит в нём посторонний.
+rusqlite.workspace = true

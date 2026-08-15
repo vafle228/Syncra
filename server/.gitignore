@@ -1,0 +1,2 @@
+# Схемы прав, которые Tauri генерирует при сборке из capabilities/.
+crates/syncra-app/gen/schemas/
