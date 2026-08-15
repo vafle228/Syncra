@@ -14,6 +14,14 @@ pub const META_KDF_PARAMS: &str = "kdf_params";
 pub const META_VERIFIER: &str = "verifier";
 pub const META_DEVICE_ID: &str = "device_id";
 pub const META_CREATED_AT: &str = "created_at";
+/// Профиль генератора и настройки безопасности — JSON, открытым текстом.
+///
+/// Это настройки, а не секреты: в профиле нет ни одного пароля, а таймауты и так
+/// видны по поведению окна. Отдельной таблицы они не заводят — по строке в `meta`
+/// хватает, и старое хранилище без этих строк открывается умолчаниями, а не
+/// требует миграции.
+pub const META_GENERATOR_PROFILE: &str = "generator_profile";
+pub const META_SECURITY_SETTINGS: &str = "security_settings";
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (

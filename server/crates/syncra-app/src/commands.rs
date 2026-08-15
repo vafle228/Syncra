@@ -11,10 +11,11 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use syncra_core::{
-    Core, CoreError, InitVaultResponse, RecordDraft, RecordMeta, RecordPatch, RecordSecrets,
-    UnlockResponse, Vault, VaultPatch, VaultStatus,
+    ChangeMasterPasswordResponse, Core, CoreError, GeneratedPasswords, GeneratorProfile,
+    InitVaultResponse, RecordDraft, RecordMeta, RecordPatch, RecordSecrets, SecuritySettings,
+    SecuritySettingsPatch, UnlockResponse, Vault, VaultPatch, VaultStatus,
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Ядро под замком процесса. Команды синхронные: они короткие, а самая долгая
 /// (вывод ключа при `unlock`) выполняется один раз за сеанс.
@@ -44,6 +45,35 @@ macro_rules! core {
 #[derive(Deserialize)]
 pub struct MasterPasswordRequest {
     master_password: String,
+}
+
+#[derive(Deserialize)]
+pub struct PinRequest {
+    pin: String,
+}
+
+#[derive(Deserialize)]
+pub struct ChangeMasterPasswordRequest {
+    current_master_password: String,
+    new_master_password: String,
+}
+
+#[derive(Deserialize)]
+pub struct SaveGeneratorProfileRequest {
+    profile: GeneratorProfile,
+}
+
+#[derive(Deserialize)]
+pub struct GeneratePasswordsRequest {
+    count: i64,
+    /// Разовые правила для предпросмотра. Не указаны — берётся сохранённый профиль.
+    #[serde(default)]
+    profile: Option<GeneratorProfile>,
+}
+
+#[derive(Deserialize)]
+pub struct SaveSecuritySettingsRequest {
+    patch: SecuritySettingsPatch,
 }
 
 #[derive(Deserialize)]
@@ -160,17 +190,67 @@ pub fn unlock(
 #[tauri::command]
 pub fn lock(state: State<'_, CoreState>, app: AppHandle) -> Answer<()> {
     core!(state).lock();
+    announce_locked(&app, "manual");
+    Ok(())
+}
+
+fn announce_locked(app: &AppHandle, reason: &'static str) {
     announce(
-        &app,
+        app,
         "locked",
         LockedEvent {
             locked_at: syncra_core::model::now_iso(),
-            // Автоблокировка по бездействию (`timeout`) появится вместе с
-            // настройками безопасности — её считает ядро, а не фронт.
-            reason: "manual",
+            reason,
         },
     );
-    Ok(())
+}
+
+/// Шаг сторожа автоблокировки (F13). Вызывается оболочкой раз в секунду.
+///
+/// Считает срок ЯДРО — здесь только «спросить и, если пора, запереть». Своего
+/// таймера у фронта нет и быть не должно (`contract.ts:539`): два таймера — это
+/// две правды о том, заперто ли хранилище.
+///
+/// Отравленный мьютекс здесь не повод падать: сторож — не команда пользователя,
+/// и уронить приложение из фонового потока он не должен.
+pub fn autolock_tick(app: &AppHandle) {
+    let state = app.state::<CoreState>();
+    let Ok(mut core) = state.0.lock() else {
+        return;
+    };
+
+    if !core.autolock_due(std::time::Instant::now()) {
+        return;
+    }
+    core.lock();
+    drop(core);
+
+    // Событие уходит уже с отпущенным замком: подписчик наверняка попросит
+    // статус в ответ, и держать мьютекс в этот момент незачем.
+    announce_locked(app, "timeout");
+}
+
+/// Быстрый вход по PIN (F13). Завести PIN пока нечем — команды энролмента нет в
+/// контракте, — поэтому ядро отвечает внятным отказом, а не «непредвиденной
+/// ошибкой». Экран блокировки клавиатуру и не покажет: `pin.enrolled` — `false`.
+#[tauri::command]
+pub fn unlock_with_pin(request: PinRequest, state: State<'_, CoreState>) -> Answer<()> {
+    core!(state).unlock_with_pin(&request.pin)
+}
+
+/// Смена мастер-пароля: ядро перешифровывает хранилище целиком.
+///
+/// Событий не шлёт: хранилище как было открыто, так и осталось, и рассказывать
+/// остальному UI нечего.
+#[tauri::command]
+pub fn change_master_password(
+    request: ChangeMasterPasswordRequest,
+    state: State<'_, CoreState>,
+) -> Answer<ChangeMasterPasswordResponse> {
+    core!(state).change_master_password(
+        &request.current_master_password,
+        &request.new_master_password,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +334,50 @@ pub fn delete_vault(request: VaultIdRequest, state: State<'_, CoreState>) -> Ans
 }
 
 // ---------------------------------------------------------------------------
+// Генератор паролей (F6)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn get_generator_profile(state: State<'_, CoreState>) -> Answer<GeneratorProfile> {
+    core!(state).generator_profile()
+}
+
+#[tauri::command]
+pub fn save_generator_profile(
+    request: SaveGeneratorProfileRequest,
+    state: State<'_, CoreState>,
+) -> Answer<GeneratorProfile> {
+    core!(state).save_generator_profile(&request.profile)
+}
+
+/// Вторая и последняя команда этого ядра, отдающая пароли открытым текстом.
+/// Это ещё ничей пароль — но обращение с ним такое же, как с `get_secret`.
+#[tauri::command]
+pub fn generate_passwords(
+    request: GeneratePasswordsRequest,
+    state: State<'_, CoreState>,
+) -> Answer<GeneratedPasswords> {
+    core!(state).generate_passwords(request.count, request.profile.as_ref())
+}
+
+// ---------------------------------------------------------------------------
+// Настройки безопасности (F13)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn get_security_settings(state: State<'_, CoreState>) -> Answer<SecuritySettings> {
+    core!(state).security_settings()
+}
+
+#[tauri::command]
+pub fn save_security_settings(
+    request: SaveSecuritySettingsRequest,
+    state: State<'_, CoreState>,
+) -> Answer<SecuritySettings> {
+    core!(state).save_security_settings(&request.patch)
+}
+
+// ---------------------------------------------------------------------------
 // Честные ответы там, где ядру правда нечего сообщить
 // ---------------------------------------------------------------------------
 
@@ -319,15 +443,6 @@ macro_rules! not_ready {
 }
 
 not_ready![
-    // Безопасность и вход (F13)
-    unlock_with_pin,
-    change_master_password,
-    get_security_settings,
-    save_security_settings,
-    // Генератор (F6)
-    get_generator_profile,
-    save_generator_profile,
-    generate_passwords,
     // Коды подтверждения (фаза 2)
     get_totp_code,
     // Сопряжение и доверие (F8, F9)

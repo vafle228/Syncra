@@ -70,6 +70,37 @@ fn secrets_are_not_readable_in_the_storage_file() {
 }
 
 #[test]
+fn rekeyed_storage_keeps_its_secrets_to_itself() {
+    // Перешифровка (F13) переписывает каждый шифротекст: если бы она хоть где-то
+    // оставила открытый текст «на минуточку», файл бы это показал.
+    const NEW_MASTER_PASSWORD: &str = "мастер-пароль-2-подлиннее";
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("syncra.db");
+
+    {
+        let mut core = Core::open(&path).unwrap();
+        core.init_vault(MASTER_PASSWORD).unwrap();
+
+        let mut item = draft(SERVICE, "octocat", PASSWORD);
+        item.notes = Some(NOTES.to_owned());
+        item.totp_secret = Some(TOTP.to_owned());
+        core.create_record(&item).unwrap();
+
+        core.change_master_password(MASTER_PASSWORD, NEW_MASTER_PASSWORD)
+            .unwrap();
+    }
+
+    let bytes = storage_bytes(dir.path());
+    for secret in [PASSWORD, NOTES, TOTP, MASTER_PASSWORD, NEW_MASTER_PASSWORD] {
+        assert!(
+            !contains(&bytes, secret),
+            "«{secret}» нашлось в файле хранилища после смены пароля"
+        );
+    }
+}
+
+#[test]
 fn metadata_is_deliberately_not_encrypted_in_this_step() {
     // Пополевое шифрование закрывает секреты, но НЕ метаданные: имя сервиса и
     // логин лежат в файле открыто. Это принятая граница шага, а не недосмотр, и

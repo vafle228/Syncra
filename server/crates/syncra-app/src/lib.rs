@@ -6,6 +6,7 @@
 mod commands;
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use commands::CoreState;
 use syncra_core::Core;
@@ -15,6 +16,13 @@ use tauri::Manager;
 /// только она знает про платформу; ядру он приходит готовым.
 const DB_FILE_NAME: &str = "syncra.db";
 
+/// Как часто сторож спрашивает ядро, не пора ли запереть хранилище.
+///
+/// Секунда — не точность автоблокировки, а её зернистость: сроки в настройках
+/// начинаются с минуты, и опоздать на секунду не страшно. Чаще спрашивать значит
+/// будить процесс без нужды, реже — заметно врать про выбранный срок.
+const AUTOLOCK_TICK: Duration = Duration::from_secs(1);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -22,6 +30,16 @@ pub fn run() {
             let path = app.path().app_data_dir()?.join(DB_FILE_NAME);
             let core = Core::open(&path)?;
             app.manage(CoreState(Mutex::new(core)));
+
+            // Автоблокировку исполняет ядро (§8.2), но кто-то должен его будить:
+            // отдельный поток, а не таймер во фронте, потому что окно может быть
+            // свёрнуто, а вкладка — выгружена, хранилище же должно закрыться всё равно.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(AUTOLOCK_TICK);
+                commands::autolock_tick(&handle);
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -43,18 +61,20 @@ pub fn run() {
             commands::set_vault_sync,
             commands::set_default_vault,
             commands::delete_vault,
+            // Генератор паролей (F6)
+            commands::get_generator_profile,
+            commands::save_generator_profile,
+            commands::generate_passwords,
+            // Безопасность и вход (F13)
+            commands::unlock_with_pin,
+            commands::change_master_password,
+            commands::get_security_settings,
+            commands::save_security_settings,
             // Синхронизация: её пока нет, и ядро говорит об этом прямо
             commands::get_sync_status,
             commands::sync_now,
             commands::list_conflicts,
             // Следующие шаги — зарегистрированы ради внятного отказа
-            commands::unlock_with_pin,
-            commands::change_master_password,
-            commands::get_security_settings,
-            commands::save_security_settings,
-            commands::get_generator_profile,
-            commands::save_generator_profile,
-            commands::generate_passwords,
             commands::get_totp_code,
             commands::get_pairing_payload,
             commands::submit_paired_key,

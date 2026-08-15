@@ -292,6 +292,59 @@ pub fn secrets(conn: &Connection, key: &VaultKey, record_id: &str) -> CoreResult
     })
 }
 
+/// Перешифровать все секреты хранилища с одного ключа на другой (F13, смена
+/// мастер-пароля).
+///
+/// Метаданные записей не трогаются вовсе: `version`, `updated_at` и
+/// `password_updated_at` остаются прежними. Смена ключа — не изменение записи, и
+/// поднимать из-за неё версию значило бы наплодить расхождений для будущего
+/// синка на ровном месте (§5.2).
+///
+/// AAD тоже прежний: `record_id` и имена полей не меняются, поэтому шифротекст
+/// остаётся привязан к своему месту так же, как был.
+///
+/// Работает по транзакции, а не по соединению: наполовину перешифрованное
+/// хранилище не открывается ни старым паролем, ни новым.
+pub fn rekey_all(tx: &rusqlite::Transaction<'_>, from: &VaultKey, to: &VaultKey) -> CoreResult<()> {
+    let mut stmt = tx.prepare(
+        "SELECT record_id, password_ct, notes_ct, totp_ct FROM records
+         WHERE password_ct IS NOT NULL OR notes_ct IS NOT NULL OR totp_ct IS NOT NULL",
+    )?;
+    let stored = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>("record_id")?,
+                row.get::<_, Option<Vec<u8>>>("password_ct")?,
+                row.get::<_, Option<Vec<u8>>>("notes_ct")?,
+                row.get::<_, Option<Vec<u8>>>("totp_ct")?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    for (record_id, password_ct, notes_ct, totp_ct) in stored {
+        let fields = [
+            (SecretField::Password, password_ct),
+            (SecretField::Notes, notes_ct),
+            (SecretField::TotpSecret, totp_ct),
+        ];
+
+        let mut resealed: Vec<Option<Vec<u8>>> = Vec::with_capacity(fields.len());
+        for (field, blob) in fields {
+            let plaintext = open_field(from, &record_id, field, &blob)?;
+            resealed.push(seal_field(to, &record_id, field, plaintext.as_deref())?);
+        }
+
+        tx.execute(
+            "UPDATE records SET password_ct = ?2, notes_ct = ?3, totp_ct = ?4
+             WHERE record_id = ?1",
+            rusqlite::params![record_id, resealed[0], resealed[1], resealed[2]],
+        )?;
+    }
+
+    Ok(())
+}
+
 fn seal_field(
     key: &VaultKey,
     record_id: &str,

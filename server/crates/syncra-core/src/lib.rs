@@ -8,19 +8,25 @@
 //! поведения — фейк-ядро `client/src/core/mock/index.ts`. Расхождение с ними
 //! считается багом ядра, а не «другой трактовкой».
 //!
-//! **Что этот шаг умеет:** жизненный цикл хранилища (`get_vault_status`,
-//! `init_vault`, `unlock`, `lock`), CRUD записей и CRUD секций. Синхронизация,
-//! сопряжение, конфликты, генератор, импорт/экспорт, TOTP и PIN — следующие шаги.
+//! **Что это ядро умеет:** жизненный цикл хранилища (`get_vault_status`,
+//! `init_vault`, `unlock`, `lock`), CRUD записей и CRUD секций, генератор
+//! паролей, настройки безопасности с автоблокировкой и смену мастер-пароля.
+//! Синхронизация, сопряжение, конфликты, импорт/экспорт, TOTP и энролмент
+//! PIN — следующие шаги.
 
 pub mod crypto;
 pub mod error;
+pub mod generator;
 pub mod model;
+pub mod security;
 pub mod session;
 pub mod storage;
 
 pub use error::{CoreError, CoreErrorCode, CoreResult};
+pub use generator::{GeneratedPasswords, GeneratorProfile};
 pub use model::{
-    InitVaultResponse, PinStatus, RecordDraft, RecordMeta, RecordPatch, RecordSecrets, SecretField,
-    UnlockResponse, Vault, VaultPatch, VaultStatus,
+    ChangeMasterPasswordResponse, InitVaultResponse, PinStatus, RecordDraft, RecordMeta,
+    RecordPatch, RecordSecrets, SecretField, UnlockResponse, Vault, VaultPatch, VaultStatus,
 };
+pub use security::{SecuritySettings, SecuritySettingsPatch};
 pub use session::Core;

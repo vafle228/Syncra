@@ -19,6 +19,9 @@ pub type IsoDateTime = String;
 
 /// `MASTER_PASSWORD_MIN_LENGTH` (`contract.ts:239`).
 pub const MASTER_PASSWORD_MIN_LENGTH: usize = 8;
+/// `PIN_LENGTH` (`contract.ts:176`). Ступень одна: выбор «4 или 6» — вопрос
+/// политики ядра, а не настройка на экране.
+pub const PIN_LENGTH: usize = 4;
 /// `VAULT_NAME_MAX_LENGTH` (`contract.ts:395`).
 pub const VAULT_NAME_MAX_LENGTH: usize = 40;
 /// `VAULT_COLORS` (`contract.ts:361`) — порядок как в палитре макета.
@@ -198,6 +201,16 @@ pub struct InitVaultResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnlockResponse {
     pub unlocked_at: IsoDateTime,
+}
+
+/// Итог смены мастер-пароля (`contract.ts:285`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChangeMasterPasswordResponse {
+    pub changed_at: IsoDateTime,
+    /// Сколько доверенных устройств спросят новый пароль при следующей встрече в
+    /// сети. Пока сопряжения нет, устройство ровно одно — это, и ноль здесь
+    /// правда, а не заглушка.
+    pub devices_to_update: i64,
 }
 
 // ---------------------------------------------------------------------------
