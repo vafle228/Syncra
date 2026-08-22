@@ -7,20 +7,30 @@
 //! Логики здесь нет и быть не должно: всё, что тут появляется, — это разбор
 //! запроса, вызов ядра и (для команд замка) событие наружу.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use syncra_core::{
     ChangeMasterPasswordResponse, Core, CoreError, Device, GeneratedPasswords, GeneratorProfile,
-    InitVaultResponse, PairingHandshake, PairingOffer, PairingResult, RecordDraft, RecordMeta,
-    RecordPatch, RecordSecrets, SecuritySettings, SecuritySettingsPatch, UnlockResponse, Vault,
-    VaultPatch, VaultStatus,
+    InitVaultResponse, Node, PairingHandshake, PairingOffer, PairingResult, RecordDraft,
+    RecordMeta, RecordPatch, RecordSecrets, SecuritySettings, SecuritySettingsPatch, SyncStatus,
+    UnlockResponse, Vault, VaultPatch, VaultStatus,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Ядро под замком процесса. Команды синхронные: они короткие, а самая долгая
 /// (вывод ключа при `unlock`) выполняется один раз за сеанс.
-pub struct CoreState(pub Mutex<Core>);
+///
+/// `Arc`, а не просто `Mutex`: тем же ядром пользуется сетевой узел из своих
+/// потоков (S3). Держит он его через `Weak`, поэтому владельцем остаётся
+/// оболочка — но `Arc` для этого нужен здесь.
+pub struct CoreState(pub Arc<Mutex<Core>>);
+
+/// Сетевая сторона ядра (S3).
+///
+/// Команды, которым нужна сеть, идут через узел, а не прямо в ядро: узел умеет
+/// отпустить замок на время ожидания, а команда под `core!` — нет.
+pub struct NodeState(pub Arc<Node>);
 
 type Answer<T> = Result<T, CoreError>;
 
@@ -160,6 +170,18 @@ struct LockedEvent {
 /// Не доставилось — команда всё равно отработала, и валить её из-за этого нельзя.
 fn announce<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: T) {
     let _ = app.emit(event, payload);
+}
+
+/// Переложить событие ядра в событие Tauri (S3).
+///
+/// Ядро про Tauri не знает и знать не должно: оно складывает события в канал, а
+/// имя события на проводе и способ доставки — дело оболочки.
+pub fn forward(app: &AppHandle, event: syncra_core::CoreEvent) {
+    match event {
+        syncra_core::CoreEvent::PeerFound(peer) => announce(app, "peer_found", peer),
+        syncra_core::CoreEvent::DevicePaired(result) => announce(app, "device_paired", *result),
+        syncra_core::CoreEvent::SyncStatus(status) => announce(app, "sync_status", *status),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -405,12 +427,18 @@ pub fn get_pairing_payload(state: State<'_, CoreState>) -> Answer<PairingOffer> 
     core!(state).get_pairing_payload()
 }
 
+/// Прочитанное со второго устройства.
+///
+/// Идёт через узел, а не через `core!`: шесть символов, набранных руками, — это
+/// имя сеанса, по которому устройство ИЩУТ в локальной сети (§2.2), и держать
+/// мьютекс ядра через этот поиск нельзя. Полный пейлоад из QR при этом сети не
+/// требует — но UI не знает, что ему подали, и разбирается в этом ядро.
 #[tauri::command]
 pub fn submit_paired_key(
     request: SubmitPairedKeyRequest,
-    state: State<'_, CoreState>,
+    node: State<'_, NodeState>,
 ) -> Answer<PairingHandshake> {
-    core!(state).submit_paired_key(&request.payload)
+    node.0.submit_paired_key(&request.payload)
 }
 
 /// Человек сверил слова на двух экранах и подтвердил (§2.2).
@@ -418,12 +446,16 @@ pub fn submit_paired_key(
 /// События `device_paired` отсюда НЕ шлётся: его получает та сторона, которая
 /// показывала код и ничего не вызывала. Здесь результат и так возвращается
 /// ответом на команду, а второе уведомление было бы эхом.
+///
+/// Идёт через узел: сверх записи в `devices` тому, кто показывал код, надо
+/// доложить об успехе по сети — а это ожидание, и держать через него замок
+/// нельзя. Доставка уходит в фон, ответ команды её не ждёт.
 #[tauri::command]
 pub fn confirm_pairing(
     request: PairingSessionRequest,
-    state: State<'_, CoreState>,
+    node: State<'_, NodeState>,
 ) -> Answer<PairingResult> {
-    core!(state).confirm_pairing(&request.session_id)
+    node.0.confirm_pairing(&request.session_id)
 }
 
 #[tauri::command]
@@ -449,44 +481,43 @@ pub fn save_security_settings(
 }
 
 // ---------------------------------------------------------------------------
-// Честные ответы там, где ядру правда нечего сообщить
+// Синхронизация (F10, §5.1)
 // ---------------------------------------------------------------------------
 
-/// Синхронизации в этом шаге нет — и `idle` с нулём пиров это не заглушка, а
-/// правда о состоянии. Индикатор в шапке рисует «рядом никого» и молчит, вместо
-/// того чтобы показывать ошибку на каждом экране.
-#[derive(Serialize)]
-pub struct SyncStatus {
-    phase: &'static str,
-    peers_online: u32,
-    peer_name: Option<String>,
-    pending_records: Vec<String>,
-    last_sync_at: Option<String>,
-    message: Option<String>,
+/// Что происходит с синхронизацией прямо сейчас.
+///
+/// **Граница шага:** обмена ещё нет — есть обнаружение. `peers_online` здесь
+/// настоящий, фазы `idle` и `searching` тоже; `syncing`, `peer_name`,
+/// `pending_records` и `last_sync_at` наполнит S4.
+///
+/// За замком, как и в фейк-ядре: сеть работает только на отпертом хранилище, и
+/// рассказывать про соседей запертому незачем.
+#[tauri::command]
+pub fn get_sync_status(
+    state: State<'_, CoreState>,
+    node: State<'_, NodeState>,
+) -> Answer<SyncStatus> {
+    require_unlocked(&state)?;
+    Ok(node.0.status())
 }
 
-fn idle_sync() -> SyncStatus {
-    SyncStatus {
-        phase: "idle",
-        peers_online: 0,
-        peer_name: None,
-        pending_records: Vec::new(),
-        last_sync_at: None,
-        message: None,
+/// «Синхронизировать сейчас»: не ждать следующего круга, а поискать соседей
+/// прямо теперь.
+#[tauri::command]
+pub fn sync_now(state: State<'_, CoreState>, node: State<'_, NodeState>) -> Answer<SyncStatus> {
+    require_unlocked(&state)?;
+    Ok(node.0.sync_now())
+}
+
+fn require_unlocked(state: &State<'_, CoreState>) -> Answer<()> {
+    if core!(state).is_unlocked() {
+        Ok(())
+    } else {
+        Err(CoreError::locked())
     }
 }
 
-#[tauri::command]
-pub fn get_sync_status() -> Answer<SyncStatus> {
-    Ok(idle_sync())
-}
-
-#[tauri::command]
-pub fn sync_now() -> Answer<SyncStatus> {
-    Ok(idle_sync())
-}
-
-/// Конфликтов не бывает без синхронизации — пустой список здесь тоже правда.
+/// Конфликтов не бывает без обмена записями — пустой список здесь правда (S5).
 #[tauri::command]
 pub fn list_conflicts() -> Answer<Vec<serde_json::Value>> {
     Ok(Vec::new())

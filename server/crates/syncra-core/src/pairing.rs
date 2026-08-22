@@ -18,6 +18,7 @@
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use qrcode::{Color, EcLevel, QrCode};
+use sha2::{Digest, Sha256};
 
 use crate::crypto::{self, DEVICE_PUBLIC_LEN};
 use crate::error::{CoreError, CoreResult};
@@ -157,6 +158,36 @@ pub fn is_expired(expires_at: &str, now: DateTime<Utc>) -> bool {
         Ok(deadline) => deadline.with_timezone(&Utc) <= now,
         Err(_) => true,
     }
+}
+
+/// Домен обязательства по коду сеанса (S3).
+const CODE_COMMITMENT_DOMAIN: &[u8] = b"syncra:paircode:v1";
+
+/// Длина обязательства. Полный хеш не нужен: он не хранится и не переживает
+/// соединения, а короткий кадр меньше говорит наблюдателю о своей природе.
+pub const CODE_COMMITMENT_LEN: usize = 16;
+
+/// Обязательство по коду сеанса: то, что уезжает в сеть ВМЕСТО кода.
+///
+/// Сам код в канал не отдаётся никогда. Канал сопряжения зашифрован, но
+/// собеседник на том конце ещё не подтверждён (иначе сопрягаться было бы не с
+/// кем), и отдать ему шесть символов значило бы отдать их тому, кто, возможно,
+/// как раз их и подбирает.
+///
+/// В хеш входит транскрипт рукопожатия, поэтому обязательство привязано к
+/// конкретному соединению: подслушанное, оно не пригодится в следующем.
+/// Проверяющая сторона не «расшифровывает» его, а пересчитывает по своему
+/// активному коду и сравнивает.
+pub fn code_commitment(transcript: &[u8], code: &str) -> [u8; CODE_COMMITMENT_LEN] {
+    let mut hasher = Sha256::new();
+    hasher.update(CODE_COMMITMENT_DOMAIN);
+    hasher.update((transcript.len() as u64).to_be_bytes());
+    hasher.update(transcript);
+    hasher.update(code.as_bytes());
+
+    let mut out = [0u8; CODE_COMMITMENT_LEN];
+    out.copy_from_slice(&hasher.finalize()[..CODE_COMMITMENT_LEN]);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +332,7 @@ fn kind_from_byte(byte: u8) -> DeviceKind {
     }
 }
 
-fn push_short_string(bytes: &mut Vec<u8>, value: &str) -> CoreResult<()> {
+pub(crate) fn push_short_string(bytes: &mut Vec<u8>, value: &str) -> CoreResult<()> {
     let value = value.as_bytes();
     if value.len() > NAME_MAX_BYTES {
         return Err(CoreError::internal("Слишком длинное имя устройства."));
@@ -312,35 +343,39 @@ fn push_short_string(bytes: &mut Vec<u8>, value: &str) -> CoreResult<()> {
 }
 
 /// Чтение тела по порядку. Любой выход за край — испорченный код, а не паника.
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    at: usize,
+///
+/// Тем же курсором разбирает свои кадры сетевой слой ([`crate::net::wire`]):
+/// задача та же — прочитать по порядку недоверенные байты и ни на чём не
+/// упасть, — и заводить ради неё второй такой же разбор незачем.
+pub(crate) struct Cursor<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) at: usize,
 }
 
 impl Cursor<'_> {
-    fn byte(&mut self) -> CoreResult<u8> {
+    pub(crate) fn byte(&mut self) -> CoreResult<u8> {
         let byte = *self.bytes.get(self.at).ok_or_else(damaged_code)?;
         self.at += 1;
         Ok(byte)
     }
 
-    fn take(&mut self, count: usize) -> CoreResult<&[u8]> {
+    pub(crate) fn take(&mut self, count: usize) -> CoreResult<&[u8]> {
         let end = self.at.checked_add(count).ok_or_else(damaged_code)?;
         let slice = self.bytes.get(self.at..end).ok_or_else(damaged_code)?;
         self.at = end;
         Ok(slice)
     }
 
-    fn array<const N: usize>(&mut self) -> CoreResult<[u8; N]> {
+    pub(crate) fn array<const N: usize>(&mut self) -> CoreResult<[u8; N]> {
         self.take(N)?.try_into().map_err(|_| damaged_code())
     }
 
-    fn short_string(&mut self) -> CoreResult<String> {
+    pub(crate) fn short_string(&mut self) -> CoreResult<String> {
         let len = usize::from(self.byte()?);
         String::from_utf8(self.take(len)?.to_vec()).map_err(|_| damaged_code())
     }
 
-    fn is_at_end(&self) -> bool {
+    pub(crate) fn is_at_end(&self) -> bool {
         self.at == self.bytes.len()
     }
 }

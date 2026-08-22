@@ -132,6 +132,16 @@ impl From<rusqlite::Error> for CoreError {
     }
 }
 
+/// Сетевая ошибка наружу не пересказывается по той же причине, что и ошибка
+/// SQLite: её текст несёт IP-адрес, порт и имя интерфейса, а `message` уходит
+/// прямо в UI. Ни один сетевой адрес границу ядра не пересекает (§2.1: адрес
+/// помогает найти устройство, но рассказывать о нём пользователю незачем).
+impl From<std::io::Error> for CoreError {
+    fn from(_: std::io::Error) -> Self {
+        Self::internal("Не удалось связаться с устройством в сети.")
+    }
+}
+
 impl From<serde_json::Error> for CoreError {
     fn from(_: serde_json::Error) -> Self {
         Self::internal("Не удалось разобрать данные хранилища.")

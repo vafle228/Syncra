@@ -24,6 +24,7 @@ use crate::model::{
     RecordSecrets, UnlockResponse, Vault, VaultPatch, VaultStatus, MASTER_PASSWORD_MIN_LENGTH,
     PIN_LENGTH,
 };
+use crate::net::{NetIdentity, RemotePeer};
 use crate::pairing;
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
 use crate::storage::{records, schema, vaults, Storage};
@@ -57,6 +58,11 @@ pub struct Core {
     retired_codes: HashSet<String>,
     /// Прочитанные пейлоады, ждущие, пока человек сверит слова.
     handshakes: HashMap<String, PendingPeer>,
+    /// Сопряжение, о котором осталось рассказать второй стороне (S3).
+    ///
+    /// Забирается узлом сети СРАЗУ после `confirm_pairing` и уже без замка:
+    /// доставка идёт по сети, а держать под мьютексом сетевое ожидание нельзя.
+    announcement: Option<PairingAnnouncement>,
 }
 
 /// Показанный код и всё, что за ним стоит. В БД не попадает: код даёт право
@@ -67,13 +73,42 @@ struct OfferState {
     /// Строка кода целиком. Наружу, в IPC, она не уходит (там матрица), но
     /// внутри процесса живёт: код переносят не только камерой.
     payload: String,
-    /// Приватная половина одноразового ключа сеанса. В этом шаге ею никто не
-    /// пользуется — защищённый канал строится в S3, — но существовать она
-    /// обязана: публичная половина уже уехала в пейлоаде, и ключ, которого ни у
-    /// кого нет, был бы обманом формата.
-    #[allow(dead_code)]
+    /// Приватная половина одноразового ключа сеанса.
+    ///
+    /// Ею подписывается ECDH канала сопряжения (S3): прочитавший QR сверяет
+    /// половину из приветствия с той, что была в пейлоаде, и убеждается, что
+    /// говорит с тем самым экраном, а не с кем-то посередине (§2.2).
     session_secret: x25519_dalek::StaticSecret,
+    /// Сколько раз по этому офферу не угадали код.
+    ///
+    /// Шесть символов — это тридцать бит, и в локальной сети они перебираются
+    /// за секунды. Длину кода увеличивать нельзя (его диктуют вслух), поэтому
+    /// защита здесь: после [`PAIRING_ATTEMPT_LIMIT`] промахов оффер сгорает, и
+    /// перебор упирается не в арифметику, а в человека, который должен показать
+    /// новый код.
+    attempts: u32,
 }
+
+/// Сопряжение, состоявшееся здесь, о котором надо рассказать той стороне,
+/// которая показывала код (§2.2). Она ничего не вызывала и иначе не узнает.
+#[derive(Debug, Clone)]
+pub struct PairingAnnouncement {
+    /// Код показавшей стороны. Из него на каждом соединении считается
+    /// обязательство; сам код в сеть не уходит.
+    pub code: String,
+    /// Докуда имеет смысл пытаться: после этого срока оффер на той стороне
+    /// всё равно не примет.
+    pub expires_at: IsoDateTime,
+    /// Одноразовый ключ сеанса из прочитанного пейлоада. По нему узнают тот
+    /// самый экран среди прочих соседей.
+    pub session_public: [u8; pairing::SESSION_PUBLIC_LEN],
+}
+
+/// Сколько промахов по коду терпит один показанный код.
+///
+/// Пять — это заметно меньше, чем нужно перебору, и заметно больше, чем
+/// ошибётся человек: неверный символ он исправит с первого-второго раза.
+pub const PAIRING_ATTEMPT_LIMIT: u32 = 5;
 
 /// Прочитанное устройство, ждущее подтверждения человеком. В `devices` попадёт
 /// только после сверки слов — иначе сверять было бы уже нечего.
@@ -81,6 +116,8 @@ struct PendingPeer {
     body: pairing::PairingBody,
     fingerprint_words: Vec<String>,
     expires_at: IsoDateTime,
+    /// Код той стороны. Нужен после подтверждения, чтобы доложить ей об успехе.
+    code: String,
 }
 
 impl Core {
@@ -103,6 +140,7 @@ impl Core {
             offer: None,
             retired_codes: HashSet::new(),
             handshakes: HashMap::new(),
+            announcement: None,
         }
     }
 
@@ -355,6 +393,7 @@ impl Core {
         self.offer = None;
         self.retired_codes.clear();
         self.handshakes.clear();
+        self.announcement = None;
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -383,6 +422,23 @@ impl Core {
         let key = self.key.as_ref().ok_or_else(CoreError::locked)?;
         self.last_activity.set(Instant::now());
         Ok(key)
+    }
+
+    /// Тот же вход за замок, но БЕЗ отметки активности.
+    ///
+    /// Существует ровно для сетевого слоя (S3). Сеть работает сама по себе:
+    /// анонс, ответы соседям, пробы раз в пятнадцать секунд. Если бы всё это
+    /// шло через [`Core::key`], хранилище никогда бы не заперлось само —
+    /// автоблокировка считает бездействие ПОЛЬЗОВАТЕЛЯ, а фоновый обмен по
+    /// сети бездействия не отменяет. Человек ушёл от компьютера, а хранилище
+    /// стоит открытым, потому что телефон в кармане исправно отвечает на
+    /// ping, — это ровно та поломка, которую здесь не должно быть возможно
+    /// написать случайно.
+    fn key_quiet(&self) -> CoreResult<&VaultKey> {
+        if !self.storage.is_initialized()? {
+            return Err(CoreError::not_initialized());
+        }
+        self.key.as_ref().ok_or_else(CoreError::locked)
     }
 
     // -----------------------------------------------------------------------
@@ -555,6 +611,7 @@ impl Core {
             expires_at: expires_at.clone(),
             payload,
             session_secret,
+            attempts: 0,
         });
 
         Ok(PairingOffer {
@@ -647,6 +704,7 @@ impl Core {
                 body,
                 fingerprint_words,
                 expires_at: handshake.expires_at.clone(),
+                code,
             },
         );
         Ok(handshake)
@@ -683,10 +741,18 @@ impl Core {
             &now_iso(),
         )?;
 
+        // Второй стороне об этом рассказать некому, кроме нас: она показывала
+        // код и ничего не вызывала. Доставку делает узел сети — уже без замка.
+        self.announcement = Some(PairingAnnouncement {
+            code: pending.code,
+            expires_at: pending.expires_at,
+            session_public: pending.body.session_public,
+        });
+
         Ok(PairingResult {
             device,
-            // ГРАНИЦА ШАГА: переносить записи некуда, пока нет сети (S3, S4).
-            // Ноль здесь — правда о состоянии, а не заглушка.
+            // ГРАНИЦА ШАГА: переносить записи некуда, пока нет манифеста и
+            // диффа (S4). Ноль здесь — правда о состоянии, а не заглушка.
             records_transferred: 0,
             duration_ms: started.elapsed().as_millis() as i64,
         })
@@ -699,6 +765,193 @@ impl Core {
         self.key()?;
         self.handshakes.remove(session_id);
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Что нужно сетевому слою (S3)
+    //
+    // Все методы этого раздела ходят за замок через `key_quiet`: их зовёт
+    // фоновый поток, а не человек, и продлевать ими сеанс нельзя.
+    // -----------------------------------------------------------------------
+
+    /// Открыто ли хранилище — в том же порядке проверок, что и [`Core::key`]
+    /// (`NOT_INITIALIZED` раньше `LOCKED`).
+    ///
+    /// Нужна командам, которые перед работой с ядром идут в сеть: про замок
+    /// человек должен узнать сразу, а не после того, как узел отходит все
+    /// таймауты впустую. Активность отмечается — это действие человека, а не
+    /// фоновая проба.
+    pub fn guard_unlocked(&self) -> CoreResult<()> {
+        self.key().map(|_| ())
+    }
+
+    /// Чем это устройство представляется в сети.
+    pub fn net_identity(&self) -> CoreResult<NetIdentity> {
+        let key = self.key_quiet()?;
+        Ok(NetIdentity {
+            device_id: self.device_id()?,
+            host: self.host.clone(),
+            keypair: trust::keypair(self.storage.conn(), key)?,
+        })
+    }
+
+    /// Доверять ли этому ключу подписи (§2.1, §2.3).
+    ///
+    /// Единственный вопрос, который вообще решает, пускать соседа: ни адреса,
+    /// ни имени, ни MAC в нём нет.
+    pub fn authorize_peer(&self, signing_public: &[u8; 32]) -> CoreResult<Option<Device>> {
+        self.key_quiet()?;
+        trust::authorized_peer(self.storage.conn(), &self.device_id()?, signing_public)
+    }
+
+    /// Отметить, что доверенное устройство только что было на связи (§5.1).
+    pub fn mark_peer_seen(&self, device_id: &str) -> CoreResult<Option<Device>> {
+        self.key_quiet()?;
+        trust::touch_last_seen(
+            self.storage.conn(),
+            &self.device_id()?,
+            device_id,
+            &now_iso(),
+        )
+    }
+
+    /// Одноразовый ключ сеанса показанного сейчас кода.
+    ///
+    /// Им подписывается ECDH канала сопряжения: прочитавший QR сверит его с
+    /// тем, что было в пейлоаде. Нет активного оффера — нет и ключа, и канал
+    /// сопряжения строится на обычном эфемерном.
+    pub fn offer_session_secret(&self) -> Option<x25519_dalek::StaticSecret> {
+        self.offer
+            .as_ref()
+            .filter(|offer| !pairing::is_expired(&offer.expires_at, Utc::now()))
+            .map(|offer| offer.session_secret.clone())
+    }
+
+    /// Ответить на «покажи пейлоад сеанса» из сети (F8, ручной ввод кода).
+    ///
+    /// `None` означает отказ, и все причины отказа неотличимы снаружи
+    /// намеренно: подбирающему коды незачем знать, теплее или холоднее.
+    pub fn serve_pairing_lookup(
+        &mut self,
+        transcript: &[u8],
+        commitment: &[u8],
+    ) -> CoreResult<Option<String>> {
+        self.key_quiet()?;
+
+        let Some(offer) = self.offer.as_mut() else {
+            return Ok(None);
+        };
+        if pairing::is_expired(&offer.expires_at, Utc::now()) {
+            return Ok(None);
+        }
+        if pairing::code_commitment(transcript, &offer.code)[..] == *commitment {
+            return Ok(Some(offer.payload.clone()));
+        }
+
+        // Промах. Считаем его и, если попытки кончились, сжигаем код: он ушёл
+        // в перебор, и продолжать показывать его на экране опасно.
+        offer.attempts += 1;
+        if offer.attempts >= PAIRING_ATTEMPT_LIMIT {
+            if let Some(burned) = self.offer.take() {
+                self.retired_codes.insert(burned.code);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Принять «я сверил слова и записал тебя» от прочитавшей стороны.
+    ///
+    /// Это обратная сторона сопряжения (§2.2): здесь показывали код, здесь
+    /// ничего не вызывали, и записать соседа в доверенные надо по его же
+    /// сообщению. Подтверждения на экране эта сторона не спрашивает — команды
+    /// для этого в контракте нет. Держится всё на четырёх вещах: код уехал
+    /// внеполосно (QR), живёт три минуты, терпит [`PAIRING_ATTEMPT_LIMIT`]
+    /// промахов и сгорает после первого же успеха.
+    ///
+    /// `channel_signing` — ключ, которым собеседник ТОЛЬКО ЧТО подписал
+    /// рукопожатие. Публичный ключ соседа складывается из него и присланной
+    /// половины обмена ключами: подставить чужой ключ в этом месте нельзя,
+    /// потому что подпись канала сделана именно им.
+    pub fn accept_remote_pairing(
+        &mut self,
+        transcript: &[u8],
+        commitment: &[u8],
+        peer: &RemotePeer<'_>,
+        channel_signing: &[u8; 32],
+    ) -> CoreResult<Option<PairingResult>> {
+        let started = Instant::now();
+        let local_public = {
+            let key = self.key_quiet()?;
+            trust::keypair(self.storage.conn(), key)?.public_key()
+        };
+
+        let Some(offer) = self.offer.as_ref() else {
+            return Ok(None);
+        };
+        if pairing::is_expired(&offer.expires_at, Utc::now())
+            || pairing::code_commitment(transcript, &offer.code)[..] != *commitment
+        {
+            // Промах считается тем же счётчиком, что и у поиска: перебирать
+            // код можно и через эту дверь.
+            return self.miss_pairing_attempt();
+        }
+
+        let mut public_key = [0u8; crypto::DEVICE_PUBLIC_LEN];
+        public_key[..32].copy_from_slice(channel_signing);
+        public_key[32..].copy_from_slice(peer.agreement_public);
+
+        let this_device_id = self.device_id()?;
+        if public_key == local_public || peer.device_id == this_device_id {
+            return Ok(None);
+        }
+
+        // Слова считаются из ключей обеих сторон и сортируются, поэтому здесь
+        // выйдет ровно то же, что человек сверил на втором экране.
+        let fingerprint_words = trust::pair_fingerprint(&local_public, &public_key);
+        let device = trust::upsert_peer(
+            self.storage.conn(),
+            &trust::PairedPeer {
+                device_id: peer.device_id,
+                name: peer.name,
+                kind: peer.kind,
+                public_key: &public_key,
+                fingerprint_words: &fingerprint_words,
+            },
+            &this_device_id,
+            &now_iso(),
+        )?;
+
+        // Код сделал свою работу и больше не действует: одноразовый ключ на то
+        // и одноразовый.
+        if let Some(used) = self.offer.take() {
+            self.retired_codes.insert(used.code);
+        }
+
+        Ok(Some(PairingResult {
+            device,
+            records_transferred: 0,
+            duration_ms: started.elapsed().as_millis() as i64,
+        }))
+    }
+
+    fn miss_pairing_attempt(&mut self) -> CoreResult<Option<PairingResult>> {
+        if let Some(offer) = self.offer.as_mut() {
+            offer.attempts += 1;
+            if offer.attempts >= PAIRING_ATTEMPT_LIMIT {
+                if let Some(burned) = self.offer.take() {
+                    self.retired_codes.insert(burned.code);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Забрать сопряжение, о котором осталось доложить второй стороне.
+    ///
+    /// Забирается один раз: доставка идёт по сети и под замком её держать
+    /// нельзя.
+    pub fn take_pairing_announcement(&mut self) -> Option<PairingAnnouncement> {
+        self.announcement.take()
     }
 
     // -----------------------------------------------------------------------

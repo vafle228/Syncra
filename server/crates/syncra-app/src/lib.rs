@@ -5,11 +5,11 @@
 
 mod commands;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use commands::CoreState;
-use syncra_core::{Core, HostDevice};
+use commands::{CoreState, NodeState};
+use syncra_core::{Core, HostDevice, Node, NodeSettings};
 use tauri::Manager;
 
 /// Файл хранилища. Лежит в папке приложения — путь выбирает оболочка, потому что
@@ -21,6 +21,10 @@ const DB_FILE_NAME: &str = "syncra.db";
 /// Секунда — не точность автоблокировки, а её зернистость: сроки в настройках
 /// начинаются с минуты, и опоздать на секунду не страшно. Чаще спрашивать значит
 /// будить процесс без нужды, реже — заметно врать про выбранный срок.
+///
+/// Тот же сторож поднимает и опускает сеть (S3): отпертому хранилищу она нужна,
+/// запертому — нет. Вызвать это прямо из `unlock` нельзя, там уже взят мьютекс
+/// ядра, а сети он нужен, чтобы прочитать ключи.
 const AUTOLOCK_TICK: Duration = Duration::from_secs(1);
 
 /// Как это устройство подпишется в списке доверенных (F9).
@@ -37,8 +41,15 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let path = app.path().app_data_dir()?.join(DB_FILE_NAME);
-            let core = Core::open(&path, host_device())?;
-            app.manage(CoreState(Mutex::new(core)));
+            let core = Arc::new(Mutex::new(Core::open(&path, host_device())?));
+            app.manage(CoreState(Arc::clone(&core)));
+
+            // Сеть живёт в своих потоках и трогает ядро короткими операциями:
+            // сетевое ожидание под мьютексом ядра заморозило бы весь UI, включая
+            // кнопку «Запереть» (§5.6).
+            let (node, events) = Node::new(core, NodeSettings::default());
+            let node = Arc::new(node);
+            app.manage(NodeState(Arc::clone(&node)));
 
             // Автоблокировку исполняет ядро (§8.2), но кто-то должен его будить:
             // отдельный поток, а не таймер во фронте, потому что окно может быть
@@ -47,6 +58,16 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(AUTOLOCK_TICK);
                 commands::autolock_tick(&handle);
+                node.tick();
+            });
+
+            // События ядра — сюда. Ядро складывает их в канал и про Tauri не
+            // знает; имя события на проводе выбирает оболочка.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                for event in events {
+                    commands::forward(&handle, event);
+                }
             });
 
             Ok(())
@@ -87,7 +108,7 @@ pub fn run() {
             commands::change_master_password,
             commands::get_security_settings,
             commands::save_security_settings,
-            // Синхронизация: её пока нет, и ядро говорит об этом прямо
+            // Синхронизация (F10): обнаружение есть, обмена записями ещё нет
             commands::get_sync_status,
             commands::sync_now,
             commands::list_conflicts,

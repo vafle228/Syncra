@@ -256,6 +256,87 @@ pub fn upsert_peer(
         .ok_or_else(|| CoreError::internal("Не удалось записать устройство."))
 }
 
+// ---------------------------------------------------------------------------
+// Запросы сетевого слоя (S3)
+// ---------------------------------------------------------------------------
+
+/// Длина той половины публичного ключа, по которой устройство узнаётся в сети.
+///
+/// Корень доверия — ключ ПОДПИСИ (§2.1): им устройство доказывает, что оно
+/// это оно. Вторая половина (X25519) участвует в обмене ключами, но не в
+/// решении «пускать или нет», поэтому искать по ней нечего.
+pub const SIGNING_PUBLIC_LEN: usize = 32;
+
+/// Устройство, которому рукопожатие вправе поверить (§2.3).
+///
+/// Возвращается ТОЛЬКО для действующих: отозванное устройство отбивается здесь,
+/// а не прячется в UI. Спека честно говорит, что отзыв не даёт стопроцентной
+/// гарантии (§2.3), но то, что зависит от нас, обязано срабатывать.
+pub fn authorized_peer(
+    conn: &Connection,
+    this_device_id: &str,
+    signing_public: &[u8; SIGNING_PUBLIC_LEN],
+) -> CoreResult<Option<Device>> {
+    // Сравнение идёт в Rust, а не в SQL: устройств у человека единицы, индекс по
+    // префиксу BLOB тут не окупается, зато `substr` по BLOB в SQLite ведёт себя
+    // по-разному для текста и байтов — а ошибиться здесь значит пустить чужого.
+    let sql = format!("SELECT {COLUMNS}, public_key FROM devices WHERE revoked_at IS NULL");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        let stored: Vec<u8> = row.get("public_key")?;
+        Ok((stored, from_row(row, this_device_id)?))
+    })?;
+
+    for row in rows {
+        let (stored, device) = row?;
+        // Своё же устройство пиром не считается: соединение с самим собой —
+        // это не «сосед нашёлся», а петля мультикаста.
+        if device.is_this_device {
+            continue;
+        }
+        if stored.get(..SIGNING_PUBLIC_LEN) == Some(&signing_public[..]) {
+            return Ok(Some(device));
+        }
+    }
+    Ok(None)
+}
+
+/// Публичный ключ конкретного устройства. Нужен сопряжению: пейлоад, приехавший
+/// по сети, должен принадлежать тому же ключу, которым подписан канал.
+pub fn peer_public_key(conn: &Connection, device_id: &str) -> CoreResult<Option<Vec<u8>>> {
+    Ok(conn
+        .query_row(
+            "SELECT public_key FROM devices WHERE device_id = ?1",
+            [device_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Отметить, что устройство только что было на связи (§5.1).
+///
+/// Двигает `last_seen_at` — то самое поле, которое до S3 стояло на дате
+/// заведения и не менялось. Зовётся ТОЛЬКО после успешного рукопожатия: имя в
+/// анонсе mDNS не доказывает ничего, а ключ доказывает.
+///
+/// Отозванному устройству время не двигаем: «последний раз на связи» у него —
+/// это момент, когда оно ещё было своим.
+pub fn touch_last_seen(
+    conn: &Connection,
+    this_device_id: &str,
+    device_id: &str,
+    at: &IsoDateTime,
+) -> CoreResult<Option<Device>> {
+    let updated = conn.execute(
+        "UPDATE devices SET last_seen_at = ?2 WHERE device_id = ?1 AND revoked_at IS NULL",
+        rusqlite::params![device_id, at],
+    )?;
+    if updated == 0 {
+        return Ok(None);
+    }
+    find(conn, this_device_id, device_id)
+}
+
 /// Сколько устройств придётся обновить после смены мастер-пароля: действующие,
 /// кроме своего. Отозванным обновление не поедет — им вообще больше ничего не
 /// поедет (§2.3).

@@ -7,7 +7,9 @@
 mod common;
 
 use serde_json::{json, Value};
-use syncra_core::{GeneratorProfile, SecuritySettings};
+use syncra_core::{
+    DeviceKind, GeneratorProfile, PeerFound, SecuritySettings, SyncPhase, SyncStatus,
+};
 
 fn json_of<T: serde::Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("сериализация")
@@ -193,4 +195,78 @@ fn a_pairing_handshake_and_its_result_look_like_the_contract() {
     assert_eq!(keys, ["device", "duration_ms", "records_transferred"]);
     assert_eq!(result["device"]["is_this_device"], json!(false));
     assert_eq!(result["records_transferred"], json!(0));
+}
+
+#[test]
+fn a_sync_status_looks_like_the_contract() {
+    // `SyncStatus` фронт не склеивает по кусочкам: событие `sync_status` несёт
+    // ПОЛНЫЙ статус, и `useSyncStore` заменяет им состояние целиком
+    // (`contract.ts:1290`). Значит, набор ключей — часть договора.
+    let wire = json_of(&SyncStatus::idle());
+
+    let mut keys: Vec<&str> = wire
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "last_sync_at",
+            "message",
+            "peer_name",
+            "peers_online",
+            "pending_records",
+            "phase",
+        ]
+    );
+
+    // Счётчика конфликтов здесь намеренно нет: он приходит из `list_conflicts`,
+    // и две правды об одном числе рано или поздно разъедутся.
+    assert!(wire.get("conflicts").is_none());
+
+    assert_eq!(wire["phase"], json!("idle"));
+    assert_eq!(wire["peers_online"], json!(0));
+    assert_eq!(wire["peer_name"], json!(null));
+    assert_eq!(wire["pending_records"], json!([]));
+    assert_eq!(wire["last_sync_at"], json!(null));
+    assert_eq!(wire["message"], json!(null));
+}
+
+#[test]
+fn every_sync_phase_is_spelled_the_way_the_contract_spells_it() {
+    for (phase, name) in [
+        (SyncPhase::Idle, "idle"),
+        (SyncPhase::Searching, "searching"),
+        (SyncPhase::Syncing, "syncing"),
+        (SyncPhase::Error, "error"),
+    ] {
+        let status = SyncStatus {
+            phase,
+            ..SyncStatus::idle()
+        };
+        assert_eq!(json_of(&status)["phase"], json!(name));
+    }
+}
+
+#[test]
+fn a_found_peer_looks_like_the_contract() {
+    let wire = json_of(&PeerFound {
+        device_id: "device-2".to_owned(),
+        name: "Телефон".to_owned(),
+        kind: DeviceKind::Mobile,
+        found_at: "2026-08-05T21:14:03.000Z".to_owned(),
+    });
+
+    let mut keys: Vec<&str> = wire
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["device_id", "found_at", "kind", "name"]);
+    assert_eq!(wire["kind"], json!("mobile"));
 }

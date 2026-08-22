@@ -13,13 +13,15 @@
 //! паролей, настройки безопасности с автоблокировкой, смену мастер-пароля,
 //! идентичность устройства с таблицей доверия (`list_devices`, `revoke_device`)
 //! и сопряжение по QR (`get_pairing_payload`, `submit_paired_key`,
-//! `confirm_pairing`, `cancel_pairing`). Синхронизация, конфликты,
+//! `confirm_pairing`, `cancel_pairing`), а также обнаружение соседей в локальной
+//! сети и защищённый транспорт между ними (`net`). Обмен записями, конфликты,
 //! импорт/экспорт, TOTP и энролмент PIN — следующие шаги.
 
 pub mod crypto;
 pub mod error;
 pub mod generator;
 pub mod model;
+pub mod net;
 pub mod pairing;
 pub mod security;
 pub mod session;
@@ -30,8 +32,10 @@ pub use error::{CoreError, CoreErrorCode, CoreResult};
 pub use generator::{GeneratedPasswords, GeneratorProfile};
 pub use model::{
     ChangeMasterPasswordResponse, Device, DeviceKind, HostDevice, InitVaultResponse,
-    PairingHandshake, PairingOffer, PairingResult, PinStatus, QrMatrix, RecordDraft, RecordMeta,
-    RecordPatch, RecordSecrets, SecretField, UnlockResponse, Vault, VaultPatch, VaultStatus,
+    PairingHandshake, PairingOffer, PairingResult, PeerFound, PinStatus, QrMatrix, RecordDraft,
+    RecordMeta, RecordPatch, RecordSecrets, SecretField, SyncPhase, SyncStatus, UnlockResponse,
+    Vault, VaultPatch, VaultStatus,
 };
+pub use net::{CoreEvent, Node, NodeSettings};
 pub use security::{SecuritySettings, SecuritySettingsPatch};
 pub use session::Core;
