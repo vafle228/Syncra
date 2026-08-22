@@ -14,6 +14,14 @@ name = "syncra_app_lib"
 # используется rlib. Оставлено сразу, чтобы не переразбивать крейт потом.
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Без этой фичи `tauri::generate_context!` считает сборку отладочной (в
+# `tauri-macros`: `dev = cfg!(not(feature = "custom-protocol"))`), не встраивает
+# `frontendDist` в бинарник и открывает окно на `devUrl` — то есть на пустом
+# `localhost:5173`, если рядом не крутится Vite. Фичу включает `cargo tauri
+# build`; при обычном `cargo build` её нужно передать руками.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
