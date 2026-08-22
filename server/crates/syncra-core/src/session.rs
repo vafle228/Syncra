@@ -9,17 +9,22 @@
 //! Здесь нет ни Tauri, ни событий: события эмитит оболочка по результату вызова.
 
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+use chrono::Utc;
 
 use crate::crypto::{self, KdfParams, VaultKey};
 use crate::error::{CoreError, CoreResult};
 use crate::generator::{self, GeneratedPasswords, GeneratorProfile, Rules};
 use crate::model::{
     now_iso, ChangeMasterPasswordResponse, Device, HostDevice, InitVaultResponse, IsoDateTime,
-    PinStatus, RecordDraft, RecordMeta, RecordPatch, RecordSecrets, UnlockResponse, Vault,
-    VaultPatch, VaultStatus, MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
+    PairingHandshake, PairingOffer, PairingResult, PinStatus, RecordDraft, RecordMeta, RecordPatch,
+    RecordSecrets, UnlockResponse, Vault, VaultPatch, VaultStatus, MASTER_PASSWORD_MIN_LENGTH,
+    PIN_LENGTH,
 };
+use crate::pairing;
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
 use crate::storage::{records, schema, vaults, Storage};
 use crate::trust;
@@ -44,6 +49,38 @@ pub struct Core {
     /// Копия `autolock_ms` из настроек. Сторож в оболочке спрашивает про срок
     /// раз в секунду, и ходить за ним в БД каждый раз незачем.
     autolock_ms: i64,
+    /// Код, который это устройство показывает прямо сейчас (F8, §2.2).
+    offer: Option<OfferState>,
+    /// Коды, которые оно показывало раньше: по ним отвечаем «истёк», а не
+    /// «незнакомый». Человек читает со второго экрана устаревший QR чаще, чем
+    /// ошибается символом.
+    retired_codes: HashSet<String>,
+    /// Прочитанные пейлоады, ждущие, пока человек сверит слова.
+    handshakes: HashMap<String, PendingPeer>,
+}
+
+/// Показанный код и всё, что за ним стоит. В БД не попадает: код даёт право
+/// забрать копию хранилища, и переживать замок он не должен.
+struct OfferState {
+    code: String,
+    expires_at: IsoDateTime,
+    /// Строка кода целиком. Наружу, в IPC, она не уходит (там матрица), но
+    /// внутри процесса живёт: код переносят не только камерой.
+    payload: String,
+    /// Приватная половина одноразового ключа сеанса. В этом шаге ею никто не
+    /// пользуется — защищённый канал строится в S3, — но существовать она
+    /// обязана: публичная половина уже уехала в пейлоаде, и ключ, которого ни у
+    /// кого нет, был бы обманом формата.
+    #[allow(dead_code)]
+    session_secret: x25519_dalek::StaticSecret,
+}
+
+/// Прочитанное устройство, ждущее подтверждения человеком. В `devices` попадёт
+/// только после сверки слов — иначе сверять было бы уже нечего.
+struct PendingPeer {
+    body: pairing::PairingBody,
+    fingerprint_words: Vec<String>,
+    expires_at: IsoDateTime,
 }
 
 impl Core {
@@ -63,6 +100,9 @@ impl Core {
             unlocked_at: None,
             last_activity: Cell::new(Instant::now()),
             autolock_ms: SecuritySettings::default().autolock_ms,
+            offer: None,
+            retired_codes: HashSet::new(),
+            handshakes: HashMap::new(),
         }
     }
 
@@ -306,9 +346,15 @@ impl Core {
 
     /// Запереть. Ключ зануляется вместе с `VaultKey`, расшифрованных данных ядро
     /// между вызовами не держит — держать нечего.
+    ///
+    /// Заодно забывается всё сопряжение: показанный код — это право забрать
+    /// копию хранилища, и переживать замок оно не должно (`mock/index.ts:615`).
     pub fn lock(&mut self) {
         self.key = None;
         self.unlocked_at = None;
+        self.offer = None;
+        self.retired_codes.clear();
+        self.handshakes.clear();
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -465,6 +511,194 @@ impl Core {
     pub fn revoke_device(&self, device_id: &str) -> CoreResult<Device> {
         self.key()?;
         trust::revoke(self.storage.conn(), &self.device_id()?, device_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Сопряжение (F8, §2.2)
+    // -----------------------------------------------------------------------
+
+    /// Показать код второму устройству.
+    ///
+    /// За замком: код даёт право забрать копию хранилища, а на запертом
+    /// хранилище такого права нет ни у кого.
+    ///
+    /// Каждый вызов — НОВЫЙ код: одноразовый ключ на то и одноразовый. Прежний
+    /// перестаёт годиться сразу, а не доживает свой срок.
+    pub fn get_pairing_payload(&mut self) -> CoreResult<PairingOffer> {
+        let keypair = {
+            let key = self.key()?;
+            trust::keypair(self.storage.conn(), key)?
+        };
+        let device_id = self.device_id()?;
+
+        if let Some(previous) = self.offer.take() {
+            self.retired_codes.insert(previous.code);
+        }
+
+        let code = pairing::manual_code()?;
+        let session_secret = pairing::session_secret()?;
+        let body = pairing::PairingBody {
+            device_id,
+            name: self.host.name.clone(),
+            kind: self.host.kind,
+            public_key: keypair.public_key(),
+            session_public: pairing::session_public(&session_secret),
+        };
+
+        let payload = pairing::encode(&body, &code, &keypair.signing_key())?;
+        let qr = pairing::qr_matrix(&payload)?;
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let expires_at = pairing::expires_at(Utc::now());
+        self.offer = Some(OfferState {
+            code: code.clone(),
+            expires_at: expires_at.clone(),
+            payload,
+            session_secret,
+        });
+
+        Ok(PairingOffer {
+            session_id,
+            qr,
+            manual_code: code,
+            expires_at,
+        })
+    }
+
+    /// Строка кода, который это устройство показывает прямо сейчас.
+    ///
+    /// Существует отдельно от [`Core::get_pairing_payload`] намеренно: через
+    /// границу IPC уходит только матрица QR — в пейлоаде ключи, и JS-строкой им
+    /// существовать незачем (`contract.ts:636`). Команды под этот метод нет и не
+    /// будет; он для тех, кто переносит код внутри процесса, минуя камеру: так
+    /// его читают тесты, и так же его прочитает «сохранить код в файл» (F12),
+    /// который экран чтения кода уже предлагает открыть.
+    pub fn shown_pairing_payload(&self) -> Option<&str> {
+        self.offer.as_ref().map(|offer| offer.payload.as_str())
+    }
+
+    /// Отдать ядру то, что прочитали со второго устройства.
+    ///
+    /// Разбирает ядро: UI не знает формата и не отличает полный пейлоад из QR от
+    /// шести символов, набранных руками (`contract.ts:704`). Устройство после
+    /// этого вызова ещё НЕ доверенное — сначала человек сверяет слова.
+    pub fn submit_paired_key(&mut self, payload: &str) -> CoreResult<PairingHandshake> {
+        let local_public = {
+            let key = self.key()?;
+            trust::keypair(self.storage.conn(), key)?.public_key()
+        };
+        let this_device_id = self.device_id()?;
+        let now = Utc::now();
+
+        let parsed = pairing::parse(payload)?;
+        let code = parsed.code().to_owned();
+
+        // Свой же код, который уже не действует, — самая частая ошибка: человек
+        // читает со второго экрана устаревший QR.
+        let own_offer = self.offer.as_ref().filter(|offer| offer.code == code);
+        if self.retired_codes.contains(&code)
+            || own_offer.is_some_and(|offer| pairing::is_expired(&offer.expires_at, now))
+        {
+            return Err(CoreError::pairing_expired(
+                "Этот код больше не действует. Покажите новый на втором устройстве.",
+            ));
+        }
+        if own_offer.is_some() {
+            return Err(CoreError::validation(
+                "Это код этого же устройства. Нужен код второго — с его экрана.",
+            ));
+        }
+
+        let body = match parsed {
+            // ГРАНИЦА ШАГА. Шесть символов не несут ключа и нести не могут: это
+            // имя сеанса, по которому устройство ищут в локальной сети, а поиска
+            // ещё нет (S3). Ответ останется правдой и после него — рядом с этим
+            // кодом никого не нашлось; давать его тогда будет сам поиск.
+            pairing::Parsed::Code(_) => {
+                return Err(CoreError::not_found(
+                    "Устройство с этим кодом не найдено рядом. Отсканируйте QR-код \
+                     со второго устройства или откройте файл с кодом.",
+                ))
+            }
+            pairing::Parsed::Payload { body, .. } => body,
+        };
+
+        // Свой собственный пейлоад с чужого экрана: код другой, а ключ наш.
+        if body.public_key == local_public || body.device_id == this_device_id {
+            return Err(CoreError::validation(
+                "Это код этого же устройства. Нужен код второго — с его экрана.",
+            ));
+        }
+
+        // Слова — из ключей ОБЕИХ сторон: у человека посередине ключи другие, а
+        // значит и слова другие. Возвращаются ДО записи в `devices`.
+        let fingerprint_words = trust::pair_fingerprint(&local_public, &body.public_key);
+        let handshake = PairingHandshake {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            peer_name: body.name.clone(),
+            peer_kind: body.kind,
+            fingerprint_words: fingerprint_words.clone(),
+            expires_at: pairing::expires_at(now),
+        };
+
+        self.handshakes.insert(
+            handshake.session_id.clone(),
+            PendingPeer {
+                body,
+                fingerprint_words,
+                expires_at: handshake.expires_at.clone(),
+            },
+        );
+        Ok(handshake)
+    }
+
+    /// Человек сверил слова на двух экранах (§2.2) — записываем устройство.
+    pub fn confirm_pairing(&mut self, session_id: &str) -> CoreResult<PairingResult> {
+        self.key()?;
+        let started = Instant::now();
+
+        // Сеанс забирается до проверки срока: истёкший сеанс закрыт в обе
+        // стороны, и предлагать подтвердить его второй раз незачем.
+        let pending = self
+            .handshakes
+            .remove(session_id)
+            .ok_or_else(|| CoreError::not_found("Сеанс сопряжения не найден."))?;
+        if pairing::is_expired(&pending.expires_at, Utc::now()) {
+            return Err(CoreError::pairing_expired(
+                "Сеанс сопряжения истёк. Начните заново.",
+            ));
+        }
+
+        let this_device_id = self.device_id()?;
+        let device = trust::upsert_peer(
+            self.storage.conn(),
+            &trust::PairedPeer {
+                device_id: &pending.body.device_id,
+                name: &pending.body.name,
+                kind: pending.body.kind,
+                public_key: &pending.body.public_key,
+                fingerprint_words: &pending.fingerprint_words,
+            },
+            &this_device_id,
+            &now_iso(),
+        )?;
+
+        Ok(PairingResult {
+            device,
+            // ГРАНИЦА ШАГА: переносить записи некуда, пока нет сети (S3, S4).
+            // Ноль здесь — правда о состоянии, а не заглушка.
+            records_transferred: 0,
+            duration_ms: started.elapsed().as_millis() as i64,
+        })
+    }
+
+    /// Слова не совпали или передумали: сеанс закрывается, ключ не запоминается.
+    ///
+    /// Идемпотентно — по «Отмене» можно нажать дважды.
+    pub fn cancel_pairing(&mut self, session_id: &str) -> CoreResult<()> {
+        self.key()?;
+        self.handshakes.remove(session_id);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

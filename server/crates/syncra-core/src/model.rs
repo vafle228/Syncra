@@ -15,6 +15,7 @@ use crate::error::{CoreError, CoreResult};
 pub type RecordId = String;
 pub type VaultId = String;
 pub type DeviceId = String;
+pub type PairingSessionId = String;
 /// ISO-8601 UTC, напр. `2026-08-05T21:14:03.000Z`.
 pub type IsoDateTime = String;
 
@@ -250,6 +251,67 @@ impl HostDevice {
     pub fn desktop(name: &str) -> Self {
         Self::new(name, DeviceKind::Desktop)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Сопряжение (F8, §2.2)
+// ---------------------------------------------------------------------------
+
+/// Готовая матрица QR-кода (`QrMatrix`, `contract.ts:643`).
+///
+/// Кодирует ЯДРО, а не UI: в пейлоаде лежит одноразовый ключ сеанса, и чем
+/// меньше он существует в виде JS-строки, тем лучше. Наружу уходит картинка
+/// кода, а не то, что в нём написано.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QrMatrix {
+    /// Сторона матрицы в модулях. Полей вокруг нет — их рисует UI.
+    pub size: usize,
+    /// `size` строк по `size` символов: `'1'` — тёмный модуль, `'0'` — светлый.
+    pub rows: Vec<String>,
+}
+
+/// Код, который устройство показывает второму (`PairingOffer`, `contract.ts:656`).
+///
+/// Строки пейлоада здесь нет и не будет: она осталась внутри `qr`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PairingOffer {
+    pub session_id: PairingSessionId,
+    pub qr: QrMatrix,
+    /// Тот же сеанс шестью символами — для случая, когда камеры нет.
+    /// Канонический вид, без разделителей: их для читаемости расставляет UI.
+    pub manual_code: String,
+    pub expires_at: IsoDateTime,
+}
+
+/// Что второе устройство узнало, прочитав код (`PairingHandshake`,
+/// `contract.ts:676`). Сопряжение на этом ещё НЕ состоялось.
+///
+/// `fingerprint_words` — та самая защита от MITM (§2.2): слова считаются из
+/// ключей обеих сторон и должны совпасть на двух экранах. Поэтому ядро
+/// возвращает их ДО того, как запишет устройство в доверенные, а не после.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PairingHandshake {
+    pub session_id: PairingSessionId,
+    pub peer_name: String,
+    pub peer_kind: DeviceKind,
+    pub fingerprint_words: Vec<String>,
+    /// Докуда действителен сеанс: сверять отпечаток вечно нельзя.
+    pub expires_at: IsoDateTime,
+}
+
+/// Чем закончилось сопряжение (`PairingResult`, `contract.ts:686`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PairingResult {
+    pub device: Device,
+    /// Сколько записей уехало на новое устройство.
+    ///
+    /// **Граница шага:** сети ещё нет (S3), и ноль здесь — правда, а не
+    /// заглушка. Записи локальных секций не уедут и потом: выключенная
+    /// синхронизация означает «никуда», в том числе на только что сопряжённое
+    /// устройство (§4.2).
+    pub records_transferred: i64,
+    /// Сколько занял перенос. Считает ядро — оно его и делало.
+    pub duration_ms: i64,
 }
 
 // ---------------------------------------------------------------------------

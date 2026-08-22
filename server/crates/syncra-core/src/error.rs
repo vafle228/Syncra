@@ -98,6 +98,13 @@ impl CoreError {
         Self::new(CoreErrorCode::Validation, message)
     }
 
+    /// Код или сеанс сопряжения отжил своё (F8, §2.2). Отдельный код, а не
+    /// `VALIDATION`: экран сопряжения по нему предлагает показать новый код, а
+    /// не проверить набранное (`usePairing.ts:135`).
+    pub fn pairing_expired(message: impl Into<String>) -> Self {
+        Self::new(CoreErrorCode::PairingExpired, message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(CoreErrorCode::Internal, message)
     }

@@ -127,3 +127,70 @@ fn a_device_looks_like_the_contract() {
     assert_eq!(device["revoked_at"], Value::Null);
     assert_eq!(device["fingerprint_words"].as_array().unwrap().len(), 4);
 }
+
+#[test]
+fn a_pairing_offer_looks_like_the_contract() {
+    let mut core = common::unlocked();
+    let offer = json_of(&core.get_pairing_payload().unwrap());
+    let offer = offer.as_object().expect("объект кода");
+
+    let mut keys: Vec<&str> = offer.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    // Тот же набор сверяет фронт — `core/__tests__/pairing.spec.ts`. Строки
+    // пейлоада среди них нет: в нём ключи, и наружу уходит только картинка.
+    assert_eq!(keys, ["expires_at", "manual_code", "qr", "session_id"]);
+
+    let size = offer["qr"]["size"].as_u64().expect("сторона матрицы");
+    let rows = offer["qr"]["rows"].as_array().expect("строки матрицы");
+    assert_eq!(rows.len() as u64, size);
+    assert!(rows
+        .iter()
+        .all(|row| row.as_str().expect("строка").len() as u64 == size));
+}
+
+#[test]
+fn a_pairing_handshake_and_its_result_look_like_the_contract() {
+    let mut core = common::unlocked();
+    let mut peer = syncra_core::Core::in_memory(syncra_core::HostDevice::new(
+        "Телефон",
+        syncra_core::DeviceKind::Mobile,
+    ))
+    .unwrap();
+    peer.init_vault("мастер-пароль-2").unwrap();
+    peer.get_pairing_payload().unwrap();
+    let payload = peer.shown_pairing_payload().unwrap().to_owned();
+
+    let handshake = core.submit_paired_key(&payload).unwrap();
+    let wire = json_of(&handshake);
+    let mut keys: Vec<&str> = wire
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "expires_at",
+            "fingerprint_words",
+            "peer_kind",
+            "peer_name",
+            "session_id",
+        ]
+    );
+    assert_eq!(wire["peer_kind"], json!("mobile"));
+    assert_eq!(wire["fingerprint_words"].as_array().unwrap().len(), 4);
+
+    let result = json_of(&core.confirm_pairing(&handshake.session_id).unwrap());
+    let mut keys: Vec<&str> = result
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["device", "duration_ms", "records_transferred"]);
+    assert_eq!(result["device"]["is_this_device"], json!(false));
+    assert_eq!(result["records_transferred"], json!(0));
+}

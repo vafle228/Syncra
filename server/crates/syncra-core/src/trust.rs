@@ -195,6 +195,67 @@ pub fn revoke(conn: &Connection, this_device_id: &str, device_id: &str) -> CoreR
     })
 }
 
+/// Второе устройство в том виде, в каком его записывает сопряжение (§2.2).
+///
+/// Публичный ключ приезжает в пейлоаде QR — по внеполосному каналу, а не по
+/// сети: именно поэтому ему можно верить (§2.1).
+pub struct PairedPeer<'a> {
+    pub device_id: &'a str,
+    pub name: &'a str,
+    pub kind: DeviceKind,
+    pub public_key: &'a [u8],
+    /// Слова, которые человек только что сверил на двух экранах.
+    pub fingerprint_words: &'a [String],
+}
+
+/// Записать сопряжённое устройство в доверенные (F8).
+///
+/// Повторное сопряжение того же устройства **снимает отзыв**: вернуть
+/// отозванный ноутбук можно только новым сопряжением, и раз оно состоялось —
+/// человек подтвердил его, сверив слова. Ключ при этом перезаписывается: у
+/// заново сопряжённого устройства он может быть другим (хранилище пересоздали),
+/// и держаться за старый значило бы не пускать того, кого только что впустили.
+pub fn upsert_peer(
+    conn: &Connection,
+    peer: &PairedPeer<'_>,
+    this_device_id: &str,
+    at: &IsoDateTime,
+) -> CoreResult<Device> {
+    if peer.device_id == this_device_id {
+        // Себя в доверенные вторым устройством не заводят: строка про себя
+        // заводится вместе с хранилищем и переписывать её сопряжению нечем.
+        return Err(CoreError::validation(
+            "Это код этого же устройства. Нужен код второго — с его экрана.",
+        ));
+    }
+
+    conn.execute(
+        "INSERT INTO devices
+           (device_id, name, kind, public_key, fingerprint_words,
+            paired_at, last_seen_at, revoked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, NULL)
+         ON CONFLICT(device_id) DO UPDATE SET
+           name              = excluded.name,
+           kind              = excluded.kind,
+           public_key        = excluded.public_key,
+           fingerprint_words = excluded.fingerprint_words,
+           paired_at         = excluded.paired_at,
+           last_seen_at      = excluded.last_seen_at,
+           revoked_at        = NULL",
+        rusqlite::params![
+            peer.device_id,
+            peer.name,
+            peer.kind.as_str(),
+            peer.public_key,
+            serde_json::to_string(peer.fingerprint_words)?,
+            at,
+        ],
+    )?;
+
+    find(conn, this_device_id, peer.device_id)?
+        .ok_or_else(|| CoreError::internal("Не удалось записать устройство."))
+}
+
 /// Сколько устройств придётся обновить после смены мастер-пароля: действующие,
 /// кроме своего. Отозванным обновление не поедет — им вообще больше ничего не
 /// поедет (§2.3).
@@ -212,10 +273,10 @@ pub fn active_peer_count(conn: &Connection, this_device_id: &str) -> CoreResult<
 
 /// Слова отпечатка — детерминированно из переданных ключей.
 ///
-/// В S1 зовётся с одним ключом: это «как называется вот это устройство».
-/// В сопряжении (S2) сюда пойдут публичные ключи **обеих** сторон в каноническом
-/// порядке — и тогда совпадение слов на двух экранах и есть защита от MITM: у
-/// человека посередине ключи другие, а значит и слова другие.
+/// С одним ключом это «как называется вот это устройство»; с двумя, через
+/// [`pair_fingerprint`], — отпечаток сеанса сопряжения. Совпадение слов на двух
+/// экранах и есть защита от MITM: у человека посередине ключи другие, а значит
+/// и слова другие.
 ///
 /// Куски хешируются с длиной впереди, чтобы `("ab", "c")` и `("a", "bc")` не
 /// давали один отпечаток. Словарь — тот же, что у генератора: заводить второй
@@ -238,6 +299,20 @@ pub fn fingerprint_words(parts: &[&[u8]]) -> Vec<String> {
             words[index % words.len()].to_owned()
         })
         .collect()
+}
+
+/// Отпечаток СЕАНСА сопряжения: слова из публичных ключей обеих сторон (§2.2).
+///
+/// Ключи сортируются, потому что порядок сторон не определён: одно устройство
+/// читает код другого, и кто из них «первый» — вопрос без ответа. Без сортировки
+/// два экрана показали бы разные слова, и сверять было бы нечего.
+pub fn pair_fingerprint(local_public: &[u8], remote_public: &[u8]) -> Vec<String> {
+    let (first, second) = if local_public <= remote_public {
+        (local_public, remote_public)
+    } else {
+        (remote_public, local_public)
+    };
+    fingerprint_words(&[first, second])
 }
 
 #[cfg(test)]

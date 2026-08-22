@@ -10,15 +10,17 @@
 //!
 //! **Что это ядро умеет:** жизненный цикл хранилища (`get_vault_status`,
 //! `init_vault`, `unlock`, `lock`), CRUD записей и CRUD секций, генератор
-//! паролей, настройки безопасности с автоблокировкой, смену мастер-пароля и
-//! идентичность устройства с таблицей доверия (`list_devices`, `revoke_device`).
-//! Сопряжение, синхронизация, конфликты, импорт/экспорт, TOTP и энролмент
-//! PIN — следующие шаги.
+//! паролей, настройки безопасности с автоблокировкой, смену мастер-пароля,
+//! идентичность устройства с таблицей доверия (`list_devices`, `revoke_device`)
+//! и сопряжение по QR (`get_pairing_payload`, `submit_paired_key`,
+//! `confirm_pairing`, `cancel_pairing`). Синхронизация, конфликты,
+//! импорт/экспорт, TOTP и энролмент PIN — следующие шаги.
 
 pub mod crypto;
 pub mod error;
 pub mod generator;
 pub mod model;
+pub mod pairing;
 pub mod security;
 pub mod session;
 pub mod storage;
@@ -27,9 +29,9 @@ pub mod trust;
 pub use error::{CoreError, CoreErrorCode, CoreResult};
 pub use generator::{GeneratedPasswords, GeneratorProfile};
 pub use model::{
-    ChangeMasterPasswordResponse, Device, DeviceKind, HostDevice, InitVaultResponse, PinStatus,
-    RecordDraft, RecordMeta, RecordPatch, RecordSecrets, SecretField, UnlockResponse, Vault,
-    VaultPatch, VaultStatus,
+    ChangeMasterPasswordResponse, Device, DeviceKind, HostDevice, InitVaultResponse,
+    PairingHandshake, PairingOffer, PairingResult, PinStatus, QrMatrix, RecordDraft, RecordMeta,
+    RecordPatch, RecordSecrets, SecretField, UnlockResponse, Vault, VaultPatch, VaultStatus,
 };
 pub use security::{SecuritySettings, SecuritySettingsPatch};
 pub use session::Core;

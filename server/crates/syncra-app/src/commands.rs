@@ -12,8 +12,9 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use syncra_core::{
     ChangeMasterPasswordResponse, Core, CoreError, Device, GeneratedPasswords, GeneratorProfile,
-    InitVaultResponse, RecordDraft, RecordMeta, RecordPatch, RecordSecrets, SecuritySettings,
-    SecuritySettingsPatch, UnlockResponse, Vault, VaultPatch, VaultStatus,
+    InitVaultResponse, PairingHandshake, PairingOffer, PairingResult, RecordDraft, RecordMeta,
+    RecordPatch, RecordSecrets, SecuritySettings, SecuritySettingsPatch, UnlockResponse, Vault,
+    VaultPatch, VaultStatus,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -126,6 +127,18 @@ pub struct VaultIdRequest {
 #[derive(Deserialize)]
 pub struct DeviceIdRequest {
     device_id: String,
+}
+
+/// Прочитанное со второго устройства — ОДНОЙ строкой. UI не знает формата и не
+/// отличает полный пейлоад из QR от кода, набранного руками: разбирает ядро.
+#[derive(Deserialize)]
+pub struct SubmitPairedKeyRequest {
+    payload: String,
+}
+
+#[derive(Deserialize)]
+pub struct PairingSessionRequest {
+    session_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +395,43 @@ pub fn revoke_device(request: DeviceIdRequest, state: State<'_, CoreState>) -> A
 }
 
 // ---------------------------------------------------------------------------
+// Сопряжение (F8, §2.2)
+// ---------------------------------------------------------------------------
+
+/// Код для второго устройства. Строки пейлоада в ответе нет — только картинка:
+/// одноразовому ключу сеанса незачем существовать ещё и JS-строкой.
+#[tauri::command]
+pub fn get_pairing_payload(state: State<'_, CoreState>) -> Answer<PairingOffer> {
+    core!(state).get_pairing_payload()
+}
+
+#[tauri::command]
+pub fn submit_paired_key(
+    request: SubmitPairedKeyRequest,
+    state: State<'_, CoreState>,
+) -> Answer<PairingHandshake> {
+    core!(state).submit_paired_key(&request.payload)
+}
+
+/// Человек сверил слова на двух экранах и подтвердил (§2.2).
+///
+/// События `device_paired` отсюда НЕ шлётся: его получает та сторона, которая
+/// показывала код и ничего не вызывала. Здесь результат и так возвращается
+/// ответом на команду, а второе уведомление было бы эхом.
+#[tauri::command]
+pub fn confirm_pairing(
+    request: PairingSessionRequest,
+    state: State<'_, CoreState>,
+) -> Answer<PairingResult> {
+    core!(state).confirm_pairing(&request.session_id)
+}
+
+#[tauri::command]
+pub fn cancel_pairing(request: PairingSessionRequest, state: State<'_, CoreState>) -> Answer<()> {
+    core!(state).cancel_pairing(&request.session_id)
+}
+
+// ---------------------------------------------------------------------------
 // Настройки безопасности (F13)
 // ---------------------------------------------------------------------------
 
@@ -466,11 +516,6 @@ macro_rules! not_ready {
 not_ready![
     // Коды подтверждения (фаза 2)
     get_totp_code,
-    // Сопряжение (F8)
-    get_pairing_payload,
-    submit_paired_key,
-    confirm_pairing,
-    cancel_pairing,
     // Конфликты (F11)
     resolve_conflict,
     get_conflict_secret,

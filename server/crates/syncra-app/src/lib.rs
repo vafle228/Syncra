@@ -74,6 +74,11 @@ pub fn run() {
             commands::get_generator_profile,
             commands::save_generator_profile,
             commands::generate_passwords,
+            // Сопряжение (F8)
+            commands::get_pairing_payload,
+            commands::submit_paired_key,
+            commands::confirm_pairing,
+            commands::cancel_pairing,
             // Доверенные устройства (F9)
             commands::list_devices,
             commands::revoke_device,
@@ -88,10 +93,6 @@ pub fn run() {
             commands::list_conflicts,
             // Следующие шаги — зарегистрированы ради внятного отказа
             commands::get_totp_code,
-            commands::get_pairing_payload,
-            commands::submit_paired_key,
-            commands::confirm_pairing,
-            commands::cancel_pairing,
             commands::resolve_conflict,
             commands::get_conflict_secret,
             commands::export_csv,
