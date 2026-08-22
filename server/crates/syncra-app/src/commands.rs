@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use syncra_core::{
-    ChangeMasterPasswordResponse, Core, CoreError, GeneratedPasswords, GeneratorProfile,
+    ChangeMasterPasswordResponse, Core, CoreError, Device, GeneratedPasswords, GeneratorProfile,
     InitVaultResponse, RecordDraft, RecordMeta, RecordPatch, RecordSecrets, SecuritySettings,
     SecuritySettingsPatch, UnlockResponse, Vault, VaultPatch, VaultStatus,
 };
@@ -121,6 +121,11 @@ pub struct SetVaultSyncRequest {
 #[derive(Deserialize)]
 pub struct VaultIdRequest {
     vault_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeviceIdRequest {
+    device_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +366,22 @@ pub fn generate_passwords(
 }
 
 // ---------------------------------------------------------------------------
+// Доверенные устройства (F9, §2.3)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn list_devices(state: State<'_, CoreState>) -> Answer<Vec<Device>> {
+    core!(state).list_devices()
+}
+
+/// Отзыв доступа. Идемпотентен, себя отозвать нельзя — правила в ядре
+/// (`syncra_core::trust`), здесь только вызов.
+#[tauri::command]
+pub fn revoke_device(request: DeviceIdRequest, state: State<'_, CoreState>) -> Answer<Device> {
+    core!(state).revoke_device(&request.device_id)
+}
+
+// ---------------------------------------------------------------------------
 // Настройки безопасности (F13)
 // ---------------------------------------------------------------------------
 
@@ -445,13 +466,11 @@ macro_rules! not_ready {
 not_ready![
     // Коды подтверждения (фаза 2)
     get_totp_code,
-    // Сопряжение и доверие (F8, F9)
+    // Сопряжение (F8)
     get_pairing_payload,
     submit_paired_key,
     confirm_pairing,
     cancel_pairing,
-    list_devices,
-    revoke_device,
     // Конфликты (F11)
     resolve_conflict,
     get_conflict_secret,

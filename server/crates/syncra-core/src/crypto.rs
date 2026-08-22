@@ -153,6 +153,97 @@ pub fn verify(key: &VaultKey, verifier_blob: &[u8]) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Пара ключей устройства (§2.1)
+// ---------------------------------------------------------------------------
+
+/// Длина секрета устройства: `ed25519_seed(32) || x25519_secret(32)`.
+///
+/// Двух ключей два независимых сида, а не один, пересчитанный в другой:
+/// подпись и обмен ключами — разные задачи, и общий секрет между ними связал бы
+/// стойкость одного со стойкостью другого без всякой на то нужды.
+pub const DEVICE_SECRET_LEN: usize = 64;
+/// Длина публичной половины: `ed25519_pub(32) || x25519_pub(32)`.
+///
+/// Корень доверия — первая половина (подпись, §2.1); вторая едет вместе с ней,
+/// потому что защищённый канал (§3.2) строится на ней же и спрашивать её у
+/// устройства повторно, уже по сети, значило бы спрашивать у непроверенного.
+pub const DEVICE_PUBLIC_LEN: usize = 64;
+
+/// Своё пространство AAD: секрет устройства нельзя подставить на место пароля
+/// записи и наоборот — ровно та же защита, что даёт [`field_aad`] полям.
+const DEVICE_SECRET_AAD: &[u8] = b"syncra:device:secret";
+
+const HALF: usize = DEVICE_SECRET_LEN / 2;
+
+/// Долговременная пара ключей устройства (§2.1).
+///
+/// В файле лежит запечатанной ключом хранилища: украденный файл не даёт права
+/// представляться этим устройством, пока не подобран мастер-пароль.
+pub struct DeviceKeypair {
+    secret: Zeroizing<[u8; DEVICE_SECRET_LEN]>,
+}
+
+impl DeviceKeypair {
+    /// Новая пара. Случайность — у ОС, как и везде в этом модуле.
+    pub fn generate() -> CoreResult<Self> {
+        let mut secret: Zeroizing<[u8; DEVICE_SECRET_LEN]> =
+            Zeroizing::new([0u8; DEVICE_SECRET_LEN]);
+        secret[..HALF].copy_from_slice(&random_bytes::<HALF>()?);
+        secret[HALF..].copy_from_slice(&random_bytes::<HALF>()?);
+        Ok(Self { secret })
+    }
+
+    /// Запечатать для хранения в `meta`.
+    pub fn seal(&self, key: &VaultKey) -> CoreResult<Vec<u8>> {
+        seal(key, DEVICE_SECRET_AAD, &self.secret[..])
+    }
+
+    /// Распечатать из `meta`. Неверный ключ хранилища и испорченный блоб дают
+    /// одну и ту же ошибку — как и у остальных секретов.
+    pub fn open(key: &VaultKey, blob: &[u8]) -> CoreResult<Self> {
+        let plaintext = Zeroizing::new(open(key, DEVICE_SECRET_AAD, blob)?);
+        let bytes: [u8; DEVICE_SECRET_LEN] = plaintext[..]
+            .try_into()
+            .map_err(|_| CoreError::internal("Ключ устройства повреждён."))?;
+        Ok(Self {
+            secret: Zeroizing::new(bytes),
+        })
+    }
+
+    /// Публичная половина: то, что уезжает второму устройству и ложится в
+    /// `devices`. Считается из секрета каждый раз, а не хранится рядом с ним:
+    /// две записи одного и того же расходятся, одна — нет.
+    pub fn public_key(&self) -> [u8; DEVICE_PUBLIC_LEN] {
+        let mut public = [0u8; DEVICE_PUBLIC_LEN];
+        public[..HALF].copy_from_slice(self.signing_key().verifying_key().as_bytes());
+        public[HALF..]
+            .copy_from_slice(x25519_dalek::PublicKey::from(&self.agreement_secret()).as_bytes());
+        public
+    }
+
+    /// Ключ подписи (§2.1). Понадобится рукопожатию в S3 и сопряжению в S2.
+    pub fn signing_key(&self) -> ed25519_dalek::SigningKey {
+        let mut seed = Zeroizing::new([0u8; HALF]);
+        seed.copy_from_slice(&self.secret[..HALF]);
+        ed25519_dalek::SigningKey::from_bytes(&seed)
+    }
+
+    /// Секрет обмена ключами (§3.2). Понадобится ECDH в S3.
+    pub fn agreement_secret(&self) -> x25519_dalek::StaticSecret {
+        let mut bytes = Zeroizing::new([0u8; HALF]);
+        bytes.copy_from_slice(&self.secret[HALF..]);
+        x25519_dalek::StaticSecret::from(*bytes)
+    }
+}
+
+/// Перешифровать запечатанный секрет устройства с одного ключа хранилища на
+/// другой. Нужна ровно одному месту — смене мастер-пароля, — и существует
+/// отдельно, чтобы распечатанная пара не жила в вызывающем коде дольше строки.
+pub fn reseal_device_secret(from: &VaultKey, to: &VaultKey, blob: &[u8]) -> CoreResult<Vec<u8>> {
+    DeviceKeypair::open(from, blob)?.seal(to)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +328,73 @@ mod tests {
         // Другая соль — другой ключ, даже при том же пароле.
         let elsewhere = derive_key("пароль", &random_salt().unwrap(), &params).unwrap();
         assert_ne!(&first[..], &elsewhere[..]);
+    }
+
+    #[test]
+    fn device_keypair_survives_a_seal_and_open() {
+        let key = test_key(7);
+        let pair = DeviceKeypair::generate().unwrap();
+        let blob = pair.seal(&key).unwrap();
+
+        assert_eq!(
+            DeviceKeypair::open(&key, &blob).unwrap().public_key(),
+            pair.public_key()
+        );
+    }
+
+    #[test]
+    fn device_secret_does_not_open_with_someone_elses_vault_key() {
+        let blob = DeviceKeypair::generate()
+            .unwrap()
+            .seal(&test_key(7))
+            .unwrap();
+
+        assert!(DeviceKeypair::open(&test_key(8), &blob).is_err());
+    }
+
+    #[test]
+    fn device_secret_is_bound_to_its_own_aad() {
+        let key = test_key(7);
+        let blob = DeviceKeypair::generate().unwrap().seal(&key).unwrap();
+
+        // Секрет устройства нельзя выдать за секрет записи и наоборот.
+        assert!(open(&key, &field_aad("rec-1", "password"), &blob).is_err());
+    }
+
+    #[test]
+    fn public_key_is_derived_not_remembered() {
+        let pair = DeviceKeypair::generate().unwrap();
+
+        // Дважды посчитанная публичная половина одинакова, а у другой пары — другая.
+        assert_eq!(pair.public_key(), pair.public_key());
+        assert_ne!(
+            pair.public_key(),
+            DeviceKeypair::generate().unwrap().public_key()
+        );
+    }
+
+    #[test]
+    fn signing_and_agreement_halves_are_independent() {
+        let pair = DeviceKeypair::generate().unwrap();
+        let public = pair.public_key();
+
+        // Публичная половина — это ровно два разных ключа, а не один дважды.
+        assert_ne!(&public[..32], &public[32..]);
+    }
+
+    #[test]
+    fn resealing_keeps_the_same_device() {
+        let (old_key, new_key) = (test_key(7), test_key(8));
+        let pair = DeviceKeypair::generate().unwrap();
+        let blob = pair.seal(&old_key).unwrap();
+
+        let moved = reseal_device_secret(&old_key, &new_key, &blob).unwrap();
+
+        // Смена мастер-пароля меняет ключ хранилища, но не идентичность устройства.
+        assert_eq!(
+            DeviceKeypair::open(&new_key, &moved).unwrap().public_key(),
+            pair.public_key()
+        );
+        assert!(DeviceKeypair::open(&old_key, &moved).is_err());
     }
 }

@@ -127,7 +127,7 @@ fn a_locked_vault_is_never_due() {
 
 #[test]
 fn a_vault_that_was_never_created_is_never_due() {
-    let core = Core::in_memory().unwrap();
+    let core = Core::in_memory(common::host()).unwrap();
 
     assert!(!core.autolock_due(Instant::now() + Duration::from_secs(3_600)));
 }

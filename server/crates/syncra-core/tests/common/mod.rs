@@ -4,14 +4,21 @@
 //! часть — отсюда `dead_code`.
 #![allow(dead_code)]
 
-use syncra_core::{Core, CoreError, CoreErrorCode, RecordDraft};
+use syncra_core::{Core, CoreError, CoreErrorCode, HostDevice, RecordDraft};
 
 pub const MASTER_PASSWORD: &str = "мастер-пароль-1";
+/// Имя, которым в тестах подписывается это устройство. В приложении его даёт
+/// оболочка (hostname); ядру оно приходит готовым, как и путь к БД.
+pub const HOST_NAME: &str = "Стенд";
+
+pub fn host() -> HostDevice {
+    HostDevice::desktop(HOST_NAME)
+}
 
 /// Свежесозданное открытое хранилище: ровно то состояние, в котором пользователь
 /// оказывается сразу после онбординга.
 pub fn unlocked() -> Core {
-    let mut core = Core::in_memory().expect("хранилище в памяти");
+    let mut core = Core::in_memory(host()).expect("хранилище в памяти");
     core.init_vault(MASTER_PASSWORD).expect("init_vault");
     core
 }

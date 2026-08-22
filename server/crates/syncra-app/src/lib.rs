@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use commands::CoreState;
-use syncra_core::Core;
+use syncra_core::{Core, HostDevice};
 use tauri::Manager;
 
 /// Файл хранилища. Лежит в папке приложения — путь выбирает оболочка, потому что
@@ -23,12 +23,21 @@ const DB_FILE_NAME: &str = "syncra.db";
 /// будить процесс без нужды, реже — заметно врать про выбранный срок.
 const AUTOLOCK_TICK: Duration = Duration::from_secs(1);
 
+/// Как это устройство подпишется в списке доверенных (F9).
+///
+/// Имя хоста — платформенный факт, и берёт его оболочка: ядро про ОС не знает и
+/// знать не должно (§8.2). Тип фиксирован десктопом — MVP 1 других платформ не
+/// собирает (§9), а мобильная ветка приедет вместе с iOS-клиентом.
+fn host_device() -> HostDevice {
+    HostDevice::desktop(&gethostname::gethostname().to_string_lossy())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let path = app.path().app_data_dir()?.join(DB_FILE_NAME);
-            let core = Core::open(&path)?;
+            let core = Core::open(&path, host_device())?;
             app.manage(CoreState(Mutex::new(core)));
 
             // Автоблокировку исполняет ядро (§8.2), но кто-то должен его будить:
@@ -65,6 +74,9 @@ pub fn run() {
             commands::get_generator_profile,
             commands::save_generator_profile,
             commands::generate_passwords,
+            // Доверенные устройства (F9)
+            commands::list_devices,
+            commands::revoke_device,
             // Безопасность и вход (F13)
             commands::unlock_with_pin,
             commands::change_master_password,
@@ -80,8 +92,6 @@ pub fn run() {
             commands::submit_paired_key,
             commands::confirm_pairing,
             commands::cancel_pairing,
-            commands::list_devices,
-            commands::revoke_device,
             commands::resolve_conflict,
             commands::get_conflict_secret,
             commands::export_csv,

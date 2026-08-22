@@ -28,5 +28,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 syncra-core = { path = "../syncra-core" }
 tauri = { version = "2", features = [] }
+# Имя хоста для списка устройств (F9). Платформенный факт берёт оболочка
+# и передаёт ядру готовой строкой — как и путь к БД (§8.2).
+gethostname = "1"
 serde.workspace = true
 serde_json.workspace = true

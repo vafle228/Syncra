@@ -9,7 +9,7 @@ use syncra_core::{Core, CoreErrorCode};
 
 #[test]
 fn fresh_device_has_no_vault() {
-    let core = Core::in_memory().unwrap();
+    let core = Core::in_memory(common::host()).unwrap();
     let status = core.status().unwrap();
 
     assert!(!status.initialized);
@@ -22,7 +22,7 @@ fn fresh_device_has_no_vault() {
 
 #[test]
 fn init_creates_vault_and_leaves_it_open() {
-    let mut core = Core::in_memory().unwrap();
+    let mut core = Core::in_memory(common::host()).unwrap();
     let response = core.init_vault(MASTER_PASSWORD).unwrap();
 
     let status = core.status().unwrap();
@@ -49,7 +49,7 @@ fn init_on_existing_vault_is_refused() {
 
 #[test]
 fn short_master_password_is_refused() {
-    let mut core = Core::in_memory().unwrap();
+    let mut core = Core::in_memory(common::host()).unwrap();
     assert_code(core.init_vault("1234567"), CoreErrorCode::Validation);
     // Отказ не должен был оставить полусозданное хранилище.
     assert!(!core.status().unwrap().initialized);
@@ -85,7 +85,7 @@ fn locked_vault_answers_locked_to_everything_else() {
 fn uninitialized_vault_answers_not_initialized_not_locked() {
     // Разница принципиальная: по `LOCKED` UI ушёл бы на экран входа, а нужно —
     // на онбординг.
-    let core = Core::in_memory().unwrap();
+    let core = Core::in_memory(common::host()).unwrap();
 
     assert_code(
         core.list_records(None, false),
@@ -112,7 +112,7 @@ fn unlock_requires_the_right_master_password() {
 
 #[test]
 fn unlock_on_uninitialized_vault_is_refused() {
-    let mut core = Core::in_memory().unwrap();
+    let mut core = Core::in_memory(common::host()).unwrap();
     assert_code(core.unlock(MASTER_PASSWORD), CoreErrorCode::NotInitialized);
 }
 
@@ -122,7 +122,7 @@ fn vault_survives_restart() {
     let path = dir.path().join("syncra.db");
 
     let record_id = {
-        let mut core = Core::open(&path).unwrap();
+        let mut core = Core::open(&path, common::host()).unwrap();
         core.init_vault(MASTER_PASSWORD).unwrap();
         core.create_record(&draft("Google", "me@example.com", "пароль-1"))
             .unwrap()
@@ -130,7 +130,7 @@ fn vault_survives_restart() {
     };
 
     // Новый процесс: то же хранилище, заперто, открывается тем же паролем.
-    let mut core = Core::open(&path).unwrap();
+    let mut core = Core::open(&path, common::host()).unwrap();
     let status = core.status().unwrap();
     assert!(status.initialized);
     assert!(!status.unlocked);

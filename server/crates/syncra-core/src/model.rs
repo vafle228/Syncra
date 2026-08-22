@@ -14,6 +14,7 @@ use crate::error::{CoreError, CoreResult};
 
 pub type RecordId = String;
 pub type VaultId = String;
+pub type DeviceId = String;
 /// ISO-8601 UTC, напр. `2026-08-05T21:14:03.000Z`.
 pub type IsoDateTime = String;
 
@@ -159,6 +160,96 @@ pub struct VaultPatch {
     pub name: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Доверенные устройства (§2.1, §2.3)
+// ---------------------------------------------------------------------------
+
+/// Тип устройства (`DeviceKind`, `contract.ts:605`). Только для иконки и
+/// подписи: в доверии не участвует — там решает публичный ключ (§2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    Desktop,
+    Mobile,
+}
+
+impl DeviceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+        }
+    }
+
+    /// Разбор того, что лежит в БД. Незнакомое значение — испорченный файл, а не
+    /// пользовательский ввод: показать устройство «неизвестного типа» честнее,
+    /// чем уронить весь список из-за иконки.
+    pub fn parse_or_desktop(raw: &str) -> Self {
+        match raw {
+            "mobile" => Self::Mobile,
+            _ => Self::Desktop,
+        }
+    }
+}
+
+/// Доверенное устройство (`Device`, `contract.ts:615`).
+///
+/// Полей ровно восемь, и это проверяется с двух сторон: здесь — типом, во
+/// фронте — `core/__tests__/devices.spec.ts`, который сверяет набор ключей
+/// списком. Ни публичного ключа, ни MAC-адреса тут нет: корень доверия остаётся
+/// в ядре, а сетевые адреса пользователю показывать незачем (§2.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Device {
+    pub device_id: DeviceId,
+    pub name: String,
+    pub kind: DeviceKind,
+    /// Устройство, на котором открыт этот UI. Себя отозвать нельзя (F9).
+    pub is_this_device: bool,
+    pub paired_at: IsoDateTime,
+    /// Слова, сверенные глазами при сопряжении (§2.2). Метаданные, а не ключ.
+    pub fingerprint_words: Vec<String>,
+    /// Когда устройство последний раз выходило на связь. `null` — ни разу.
+    pub last_seen_at: Option<IsoDateTime>,
+    /// Отзыв доступа (§2.3). `null` у действующих.
+    pub revoked_at: Option<IsoDateTime>,
+}
+
+/// Что оболочка знает про машину, а ядро — нет.
+///
+/// Приходит готовым аргументом, как и путь к файлу хранилища: ядро не умеет
+/// спрашивать у ОС имя хоста и не должно уметь (§8.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostDevice {
+    pub name: String,
+    pub kind: DeviceKind,
+}
+
+/// Чем подписывается устройство, у которого ОС не назвала имени.
+pub const UNNAMED_DEVICE: &str = "Это устройство";
+/// Потолок длины имени. Имя приходит из ОС и бывает любым, а помещаться ему в
+/// карточку списка устройств.
+pub const DEVICE_NAME_MAX_LENGTH: usize = 64;
+
+impl HostDevice {
+    /// Имя из ОС как есть не берётся: пустое подменяется, длинное подрезается.
+    /// Это не валидация чужого ввода — отказывать тут некому, — а приведение
+    /// платформенного факта к тому, что можно нарисовать.
+    pub fn new(name: &str, kind: DeviceKind) -> Self {
+        let trimmed = name.trim();
+        let name = if trimmed.is_empty() {
+            UNNAMED_DEVICE.to_owned()
+        } else {
+            trimmed.chars().take(DEVICE_NAME_MAX_LENGTH).collect()
+        };
+        Self { name, kind }
+    }
+
+    /// MVP 1 — десктоп (§9); мобильная ветка появится вместе с iOS-клиентом.
+    pub fn desktop(name: &str) -> Self {
+        Self::new(name, DeviceKind::Desktop)
+    }
 }
 
 // ---------------------------------------------------------------------------

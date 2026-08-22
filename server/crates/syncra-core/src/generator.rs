@@ -43,7 +43,9 @@ const APPENDED_NUMBER_RANGE: u32 = 90;
 /// режимом, если окажется, что сайты не принимают кириллицу в поле пароля.
 const WORDS_SOURCE: &str = include_str!("generator/words.ru.txt");
 
-fn words() -> &'static [&'static str] {
+/// Словарь виден и модулю доверия: отпечаток устройства (§2.2) складывается из
+/// тех же слов, и заводить под него второй список русских слов незачем.
+pub(crate) fn words() -> &'static [&'static str] {
     static WORDS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
     WORDS.get_or_init(|| {
         WORDS_SOURCE

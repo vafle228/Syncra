@@ -1,11 +1,11 @@
 //! Схема хранилища и её миграции (§8.3 «Storage»).
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
-use crate::error::CoreResult;
+use crate::error::{CoreError, CoreResult};
 
 /// Версия схемы. Растёт вместе с миграциями; лежит в `meta`.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Ключи таблицы `meta`.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
@@ -13,6 +13,9 @@ pub const META_KDF_SALT: &str = "kdf_salt";
 pub const META_KDF_PARAMS: &str = "kdf_params";
 pub const META_VERIFIER: &str = "verifier";
 pub const META_DEVICE_ID: &str = "device_id";
+/// Приватная половина пары ключей устройства (§2.1) — запечатанная ключом
+/// хранилища. Публичная лежит открыто, в своей строке таблицы `devices`.
+pub const META_DEVICE_SECRET: &str = "device_secret";
 pub const META_CREATED_AT: &str = "created_at";
 /// Профиль генератора и настройки безопасности — JSON, открытым текстом.
 ///
@@ -67,7 +70,88 @@ CREATE TABLE IF NOT EXISTS records (
 CREATE INDEX IF NOT EXISTS records_by_vault ON records(vault_id);
 "#;
 
+/// Доверенные устройства (§2.2, §2.3). Заводится миграцией 2: хранилищам,
+/// созданным до неё, эта таблица досоздаётся при первом же открытии.
+const MIGRATION_2: &str = r#"
+CREATE TABLE IF NOT EXISTS devices (
+  device_id         TEXT PRIMARY KEY,
+  name              TEXT NOT NULL,
+  kind              TEXT NOT NULL,      -- 'desktop' | 'mobile'
+  -- Корень доверия (§2.1): `ed25519_pub(32) || x25519_pub(32)`. Ни MAC, ни IP
+  -- здесь нет и не будет — они помогают найти адрес, но не дают права доверять.
+  public_key        BLOB NOT NULL,
+  -- JSON-массив слов, сверенных человеком при сопряжении. Это метаданные, а не
+  -- ключ: из слов ничего не восстанавливается.
+  fingerprint_words TEXT NOT NULL,
+  paired_at         TEXT NOT NULL,
+  last_seen_at      TEXT,
+  -- Отзыв (§2.3). NULL у действующих. Строка при отзыве НЕ удаляется: человек
+  -- должен видеть, что ноутбук отозван, а не что его не было.
+  revoked_at        TEXT
+);
+"#;
+
+/// Без `meta` не прочитать версию схемы, а без версии не выбрать миграции —
+/// поэтому одна эта таблица создаётся до всякой цепочки. В `MIGRATION_1` она
+/// тоже есть, и повторение здесь безвредно: обе формы — `IF NOT EXISTS`.
+const BOOTSTRAP: &str = "CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value BLOB NOT NULL
+);";
+
+/// Миграции по порядку: индекс `i` переводит схему с версии `i` на `i + 1`.
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_1, MIGRATION_2];
+
+/// Применить миграции от записанной в `meta` версии до текущей.
+///
+/// Пустой файл (версии нет вовсе) проходит цепочку целиком. Версию пишет
+/// **эта функция**, а не `init_vault`: миграции идут и по хранилищу, которое
+/// ещё не создано, и хозяин у номера должен быть один. Созданным хранилище
+/// по-прежнему делает проверочное значение, а не номер схемы.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
-    conn.execute_batch(MIGRATION_1)?;
+    conn.execute_batch(BOOTSTRAP)?;
+
+    let from = stored_version(conn)?.unwrap_or(0);
+    if from > SCHEMA_VERSION {
+        // Открыть хранилище схемы из будущего мы не умеем, а сделать вид, что
+        // умеем, — значит испортить его молча.
+        return Err(CoreError::internal(
+            "Хранилище создано более новой версией Syncra.",
+        ));
+    }
+
+    for step in MIGRATIONS.iter().skip(from as usize) {
+        conn.execute_batch(step)?;
+    }
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![META_SCHEMA_VERSION, SCHEMA_VERSION.to_string().into_bytes()],
+    )?;
     Ok(())
+}
+
+/// Версия из `meta`. Нечитаемое значение — это испорченный файл, и молча
+/// принимать его за нулевую версию нельзя: цепочка прошла бы по живым данным.
+fn stored_version(conn: &Connection) -> CoreResult<Option<i64>> {
+    // `CAST(... AS TEXT)` — потому что колонка объявлена как BLOB, но SQLite
+    // хранит то, что в неё положили: ядро писало номер байтами, а посторонний
+    // инструмент мог записать строкой или числом. Читателю миграций различать
+    // эти три случая незачем.
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT CAST(value AS TEXT) FROM meta WHERE key = ?1",
+            [META_SCHEMA_VERSION],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    match raw {
+        None => Ok(None),
+        Some(text) => text
+            .trim()
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| CoreError::internal("Хранилище повреждено.")),
+    }
 }

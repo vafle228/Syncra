@@ -92,7 +92,7 @@ fn changing_the_password_needs_an_open_vault() {
         CoreErrorCode::Locked,
     );
 
-    let mut fresh = Core::in_memory().unwrap();
+    let mut fresh = Core::in_memory(common::host()).unwrap();
     assert_code(
         fresh.change_master_password(MASTER_PASSWORD, NEW_MASTER_PASSWORD),
         CoreErrorCode::NotInitialized,

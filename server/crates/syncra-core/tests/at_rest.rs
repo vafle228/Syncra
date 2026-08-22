@@ -40,7 +40,7 @@ fn secrets_are_not_readable_in_the_storage_file() {
     let path = dir.path().join("syncra.db");
 
     {
-        let mut core = Core::open(&path).unwrap();
+        let mut core = Core::open(&path, common::host()).unwrap();
         core.init_vault(MASTER_PASSWORD).unwrap();
 
         let mut item = draft(SERVICE, "octocat", PASSWORD);
@@ -79,7 +79,7 @@ fn rekeyed_storage_keeps_its_secrets_to_itself() {
     let path = dir.path().join("syncra.db");
 
     {
-        let mut core = Core::open(&path).unwrap();
+        let mut core = Core::open(&path, common::host()).unwrap();
         core.init_vault(MASTER_PASSWORD).unwrap();
 
         let mut item = draft(SERVICE, "octocat", PASSWORD);
@@ -110,7 +110,7 @@ fn metadata_is_deliberately_not_encrypted_in_this_step() {
     let path = dir.path().join("syncra.db");
 
     {
-        let mut core = Core::open(&path).unwrap();
+        let mut core = Core::open(&path, common::host()).unwrap();
         core.init_vault(MASTER_PASSWORD).unwrap();
         core.create_record(&draft(SERVICE, "octocat", PASSWORD))
             .unwrap();
@@ -125,7 +125,7 @@ fn ciphertext_cannot_be_moved_between_records() {
     let path = dir.path().join("syncra.db");
 
     let (donor, victim) = {
-        let mut core = Core::open(&path).unwrap();
+        let mut core = Core::open(&path, common::host()).unwrap();
         core.init_vault(MASTER_PASSWORD).unwrap();
         let donor = core
             .create_record(&draft("Donor", "donor", "чужой-пароль"))
@@ -149,7 +149,7 @@ fn ciphertext_cannot_be_moved_between_records() {
         .unwrap();
     }
 
-    let mut core = Core::open(&path).unwrap();
+    let mut core = Core::open(&path, common::host()).unwrap();
     core.unlock(MASTER_PASSWORD).unwrap();
 
     // Подменённая запись не открывается вовсе — вместо того чтобы отдать чужой пароль.

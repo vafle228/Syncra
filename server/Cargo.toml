@@ -16,6 +16,13 @@ uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
+# Подпись и обмен ключами устройства (§8.1, §2.1). Обе пары заводятся сразу, в
+# S1: формат запечатанного секрета иначе пришлось бы мигрировать в S3, когда
+# ключи уже разъехались по устройствам.
+ed25519-dalek = "2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+# Отпечаток устройства (SAS, §2.2) считается хешем публичных ключей.
+sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 getrandom = "0.2"
 

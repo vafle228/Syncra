@@ -16,12 +16,13 @@ use crate::crypto::{self, KdfParams, VaultKey};
 use crate::error::{CoreError, CoreResult};
 use crate::generator::{self, GeneratedPasswords, GeneratorProfile, Rules};
 use crate::model::{
-    now_iso, ChangeMasterPasswordResponse, InitVaultResponse, IsoDateTime, PinStatus, RecordDraft,
-    RecordMeta, RecordPatch, RecordSecrets, UnlockResponse, Vault, VaultPatch, VaultStatus,
-    MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
+    now_iso, ChangeMasterPasswordResponse, Device, HostDevice, InitVaultResponse, IsoDateTime,
+    PinStatus, RecordDraft, RecordMeta, RecordPatch, RecordSecrets, UnlockResponse, Vault,
+    VaultPatch, VaultStatus, MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
 };
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
 use crate::storage::{records, schema, vaults, Storage};
+use crate::trust;
 
 /// Имя и цвет первой секции: одна секция по умолчанию заводится сразу, потому
 /// что выбирать между секциями до того, как они заведены, не из чего.
@@ -30,6 +31,9 @@ const INITIAL_VAULT_COLOR: &str = "indigo";
 
 pub struct Core {
     storage: Storage,
+    /// Что оболочка знает про машину: имя хоста и тип устройства. Приходит
+    /// готовым, как и путь к файлу, — сама ядро этого не узнаёт (§8.2).
+    host: HostDevice,
     /// `None` — хранилище заперто. Ключ живёт только здесь.
     key: Option<VaultKey>,
     unlocked_at: Option<IsoDateTime>,
@@ -43,17 +47,18 @@ pub struct Core {
 }
 
 impl Core {
-    pub fn open(path: &Path) -> CoreResult<Self> {
-        Ok(Self::wrap(Storage::open(path)?))
+    pub fn open(path: &Path, host: HostDevice) -> CoreResult<Self> {
+        Ok(Self::wrap(Storage::open(path)?, host))
     }
 
-    pub fn in_memory() -> CoreResult<Self> {
-        Ok(Self::wrap(Storage::open_in_memory()?))
+    pub fn in_memory(host: HostDevice) -> CoreResult<Self> {
+        Ok(Self::wrap(Storage::open_in_memory()?, host))
     }
 
-    fn wrap(storage: Storage) -> Self {
+    fn wrap(storage: Storage, host: HostDevice) -> Self {
         Self {
             storage,
+            host,
             key: None,
             unlocked_at: None,
             last_activity: Cell::new(Instant::now()),
@@ -98,18 +103,19 @@ impl Core {
         let initialized_at = now_iso();
         let device_id = uuid::Uuid::new_v4().to_string();
         let params_json = serde_json::to_vec(&params)?;
+        // Клонируется до транзакции: `conn_mut()` займёт `self` целиком.
+        let host = self.host.clone();
 
         // Одной транзакцией: наполовину созданное хранилище — это файл, который
         // не открывается ничем и не пересоздаётся, потому что «уже существует».
+        //
+        // Номера схемы здесь нет намеренно: его пишет `schema::migrate`, и хозяин
+        // у него один — иначе две правды о том, какой формат в файле.
         let tx = self.storage.conn_mut().transaction()?;
         for (key_name, value) in [
-            (
-                schema::META_SCHEMA_VERSION,
-                schema::SCHEMA_VERSION.to_string().into_bytes(),
-            ),
             (schema::META_KDF_SALT, salt.to_vec()),
             (schema::META_KDF_PARAMS, params_json),
-            (schema::META_DEVICE_ID, device_id.into_bytes()),
+            (schema::META_DEVICE_ID, device_id.clone().into_bytes()),
             (schema::META_CREATED_AT, initialized_at.clone().into_bytes()),
             // Умолчания настроек кладутся сразу, а не при первом чтении: иначе
             // «ещё не сохраняли» и «сохранили ровно умолчания» неотличимы.
@@ -131,6 +137,10 @@ impl Core {
             )?;
         }
         vaults::create(&tx, INITIAL_VAULT_NAME, INITIAL_VAULT_COLOR, true)?;
+        // Пара ключей заводится здесь же, а не при первом выходе в сеть: без неё
+        // устройству нечем представиться, а приватная половина обязана лечь под
+        // тот же мастер-пароль, что и пароли (§2.1).
+        trust::provision_identity(&tx, &key, &host, &device_id, &initialized_at)?;
         tx.commit()?;
 
         let unlocked_at = self.accept_key(key);
@@ -155,9 +165,37 @@ impl Core {
             return Err(CoreError::invalid_master_password());
         }
 
+        // Хранилища схемы 1 создавались без пары ключей: миграция заводит таблицу,
+        // но ключ ей взять неоткуда — он запечатывается ключом хранилища, а тот
+        // появляется только здесь. Досоздаём при первом же отпирании, иначе такое
+        // хранилище навсегда осталось бы без права представляться собой.
+        self.ensure_identity(&key)?;
+
         Ok(UnlockResponse {
             unlocked_at: self.accept_key(key),
         })
+    }
+
+    /// Досоздать идентичность, если её нет. Идемпотентна и обычно ничего не делает.
+    fn ensure_identity(&mut self, key: &VaultKey) -> CoreResult<()> {
+        let device_id = self.device_id()?;
+        if trust::has_identity(self.storage.conn(), &device_id)? {
+            return Ok(());
+        }
+
+        let host = self.host.clone();
+        let at = now_iso();
+        let tx = self.storage.conn_mut().transaction()?;
+        trust::provision_identity(&tx, key, &host, &device_id, &at)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Идентификатор этого устройства. Лежит в `meta` с самого создания
+    /// хранилища — его отсутствие означает испорченный файл, а не «ещё нет».
+    fn device_id(&self) -> CoreResult<String> {
+        String::from_utf8(self.meta_required(schema::META_DEVICE_ID)?)
+            .map_err(|_| CoreError::internal("Хранилище повреждено."))
     }
 
     /// Быстрый вход по PIN (F13).
@@ -196,6 +234,7 @@ impl Core {
     ) -> CoreResult<ChangeMasterPasswordResponse> {
         self.key()?;
 
+        let device_id = self.device_id()?;
         let salt = self.meta_required(schema::META_KDF_SALT)?;
         let params: KdfParams =
             serde_json::from_slice(&self.meta_required(schema::META_KDF_PARAMS)?)?;
@@ -229,6 +268,10 @@ impl Core {
         // ни старым паролем, ни новым.
         let tx = self.storage.conn_mut().transaction()?;
         records::rekey_all(&tx, &current_key, &new_key)?;
+        // В ТОЙ ЖЕ транзакции, что и записи: приватный ключ устройства защищён
+        // ключом хранилища, и не перешифровать его — значит стереть идентичность
+        // устройства, заметив это только в сети и только через неделю.
+        trust::rekey_secret(&tx, &current_key, &new_key)?;
         for (key_name, value) in [
             (schema::META_KDF_SALT, new_salt.to_vec()),
             (schema::META_KDF_PARAMS, new_params_json),
@@ -249,8 +292,9 @@ impl Core {
 
         Ok(ChangeMasterPasswordResponse {
             changed_at: now_iso(),
-            // Доверенных устройств пока нет вовсе: сопряжение — следующий шаг.
-            devices_to_update: 0,
+            // Действующие соседи, кроме себя: отозванному обновление не поедет —
+            // ему вообще больше ничего не поедет (§2.3).
+            devices_to_update: trust::active_peer_count(self.storage.conn(), &device_id)?,
         })
     }
 
@@ -403,6 +447,24 @@ impl Core {
     pub fn delete_vault(&mut self, vault_id: &str) -> CoreResult<Vec<Vault>> {
         self.key()?;
         vaults::delete(self.storage.conn_mut(), vault_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Доверенные устройства (F9, §2.3)
+    // -----------------------------------------------------------------------
+
+    /// Список доверенных устройств, включая отозванные.
+    ///
+    /// За замком: рассказывать на закрытом хранилище, что у владельца есть ещё
+    /// и телефон, незачем.
+    pub fn list_devices(&self) -> CoreResult<Vec<Device>> {
+        self.key()?;
+        trust::list(self.storage.conn(), &self.device_id()?)
+    }
+
+    pub fn revoke_device(&self, device_id: &str) -> CoreResult<Device> {
+        self.key()?;
+        trust::revoke(self.storage.conn(), &self.device_id()?, device_id)
     }
 
     // -----------------------------------------------------------------------

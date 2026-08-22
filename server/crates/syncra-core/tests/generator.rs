@@ -141,7 +141,7 @@ fn generator_is_silent_behind_the_lock() {
 
 #[test]
 fn generator_needs_a_vault_at_all() {
-    let core = Core::in_memory().unwrap();
+    let core = Core::in_memory(common::host()).unwrap();
 
     assert_code(core.generator_profile(), CoreErrorCode::NotInitialized);
 }

@@ -1,8 +1,8 @@
 //! Форма ответов на проводе — договор с фронтом (`client/src/core/contract.ts`).
 //!
 //! Типы ядра сериализуются прямо в IPC-ответы, поэтому переименованное поле — это
-//! не рефакторинг, а сломанный экран. Здесь ответы шага «генератор и безопасность»
-//! осматриваются ровно так, как их увидит фронт: как JSON.
+//! не рефакторинг, а сломанный экран. Здесь ответы осматриваются ровно так, как
+//! их увидит фронт: как JSON.
 
 mod common;
 
@@ -96,4 +96,34 @@ fn a_profile_from_the_wire_is_accepted_as_is() {
     let saved = core.save_generator_profile(&from_ui).unwrap();
     assert_eq!(saved, from_ui);
     assert_eq!(json_of(&saved)["separator"], json!(" "));
+}
+
+#[test]
+fn a_device_looks_like_the_contract() {
+    let core = common::unlocked();
+    let devices = json_of(&core.list_devices().unwrap());
+    let device = devices[0].as_object().expect("объект устройства");
+
+    // ЗАКОН №1 в форме ответа: ключей и сетевых адресов в списке нет (§2.1).
+    // Тот же набор сверяет фронт — `core/__tests__/devices.spec.ts`.
+    let mut keys: Vec<&str> = device.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "device_id",
+            "fingerprint_words",
+            "is_this_device",
+            "kind",
+            "last_seen_at",
+            "name",
+            "paired_at",
+            "revoked_at",
+        ]
+    );
+
+    assert_eq!(device["kind"], json!("desktop"));
+    assert_eq!(device["is_this_device"], json!(true));
+    assert_eq!(device["revoked_at"], Value::Null);
+    assert_eq!(device["fingerprint_words"].as_array().unwrap().len(), 4);
 }
