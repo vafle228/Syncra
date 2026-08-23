@@ -19,16 +19,16 @@ use crate::crypto::{self, KdfParams, VaultKey};
 use crate::error::{CoreError, CoreResult};
 use crate::generator::{self, GeneratedPasswords, GeneratorProfile, Rules};
 use crate::model::{
-    now_iso, ChangeMasterPasswordResponse, Device, HostDevice, InitVaultResponse, IsoDateTime,
-    PairingHandshake, PairingOffer, PairingResult, PinStatus, RecordDraft, RecordId, RecordMeta,
-    RecordPatch, RecordSecrets, UnlockResponse, Vault, VaultPatch, VaultStatus,
-    MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
+    now_iso, ChangeMasterPasswordResponse, ConflictSecrets, ConflictSide, Device, HostDevice,
+    InitVaultResponse, IsoDateTime, PairingHandshake, PairingOffer, PairingResult, PinStatus,
+    RecordConflict, RecordDraft, RecordId, RecordMeta, RecordPatch, RecordSecrets, SecretField,
+    UnlockResponse, Vault, VaultPatch, VaultStatus, MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
 };
 use crate::net::{NetIdentity, RemotePeer};
 use crate::pairing;
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
 use crate::storage::{records, schema, vaults, Storage};
-use crate::sync;
+use crate::sync::{self, conflicts};
 use crate::trust;
 
 /// Имя и цвет первой секции: одна секция по умолчанию заводится сразу, потому
@@ -351,6 +351,10 @@ impl Core {
         // ключом хранилища, и не перешифровать его — значит стереть идентичность
         // устройства, заметив это только в сети и только через неделю.
         trust::rekey_secret(&tx, &current_key, &new_key)?;
+        // И там же — отложенные версии из `conflicts`: они защищены тем же
+        // ключом хранилища, и не тронуть их значило бы потерять приехавшую
+        // сторону спора, узнав об этом только на экране разрешения (§5.5).
+        conflicts::rekey_all(&tx, &current_key, &new_key)?;
         for (key_name, value) in [
             (schema::META_KDF_SALT, new_salt.to_vec()),
             (schema::META_KDF_PARAMS, new_params_json),
@@ -514,7 +518,12 @@ impl Core {
 
     pub fn delete_record(&self, record_id: &str) -> CoreResult<RecordMeta> {
         self.key()?;
-        records::delete(self.storage.conn(), record_id)
+        let meta = records::delete(self.storage.conn(), record_id)?;
+        // Спорить о версиях удалённой записи не о чем: конфликт снимается
+        // вместе с ней (§5.5, `mock/index.ts:1023`). Надгробие поедет дальше и
+        // так — удаление важнее любого расхождения (§5.4).
+        conflicts::drop_for(self.storage.conn(), record_id)?;
+        Ok(meta)
     }
 
     // -----------------------------------------------------------------------
@@ -982,9 +991,13 @@ impl Core {
     }
 
     /// Что посылать и что просить по манифесту соседа (§5.3, шаг 2).
-    pub fn sync_plan(&self, remote: &sync::Manifest) -> CoreResult<sync::SyncPlan> {
+    pub fn sync_plan(
+        &self,
+        device_id: &str,
+        remote: &sync::Manifest,
+    ) -> CoreResult<sync::SyncPlan> {
         self.key_quiet()?;
-        sync::plan(self.storage.conn(), remote)
+        sync::plan(self.storage.conn(), device_id, remote)
     }
 
     /// Собрать дифф, распечатав секреты своим ключом (§5.3, шаг 3).
@@ -999,12 +1012,15 @@ impl Core {
     /// Применить приехавший дифф — одной транзакцией.
     ///
     /// Возвращает то, что правда легло: чужая версия старше нашей не трогается,
-    /// а запись локальной секции не принимается вовсе (§4.2, §5.2).
+    /// запись локальной секции не принимается вовсе (§4.2, §5.2), а
+    /// разошедшаяся откладывается в спор и живой записи не касается (§5.5).
+    /// Поднятые расхождения едут во втором поле — про них сеть шлёт
+    /// `conflict_raised`, уже без замка.
     pub fn sync_apply(
         &mut self,
         device_id: &str,
         incoming: &[sync::SyncRecord],
-    ) -> CoreResult<Vec<(RecordId, i64)>> {
+    ) -> CoreResult<sync::Applied> {
         // Ключ клонируется до транзакции: `conn_mut()` займёт `self` целиком.
         let key = self.key_quiet()?.clone();
 
@@ -1062,6 +1078,162 @@ impl Core {
     /// начинают перенос с нуля.
     fn forget_sync_state(&self, device_id: &str) -> CoreResult<()> {
         sync::forget_device(self.storage.conn(), device_id)
+    }
+
+    /// Собрать один конфликт — для события `conflict_raised`.
+    ///
+    /// За замок через `key_quiet`: зовёт это сеть сразу после круга, а не
+    /// человек. `None` — запись успела исчезнуть, пока событие собиралось.
+    pub fn build_conflict(&self, record_id: &str) -> CoreResult<Option<RecordConflict>> {
+        let key = self.key_quiet()?;
+        conflicts::build(self.storage.conn(), key, &self.device_id()?, record_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Конфликты (F11, §5.5)
+    //
+    // Здесь, в отличие от всего сетевого выше, вход за замок обычный: это
+    // человек за экраном разрешения, и его действия автоблокировку отменяют.
+    // -----------------------------------------------------------------------
+
+    /// Расхождения, ждущие решения.
+    ///
+    /// Список, а не счётчик, и приходит он отдельно от `SyncStatus`: две правды
+    /// об одном числе рано или поздно разъедутся (`contract.ts:793`).
+    pub fn list_conflicts(&self) -> CoreResult<Vec<RecordConflict>> {
+        let key = self.key()?;
+        conflicts::list(self.storage.conn(), key, &self.device_id()?)
+    }
+
+    /// Оставить одну версию целиком (§5.5).
+    ///
+    /// Проигравшая **не склеивается** с победившей по полям: §5.5 обещает выбор
+    /// записи, а не сборку из двух.
+    ///
+    /// Новая версия — `max(местная, приехавшая) + 1`, и это не перестраховка:
+    /// возьми мы `местная + 1`, проигравшая вернулась бы следующим кругом как
+    /// более свежая, и человек выбирал бы заново до бесконечности.
+    ///
+    /// Отметка обмена при этом двигается до версии соседа: «я её видел и учёл».
+    /// Без этого следующий же круг поднял бы тот же спор — обе стороны опять
+    /// оказались бы дальше общего предка.
+    pub fn resolve_conflict(
+        &mut self,
+        record_id: &str,
+        side: ConflictSide,
+    ) -> CoreResult<RecordMeta> {
+        let key = self.key()?.clone();
+
+        let stored = conflicts::open_for(self.storage.conn(), record_id)?
+            .ok_or_else(|| CoreError::not_found("Конфликт версий не найден."))?;
+        let local = conflicts::local_side(self.storage.conn(), &key, record_id)?
+            .ok_or_else(|| CoreError::not_found("Запись не найдена."))?;
+
+        let resolved_at = now_iso();
+        let version = local.version.max(stored.version) + 1;
+
+        let tx = self.storage.conn_mut().transaction()?;
+        match side {
+            // Местная версия остаётся как есть — двигается только счётчик.
+            // Метаданные и секреты не переписываются: переписывать их значениями
+            // из них же было бы лишней работой с шифротекстом.
+            ConflictSide::Local => {
+                tx.execute(
+                    "UPDATE records SET version = ?2, updated_at = ?3 WHERE record_id = ?1",
+                    rusqlite::params![record_id, version, resolved_at],
+                )?;
+            }
+            ConflictSide::Remote => {
+                let secrets = stored.secrets(&key)?;
+                // Секцию приехавшей версии могли к этому моменту удалить — тогда
+                // запись остаётся там, где лежит: секцию удаляли уже с ней внутри.
+                let vault_id = match vaults::find_optional(&tx, &stored.vault_id)? {
+                    Some(vault) => vault.vault_id,
+                    None => local.vault_id.clone(),
+                };
+                // `password_updated_at` двигается только вместе с самим паролем:
+                // это «когда пароль правда сменили», а не «когда запись трогали»
+                // (§4.1).
+                let password_updated_at = if secrets.password == local.secrets.password {
+                    local.password_updated_at.clone()
+                } else {
+                    resolved_at.clone()
+                };
+
+                tx.execute(
+                    "UPDATE records SET
+                         vault_id = ?2, service_name = ?3, urls = ?4, login = ?5,
+                         account_label = ?6, password_ct = ?7, notes_ct = ?8, totp_ct = ?9,
+                         version = ?10, updated_at = ?11, password_updated_at = ?12
+                     WHERE record_id = ?1",
+                    rusqlite::params![
+                        record_id,
+                        vault_id,
+                        stored.service_name,
+                        serde_json::to_string(&stored.urls)?,
+                        stored.login,
+                        stored.account_label,
+                        // Перепечатываются под ОБЫЧНЫЙ AAD: приехавшая версия
+                        // становится настоящей записью и должна читаться как
+                        // запись, а не как отложенная сторона спора.
+                        records::seal_field(
+                            &key,
+                            record_id,
+                            SecretField::Password,
+                            secrets.password.as_deref()
+                        )?,
+                        records::seal_field(
+                            &key,
+                            record_id,
+                            SecretField::Notes,
+                            secrets.notes.as_deref()
+                        )?,
+                        records::seal_field(
+                            &key,
+                            record_id,
+                            SecretField::TotpSecret,
+                            secrets.totp_secret.as_deref()
+                        )?,
+                        version,
+                        resolved_at,
+                        password_updated_at,
+                    ],
+                )?;
+            }
+        }
+
+        conflicts::drop_for(&tx, record_id)?;
+        sync::note(
+            &tx,
+            &stored.device_id,
+            &[(record_id.to_owned(), stored.version)],
+        )?;
+        tx.commit()?;
+
+        records::find_meta(self.storage.conn(), record_id)
+    }
+
+    /// Одно секретное поле обеих версий сразу — вторая из трёх команд Закона №1.
+    ///
+    /// Обе стороны в одном ответе: сравнить одно значение с другим — весь смысл
+    /// действия (§5.5, «ручная пересборка»). Правила `get_secret` действуют
+    /// здесь целиком: разово, по нажатию, наружу не кэшируется.
+    pub fn conflict_secret(
+        &self,
+        record_id: &str,
+        field: SecretField,
+    ) -> CoreResult<ConflictSecrets> {
+        let key = self.key()?;
+
+        let stored = conflicts::open_for(self.storage.conn(), record_id)?
+            .ok_or_else(|| CoreError::not_found("Конфликт версий не найден."))?;
+        let local = conflicts::local_side(self.storage.conn(), key, record_id)?
+            .ok_or_else(|| CoreError::not_found("Запись не найдена."))?;
+
+        Ok(ConflictSecrets {
+            local: local.secrets.field(field),
+            remote: stored.secrets(key)?.field(field),
+        })
     }
 
     // -----------------------------------------------------------------------

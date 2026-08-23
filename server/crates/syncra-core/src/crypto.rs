@@ -139,6 +139,17 @@ pub fn field_aad(record_id: &str, field: &str) -> Vec<u8> {
     format!("syncra:record:{record_id}:{field}").into_bytes()
 }
 
+/// То же для приехавшей версии, ждущей разрешения конфликта (§5.5).
+///
+/// Своё пространство, а не [`field_aad`], по той же причине, по какой оно есть у
+/// секрета устройства: с общим AAD шифротекст из `conflicts` и шифротекст из
+/// `records` стали бы взаимозаменяемы, и тот, кто может писать в файл, подставил
+/// бы приехавший пароль на место настоящего. Привязка к месту — весь смысл AAD,
+/// и «место» здесь включает таблицу.
+pub fn conflict_field_aad(record_id: &str, field: &str) -> Vec<u8> {
+    format!("syncra:conflict:{record_id}:{field}").into_bytes()
+}
+
 /// Запечатать проверочное значение — вызывается один раз при создании хранилища.
 pub fn seal_verifier(key: &VaultKey) -> CoreResult<Vec<u8>> {
     seal(key, VERIFIER_AAD, VERIFIER_PLAINTEXT)

@@ -8,7 +8,8 @@ mod common;
 
 use serde_json::{json, Value};
 use syncra_core::{
-    DeviceKind, GeneratorProfile, PeerFound, SecuritySettings, SyncPhase, SyncStatus,
+    ConflictField, ConflictSecrets, ConflictSide, ConflictVersion, DeviceKind, GeneratorProfile,
+    PeerFound, RecordConflict, SecuritySettings, SyncPhase, SyncStatus,
 };
 
 fn json_of<T: serde::Serialize>(value: &T) -> Value {
@@ -233,6 +234,113 @@ fn a_sync_status_looks_like_the_contract() {
     assert_eq!(wire["pending_records"], json!([]));
     assert_eq!(wire["last_sync_at"], json!(null));
     assert_eq!(wire["message"], json!(null));
+}
+
+fn conflict_version(side: ConflictSide) -> ConflictVersion {
+    ConflictVersion {
+        side,
+        device_name: "Телефон".to_owned(),
+        version: 7,
+        updated_at: "2026-03-02T08:12:40.000Z".to_owned(),
+        vault_id: "v1".to_owned(),
+        service_name: "GitHub".to_owned(),
+        urls: vec!["github.com".to_owned()],
+        login: "demo-user".to_owned(),
+        account_label: None,
+        has_notes: true,
+        has_totp: false,
+    }
+}
+
+#[test]
+fn a_record_conflict_looks_like_the_contract() {
+    // Тот же конфликт приезжает и списком, и событием `conflict_raised`
+    // (`contract.ts:1324`), поэтому набор ключей — часть договора, а не деталь.
+    let wire = json_of(&RecordConflict {
+        record_id: "r1".to_owned(),
+        raised_at: "2026-03-02T08:13:05.000Z".to_owned(),
+        local: conflict_version(ConflictSide::Local),
+        remote: conflict_version(ConflictSide::Remote),
+        differing_fields: vec![ConflictField::Urls, ConflictField::Password],
+    });
+
+    let mut keys: Vec<&str> = wire
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "differing_fields",
+            "local",
+            "raised_at",
+            "record_id",
+            "remote"
+        ]
+    );
+
+    let mut side_keys: Vec<&str> = wire["local"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    side_keys.sort_unstable();
+    assert_eq!(
+        side_keys,
+        [
+            "account_label",
+            "device_name",
+            "has_notes",
+            "has_totp",
+            "login",
+            "service_name",
+            "side",
+            "updated_at",
+            "urls",
+            "vault_id",
+            "version",
+        ]
+    );
+
+    assert_eq!(wire["local"]["side"], json!("local"));
+    assert_eq!(wire["remote"]["side"], json!("remote"));
+    // Поля перечислены ИМЕНАМИ и в том написании, которое знает `ConflictField`.
+    assert_eq!(wire["differing_fields"], json!(["urls", "password"]));
+
+    // ЗАКОН №1: ни одного секретного ЗНАЧЕНИЯ в конфликте нет — только флаги.
+    assert!(wire["local"].get("password").is_none());
+    assert!(wire["local"].get("notes").is_none());
+    assert_eq!(wire["local"]["has_notes"], json!(true));
+}
+
+#[test]
+fn every_conflict_field_is_spelled_the_way_the_contract_spells_it() {
+    for (field, name) in [
+        (ConflictField::VaultId, "vault_id"),
+        (ConflictField::ServiceName, "service_name"),
+        (ConflictField::Urls, "urls"),
+        (ConflictField::Login, "login"),
+        (ConflictField::AccountLabel, "account_label"),
+        (ConflictField::Password, "password"),
+        (ConflictField::Notes, "notes"),
+        (ConflictField::TotpSecret, "totp_secret"),
+    ] {
+        assert_eq!(json_of(&field), json!(name));
+    }
+}
+
+#[test]
+fn a_conflict_secret_carries_both_sides_and_nothing_else() {
+    let wire = json_of(&ConflictSecrets {
+        local: Some("тайна-1".to_owned()),
+        remote: None,
+    });
+
+    assert_eq!(wire, json!({ "local": "тайна-1", "remote": null }));
 }
 
 #[test]

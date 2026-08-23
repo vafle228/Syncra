@@ -16,7 +16,9 @@
 //! `confirm_pairing`, `cancel_pairing`), обнаружение соседей в локальной сети и
 //! защищённый транспорт между ними (`net`), а также дифференциальный обмен
 //! записями поверх него (`sync`: манифест, дифф, надгробия, `get_sync_status`,
-//! `sync_now`). Конфликты, импорт/экспорт, TOTP и энролмент PIN — следующие шаги.
+//! `sync_now`), а также разрешение расхождений между устройствами
+//! (`sync::conflicts`: `list_conflicts`, `resolve_conflict`,
+//! `get_conflict_secret`). Импорт/экспорт, TOTP и энролмент PIN — следующие шаги.
 
 pub mod crypto;
 pub mod error;
@@ -33,10 +35,11 @@ pub mod trust;
 pub use error::{CoreError, CoreErrorCode, CoreResult};
 pub use generator::{GeneratedPasswords, GeneratorProfile};
 pub use model::{
-    ChangeMasterPasswordResponse, Device, DeviceKind, HostDevice, InitVaultResponse,
-    PairingHandshake, PairingOffer, PairingResult, PeerFound, PinStatus, QrMatrix, RecordDraft,
-    RecordMeta, RecordPatch, RecordSecrets, SecretField, SyncPhase, SyncStatus, UnlockResponse,
-    Vault, VaultPatch, VaultStatus,
+    ChangeMasterPasswordResponse, ConflictField, ConflictSecrets, ConflictSide, ConflictVersion,
+    Device, DeviceKind, HostDevice, InitVaultResponse, PairingHandshake, PairingOffer,
+    PairingResult, PeerFound, PinStatus, QrMatrix, RecordConflict, RecordDraft, RecordMeta,
+    RecordPatch, RecordSecrets, SecretField, SyncPhase, SyncStatus, UnlockResponse, Vault,
+    VaultPatch, VaultStatus,
 };
 pub use net::{CoreEvent, Node, NodeSettings};
 pub use security::{SecuritySettings, SecuritySettingsPatch};

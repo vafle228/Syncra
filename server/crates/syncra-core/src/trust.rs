@@ -165,6 +165,21 @@ pub fn list(conn: &Connection, this_device_id: &str) -> CoreResult<Vec<Device>> 
     Ok(devices)
 }
 
+/// Имя устройства для показа человеку.
+///
+/// Отдельно от [`list`] и [`find`], потому что зовётся оттуда, где `Device`
+/// целиком не нужен: подпись под колонкой в экране конфликта (§5.5) — это одна
+/// строка, а не карточка устройства.
+pub fn name_of(conn: &Connection, device_id: &str) -> CoreResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT name FROM devices WHERE device_id = ?1",
+            [device_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
 /// Отозвать доступ (§2.3).
 ///
 /// Идемпотентен, и `revoked_at` при повторе **не переписывается**: момент

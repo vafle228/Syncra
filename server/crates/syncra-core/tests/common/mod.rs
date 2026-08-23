@@ -44,6 +44,22 @@ pub fn draft(service_name: &str, login: &str, password: &str) -> RecordDraft {
     }
 }
 
+/// Дождаться, пока условие станет правдой.
+///
+/// Дольше нескольких кругов здесь ничего не происходит; если происходит — тест
+/// обязан упасть, а не висеть.
+#[track_caller]
+pub fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if ready() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("так и не дождались: {what}");
+}
+
 /// Проверяет код ошибки и заодно печатает сообщение при расхождении — иначе
 /// упавший тест сообщает только «не тот вариант enum».
 #[track_caller]
@@ -110,6 +126,17 @@ impl Device2 {
 
     pub fn with_core<T>(&self, action: impl FnOnce(&mut Core) -> T) -> T {
         action(&mut self.core.lock().unwrap())
+    }
+
+    /// Идентификатор единственного соседа — то, чем этот сосед подписан в
+    /// `devices` здесь. Нужен всему, что считается «по устройству»: отметки
+    /// обмена, общий предок, сторона конфликта.
+    pub fn peer_id(&self) -> String {
+        self.peers()
+            .first()
+            .expect("сосед записан в доверенные")
+            .device_id
+            .clone()
     }
 
     pub fn peers(&self) -> Vec<Device> {

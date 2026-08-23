@@ -42,7 +42,7 @@ use crate::crypto::DeviceKeypair;
 use crate::error::{CoreError, CoreResult};
 use crate::model::{
     now_iso, Device, DeviceKind, HostDevice, IsoDateTime, PairingHandshake, PairingResult,
-    PeerFound, RecordId, SyncPhase, SyncStatus,
+    PeerFound, RecordConflict, RecordId, SyncPhase, SyncStatus,
 };
 use crate::pairing;
 use crate::session::{Core, PairingAnnouncement};
@@ -83,6 +83,10 @@ pub enum CoreEvent {
     DevicePaired(Box<PairingResult>),
     /// Полное состояние синхронизации (`sync_status`, `contract.ts:1297`).
     SyncStatus(Box<SyncStatus>),
+    /// Приехавшая версия разошлась с местной (`conflict_raised`,
+    /// `contract.ts:1324`). Немедленной реакции не требует: конфликт ждёт в
+    /// списке столько, сколько нужно (§5.5).
+    ConflictRaised(Box<RecordConflict>),
 }
 
 // ---------------------------------------------------------------------------

@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use syncra_core::{
-    ChangeMasterPasswordResponse, Core, CoreError, Device, GeneratedPasswords, GeneratorProfile,
-    InitVaultResponse, Node, PairingHandshake, PairingOffer, PairingResult, RecordDraft,
-    RecordMeta, RecordPatch, RecordSecrets, SecuritySettings, SecuritySettingsPatch, SyncStatus,
-    UnlockResponse, Vault, VaultPatch, VaultStatus,
+    ChangeMasterPasswordResponse, ConflictSecrets, ConflictSide, Core, CoreError, Device,
+    GeneratedPasswords, GeneratorProfile, InitVaultResponse, Node, PairingHandshake, PairingOffer,
+    PairingResult, RecordConflict, RecordDraft, RecordMeta, RecordPatch, RecordSecrets,
+    SecretField, SecuritySettings, SecuritySettingsPatch, SyncStatus, UnlockResponse, Vault,
+    VaultPatch, VaultStatus,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -181,6 +182,9 @@ pub fn forward(app: &AppHandle, event: syncra_core::CoreEvent) {
         syncra_core::CoreEvent::PeerFound(peer) => announce(app, "peer_found", peer),
         syncra_core::CoreEvent::DevicePaired(result) => announce(app, "device_paired", *result),
         syncra_core::CoreEvent::SyncStatus(status) => announce(app, "sync_status", *status),
+        syncra_core::CoreEvent::ConflictRaised(conflict) => {
+            announce(app, "conflict_raised", *conflict)
+        }
     }
 }
 
@@ -521,11 +525,50 @@ fn require_unlocked(state: &State<'_, CoreState>) -> Answer<()> {
     }
 }
 
-/// **Граница шага:** обмен записями есть, а обнаружения расхождений ещё нет.
-/// Пустой список — правда о состоянии: конфликты заводит S5.
+// ---------------------------------------------------------------------------
+// Конфликты версий (F11, §5.5)
+// ---------------------------------------------------------------------------
+
+/// `side` и `field` приезжают строками, а разбирает их ядро.
+///
+/// Не `#[derive(Deserialize)]` по самому enum: провал serde на границе Tauri —
+/// это строка, из которой `toCoreError` слепит безликое «непредвиденная ошибка
+/// ядра», а контракт обещает здесь `VALIDATION` с человеческим текстом.
+#[derive(Deserialize)]
+pub struct ResolveConflictRequest {
+    record_id: String,
+    side: String,
+}
+
+#[derive(Deserialize)]
+pub struct GetConflictSecretRequest {
+    record_id: String,
+    field: String,
+}
+
 #[tauri::command]
-pub fn list_conflicts() -> Answer<Vec<serde_json::Value>> {
-    Ok(Vec::new())
+pub fn list_conflicts(state: State<'_, CoreState>) -> Answer<Vec<RecordConflict>> {
+    core!(state).list_conflicts()
+}
+
+#[tauri::command]
+pub fn resolve_conflict(
+    request: ResolveConflictRequest,
+    state: State<'_, CoreState>,
+) -> Answer<RecordMeta> {
+    let side = ConflictSide::parse(&request.side)?;
+    core!(state).resolve_conflict(&request.record_id, side)
+}
+
+/// Вторая из трёх команд контракта, отдающих открытый текст. Обе стороны сразу:
+/// сравнить одно значение с другим — весь смысл действия.
+#[tauri::command]
+pub fn get_conflict_secret(
+    request: GetConflictSecretRequest,
+    state: State<'_, CoreState>,
+) -> Answer<ConflictSecrets> {
+    let field = SecretField::parse(&request.field)?;
+    core!(state).conflict_secret(&request.record_id, field)
 }
 
 // ---------------------------------------------------------------------------
@@ -552,9 +595,6 @@ macro_rules! not_ready {
 not_ready![
     // Коды подтверждения (фаза 2)
     get_totp_code,
-    // Конфликты (F11)
-    resolve_conflict,
-    get_conflict_secret,
     // Экспорт, импорт, бэкап (F12)
     export_csv,
     export_backup,

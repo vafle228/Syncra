@@ -39,7 +39,7 @@ use crate::session::Core;
 use crate::sync::{self, SyncRecord};
 
 use super::wire::Msg;
-use super::{handshake::Established, Context};
+use super::{handshake::Established, Context, CoreEvent};
 
 /// Единственный способ дотронуться до ядра отсюда — и он же единственный
 /// способ не задержать замок дольше одной короткой операции.
@@ -55,6 +55,32 @@ fn with_core<T>(
 /// Собеседник ответил не тем, чего ждали в этом месте разговора.
 fn out_of_turn() -> CoreError {
     super::wire::malformed()
+}
+
+/// Применить порцию и рассказать о поднятых расхождениях.
+///
+/// Событие собирается и уходит ПОСЛЕ того, как замок отпущен: держать мьютекс
+/// ядра на время рассылки нельзя — так же устроены `peer_found` и `sync_status`.
+/// Каждое `conflict_raised` несёт готовый `RecordConflict`, как обещает
+/// `contract.ts:1324`.
+fn apply_batch(
+    context: &Context,
+    device_id: &str,
+    records: &[SyncRecord],
+) -> CoreResult<Vec<(RecordId, i64)>> {
+    let applied = with_core(context, |core| core.sync_apply(device_id, records))?;
+
+    for record_id in &applied.raised {
+        // Запись успела исчезнуть, пока событие собиралось, — рассказывать не о
+        // чем. Это не ошибка круга: круг уже сделал своё дело.
+        if let Some(conflict) = with_core(context, |core| core.build_conflict(record_id))? {
+            context
+                .shared
+                .announce(CoreEvent::ConflictRaised(Box::new(conflict)));
+        }
+    }
+
+    Ok(applied.records)
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +170,7 @@ fn pull(
         let Msg::SyncBatch { records, last } = session.channel.request(&Msg::SyncFetch)? else {
             return Err(out_of_turn());
         };
-        let laid = with_core(context, |core| core.sync_apply(device_id, &records))?;
+        let laid = apply_batch(context, device_id, &records)?;
         applied += laid.len() as u32;
         received.extend(laid.into_iter().map(|(record_id, _)| record_id));
 
@@ -222,7 +248,7 @@ pub(super) fn answer(
                 return Ok((Msg::SyncAck, false));
             }
 
-            let plan = with_core(context, |core| core.sync_plan(&round.manifest))?;
+            let plan = with_core(context, |core| core.sync_plan(device_id, &round.manifest))?;
             let outgoing = with_core(context, |core| core.sync_export(&plan.send))?;
             round.sent = outgoing
                 .iter()
@@ -252,7 +278,7 @@ pub(super) fn answer(
         }
 
         Msg::SyncBatch { records, last } => {
-            let laid = with_core(context, |core| core.sync_apply(device_id, &records))?;
+            let laid = apply_batch(context, device_id, &records)?;
             round.applied += laid.len() as u32;
             if !last {
                 return Ok((Msg::SyncAck, false));

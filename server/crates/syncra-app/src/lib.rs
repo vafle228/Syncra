@@ -111,11 +111,12 @@ pub fn run() {
             // Синхронизация (F10)
             commands::get_sync_status,
             commands::sync_now,
+            // Конфликты (F11)
             commands::list_conflicts,
-            // Следующие шаги — зарегистрированы ради внятного отказа
-            commands::get_totp_code,
             commands::resolve_conflict,
             commands::get_conflict_secret,
+            // Следующие шаги — зарегистрированы ради внятного отказа
+            commands::get_totp_code,
             commands::export_csv,
             commands::export_backup,
             commands::delete_export,

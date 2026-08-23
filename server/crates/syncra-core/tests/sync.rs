@@ -10,27 +10,13 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{draft, settings, trust_each_other, Device2, MASTER_PASSWORD};
+use common::{draft, settings, trust_each_other, wait_until, Device2, MASTER_PASSWORD};
 use syncra_core::{Core, RecordMeta, SyncPhase};
 
 /// Пароль второго устройства. Не тот же самый — в этом весь смысл (см. шапку).
 const OTHER_PASSWORD: &str = "мастер-пароль-2";
-
-/// Дождаться, пока условие станет правдой. Дольше нескольких кругов здесь
-/// ничего не происходит; если происходит — тест обязан упасть, а не висеть.
-#[track_caller]
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if ready() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    panic!("так и не дождались: {what}");
-}
 
 fn records(device: &Device2) -> Vec<RecordMeta> {
     device.with_core(|core| core.list_records(None, true).unwrap())
@@ -291,8 +277,9 @@ fn a_second_round_over_the_same_state_moves_nothing() {
     // сокета. Пусто с обеих сторон значит, что следующий круг не повёз бы
     // ни одной записи (§5.3: «уже актуальные данные повторно не передаются»).
     let manifest_of = |device: &Device2| device.with_core(|core| core.sync_manifest()).unwrap();
-    let plan_a = a.with_core(|core| core.sync_plan(&manifest_of(&b)).unwrap());
-    let plan_b = b.with_core(|core| core.sync_plan(&manifest_of(&a)).unwrap());
+    let (b_id, a_id) = (a.peer_id(), b.peer_id());
+    let plan_a = a.with_core(|core| core.sync_plan(&b_id, &manifest_of(&b)).unwrap());
+    let plan_b = b.with_core(|core| core.sync_plan(&a_id, &manifest_of(&a)).unwrap());
 
     assert!(
         plan_a.send.is_empty() && plan_a.want.is_empty(),

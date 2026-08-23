@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{CoreError, CoreResult};
 
 /// Версия схемы. Растёт вместе с миграциями; лежит в `meta`.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Ключи таблицы `meta`.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
@@ -116,6 +116,48 @@ CREATE TABLE IF NOT EXISTS sync_state (
 CREATE INDEX IF NOT EXISTS sync_state_by_record ON sync_state(record_id);
 "#;
 
+/// Расхождения версий, ждущие решения человека (§5.5).
+///
+/// Приехавшая версия лежит здесь **целиком**, вместе с секретами: местная
+/// сторона конфликта всегда есть в `records`, а вот чужую хранить больше негде —
+/// в `records` она легла бы поверх местной, то есть ровно тем «тихим затиранием»,
+/// от которого конфликт и защищает.
+///
+/// Строка одна на запись: спорят всегда две стороны, не три. Приедет третье
+/// устройство со своим мнением — оно заменит собой прежнюю строку, и человек
+/// увидит то расхождение, которое актуально сейчас.
+///
+/// Секреты перешифрованы **местным** ключом и под **своим** AAD
+/// (`crypto::conflict_field_aad`): с общим AAD шифротекст из этой таблицы стал бы
+/// взаимозаменяем с настоящим паролем записи.
+///
+/// `deleted_at` здесь нет намеренно: надгробие в конфликте не участвует, потому
+/// что `ConflictVersion` (`contract.ts:854`) не умеет сказать «эта сторона
+/// удалена». Удаление решается прежним правилом версии (§5.4).
+const MIGRATION_4: &str = r#"
+CREATE TABLE IF NOT EXISTS conflicts (
+  record_id           TEXT    PRIMARY KEY REFERENCES records(record_id),
+  -- От кого приехала версия: по нему берётся имя устройства для экрана.
+  device_id           TEXT    NOT NULL,
+  raised_at           TEXT    NOT NULL,
+  -- Местная версия на момент подъёма. Нужна, чтобы не поднимать одно и то же
+  -- расхождение событием на каждом круге, пока ни одна сторона не менялась.
+  local_version       INTEGER NOT NULL,
+  -- Дальше — приехавшая версия как она есть.
+  version             INTEGER NOT NULL,
+  vault_id            TEXT    NOT NULL,
+  service_name        TEXT    NOT NULL,
+  urls                TEXT    NOT NULL,   -- JSON-массив, как в `records`
+  login               TEXT    NOT NULL,
+  account_label       TEXT,
+  password_ct         BLOB,
+  notes_ct            BLOB,
+  totp_ct             BLOB,
+  updated_at          TEXT    NOT NULL,
+  password_updated_at TEXT    NOT NULL
+);
+"#;
+
 /// Без `meta` не прочитать версию схемы, а без версии не выбрать миграции —
 /// поэтому одна эта таблица создаётся до всякой цепочки. В `MIGRATION_1` она
 /// тоже есть, и повторение здесь безвредно: обе формы — `IF NOT EXISTS`.
@@ -125,7 +167,8 @@ const BOOTSTRAP: &str = "CREATE TABLE IF NOT EXISTS meta (
 );";
 
 /// Миграции по порядку: индекс `i` переводит схему с версии `i` на `i + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_1, MIGRATION_2, MIGRATION_3];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] =
+    [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4];
 
 /// Применить миграции от записанной в `meta` версии до текущей.
 ///

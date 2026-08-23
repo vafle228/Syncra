@@ -135,6 +135,24 @@ impl SecretField {
             Self::TotpSecret => "totp_secret",
         }
     }
+
+    /// Разобрать имя поля, пришедшее из IPC.
+    ///
+    /// Именем, а не `Deserialize`, потому что от неизвестного значения ядро
+    /// обязано ответить `VALIDATION` с человеческим текстом
+    /// (`mock/index.ts:1407`). Провал serde на границе Tauri дал бы вместо
+    /// этого строку, из которой `toCoreError` слепит безликое «непредвиденная
+    /// ошибка ядра».
+    pub fn parse(raw: &str) -> CoreResult<Self> {
+        match raw {
+            "password" => Ok(Self::Password),
+            "notes" => Ok(Self::Notes),
+            "totp_secret" => Ok(Self::TotpSecret),
+            _ => Err(CoreError::validation(
+                "У записи нет такого секретного поля.",
+            )),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +414,110 @@ pub struct PeerFound {
     pub name: String,
     pub kind: DeviceKind,
     pub found_at: IsoDateTime,
+}
+
+// ---------------------------------------------------------------------------
+// Конфликты версий (F11, §5.5)
+// ---------------------------------------------------------------------------
+
+/// Чья версия (`ConflictSide`, `contract.ts:836`).
+///
+/// Человек выбирает СТОРОНУ, а не номер: конфликт растёт из общего предка, и обе
+/// стороны сплошь и рядом несут одно и то же число — 4 стало 5 и здесь, и там.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictSide {
+    /// Эта машина.
+    Local,
+    /// То, что приехало от пира.
+    Remote,
+}
+
+impl ConflictSide {
+    /// Разобрать сторону, пришедшую из IPC, — по той же причине, что и
+    /// [`SecretField::parse`].
+    pub fn parse(raw: &str) -> CoreResult<Self> {
+        match raw {
+            "local" => Ok(Self::Local),
+            "remote" => Ok(Self::Remote),
+            _ => Err(CoreError::validation("У конфликта нет такой стороны.")),
+        }
+    }
+}
+
+/// Поле, по которому версии разошлись (`ConflictField`, `contract.ts:842`).
+///
+/// Секретные поля здесь ЕСТЬ — но как имена, а не как значения: «пароли
+/// различаются» это факт о записи, а не сам пароль. Закон №1 цел.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictField {
+    VaultId,
+    ServiceName,
+    Urls,
+    Login,
+    AccountLabel,
+    Password,
+    Notes,
+    TotpSecret,
+}
+
+/// Одна из двух версий записи (`ConflictVersion`, `contract.ts:854`).
+///
+/// Секретных значений нет — те же флаги `has_notes` / `has_totp`, что и в
+/// [`RecordMeta`]. «Полный diff» §5.5 собирается так: метаданные приходят сразу,
+/// а секреты открываются разово через `get_conflict_secret`. Иначе один
+/// приехавший конфликт выкладывал бы на экран два пароля, которых никто не
+/// просил.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictVersion {
+    pub side: ConflictSide,
+    /// Устройство, на котором сделана эта правка, — «какая версия чья».
+    pub device_name: String,
+    pub version: i64,
+    /// «Какая версия раньше, какая позже» (§5.5) — показывается человеку.
+    pub updated_at: IsoDateTime,
+    /// Секцию тоже могли поменять — а вместе с ней и то, уезжает ли запись (§4.2).
+    pub vault_id: VaultId,
+    pub service_name: String,
+    pub urls: Vec<String>,
+    pub login: String,
+    pub account_label: Option<String>,
+    pub has_notes: bool,
+    pub has_totp: bool,
+}
+
+/// Одна и та же запись, независимо изменённая на двух устройствах
+/// (`RecordConflict`, `contract.ts:878`).
+///
+/// Разрешение — на уровне ЦЕЛОЙ записи: человек выбирает одну версию целиком, а
+/// не собирает её по полям. Поэтому здесь ровно две стороны и ни одного «слить
+/// автоматически».
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecordConflict {
+    pub record_id: RecordId,
+    /// Когда ядро обнаружило расхождение — при обмене диффом (§5.3).
+    pub raised_at: IsoDateTime,
+    pub local: ConflictVersion,
+    pub remote: ConflictVersion,
+    /// По каким полям версии расходятся. Значений секретов здесь НЕТ.
+    pub differing_fields: Vec<ConflictField>,
+}
+
+/// Одно секретное поле обеих версий сразу (`GetConflictSecretResponse`,
+/// `contract.ts:921`).
+///
+/// Вторая из трёх команд Закона №1. Обе стороны в одном ответе намеренно:
+/// сравнить одно значение с другим — весь смысл действия, а по одному значению
+/// человеку пришлось бы нажимать дважды и держать первое на экране, пока едет
+/// второе.
+///
+/// `password` здесь тоже `Option`, хотя в [`RecordSecrets`] он обязателен: у
+/// приехавшего надгробия секретов нет вовсе.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConflictSecrets {
+    pub local: Option<String>,
+    pub remote: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

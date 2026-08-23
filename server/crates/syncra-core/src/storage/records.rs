@@ -71,6 +71,17 @@ fn fetch_live(conn: &Connection, record_id: &str) -> CoreResult<StoredRecord> {
     }
 }
 
+/// Метаданные одной записи, включая надгробие.
+///
+/// Отдельно от [`fetch_live`], потому что зовётся оттуда, где запись только что
+/// переписали и надо вернуть её новый вид: разрешение конфликта (§5.5).
+pub fn find_meta(conn: &Connection, record_id: &str) -> CoreResult<RecordMeta> {
+    match fetch(conn, record_id)? {
+        Some(stored) => Ok(stored.meta),
+        None => Err(CoreError::not_found("Запись не найдена.")),
+    }
+}
+
 pub fn list(
     conn: &Connection,
     vault_id: Option<&str>,

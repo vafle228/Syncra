@@ -19,11 +19,18 @@
 //!
 //! **Надгробие — такая же запись** (§5.4). Не поехавшее удаление воскресает с
 //! другого устройства, а это худшая из возможных поломок менеджера паролей.
+//!
+//! **Свежесть — не то же самое, что победа.** Когда обе стороны ушли от общего
+//! предка, «больше версия — та и права» перестаёт быть ответом: чья-то правка
+//! при этом пропадёт молча. Такое расхождение сворачивается в конфликт и ждёт
+//! человека — [`conflicts`], §5.5.
+
+pub mod conflicts;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction};
 
 use crate::crypto::VaultKey;
 use crate::error::CoreResult;
@@ -175,14 +182,22 @@ fn secret_shape(value: &Option<String>) -> &'static str {
 // Правило свежести (§5.2)
 // ---------------------------------------------------------------------------
 
-/// Побеждает ли приехавшая версия местную.
+/// Что делать с приехавшей версией.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Приехавшая свежее — кладём её.
+    Take,
+    /// Местная не старее — не трогаем ничего.
+    Keep,
+    /// Обе стороны ушли от общего предка. Молча тут не решить ни в чью пользу:
+    /// любой выбор потеряет чью-то правку (§5.5).
+    Conflict,
+}
+
+/// Побеждает ли приехавшая версия местную — правило свежести без предка.
 ///
-/// Единственное место, где ядро решает, чья версия свежее. Выделено в отдельную
-/// функцию не ради читаемости: **сюда придёт S5**. Сейчас случай «обе стороны
-/// правили запись после общего предка» неотличим от обычного обновления и
-/// разрешается тем же «больше версия — та и победила»; когда появится таблица
-/// конфликтов, расхождение свернёт в неё именно отсюда, а не из десяти мест
-/// сразу. Общий предок для этого уже есть — `sync_state.synced_version`.
+/// Живёт отдельно от [`classify`], потому что это ровно то, что остаётся, когда
+/// общей точки отсчёта нет: сравнение двух счётчиков и больше ничего (§5.2).
 pub fn remote_wins(remote_version: i64, local_version: Option<i64>) -> bool {
     match local_version {
         // Записи нет вовсе — берём. Надгробие тоже: удаление должно доехать до
@@ -190,6 +205,54 @@ pub fn remote_wins(remote_version: i64, local_version: Option<i64>) -> bool {
         None => true,
         Some(local) => remote_version > local,
     }
+}
+
+/// Единственное место, где ядро решает судьбу приехавшей версии.
+///
+/// Вердикт считается по ТРЁМ числам, а не по двум: третье — общий предок
+/// (`sync_state.synced_version`), версия, на которой стороны сошлись в прошлый
+/// раз. Без него «обе правили» неотличимо от «один правил», и расхождение
+/// разрешалось бы тихой перезаписью.
+///
+/// **Предка нет — конфликта нет.** Отметки стираются при отзыве и при
+/// (повторном) сопряжении (см. [`forget_device`]), а вернувшийся ноутбук
+/// получает хранилище заново. Считать расхождением каждую его запись значило бы
+/// встречать человека сотней конфликтов там, где на деле просто новое
+/// знакомство.
+///
+/// Содержимое здесь не сравнивается намеренно: это чистая функция от трёх
+/// чисел. Совпали ли записи на самом деле, выясняет [`apply`] — там есть ключ
+/// хранилища, а здесь его быть не должно.
+pub fn classify(remote_version: i64, local_version: Option<i64>, ancestor: Option<i64>) -> Verdict {
+    let (Some(local), Some(ancestor)) = (local_version, ancestor) else {
+        return take_or_keep(remote_wins(remote_version, local_version));
+    };
+
+    if local > ancestor && remote_version > ancestor {
+        Verdict::Conflict
+    } else {
+        take_or_keep(remote_version > local)
+    }
+}
+
+fn take_or_keep(wins: bool) -> Verdict {
+    if wins {
+        Verdict::Take
+    } else {
+        Verdict::Keep
+    }
+}
+
+/// Версия, на которой мы в прошлый раз сошлись с этим устройством по этой
+/// записи. `None` — не сходились ни разу.
+pub fn ancestor(conn: &Connection, device_id: &str, record_id: &str) -> CoreResult<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT synced_version FROM sync_state WHERE device_id = ?1 AND record_id = ?2",
+            rusqlite::params![device_id, record_id],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +300,11 @@ pub fn local_vaults(conn: &Connection) -> CoreResult<Vec<VaultId>> {
 /// Обе стороны считают это по одному и тому же правилу, поэтому «что я пошлю»
 /// у одной совпадает с «что я попрошу» у другой — договариваться об этом
 /// отдельно не нужно.
-pub fn plan(conn: &Connection, remote: &Manifest) -> CoreResult<SyncPlan> {
+///
+/// `device_id` нужен ради общего предка: без него расхождение неотличимо от
+/// обычного обновления, и `want` не попросил бы того, из чего конфликт можно
+/// поднять (§5.5).
+pub fn plan(conn: &Connection, device_id: &str, remote: &Manifest) -> CoreResult<SyncPlan> {
     let local = manifest(conn)?;
 
     let remote_by_id: HashMap<&str, &ManifestEntry> = index_by_id(&remote.entries);
@@ -259,6 +326,8 @@ pub fn plan(conn: &Connection, remote: &Manifest) -> CoreResult<SyncPlan> {
         }
     }
 
+    let open_conflicts = conflicts::open_ids(conn)?;
+
     let mut want = Vec::new();
     for entry in remote.entries.iter().filter(|entry| entry.shared) {
         // Своё правило §4.2 каждая сторона применяет сама: незачем просить то,
@@ -266,13 +335,25 @@ pub fn plan(conn: &Connection, remote: &Manifest) -> CoreResult<SyncPlan> {
         if our_local_vaults.contains(entry.vault_id.as_str()) {
             continue;
         }
-        match local_by_id.get(entry.record_id.as_str()) {
-            Some(mine) if !mine.shared => {}
-            Some(mine) if remote_wins(entry.version, Some(mine.version)) => {
-                want.push(entry.record_id.clone());
+        let Some(mine) = local_by_id.get(entry.record_id.as_str()) else {
+            want.push(entry.record_id.clone());
+            continue;
+        };
+        if !mine.shared {
+            continue;
+        }
+
+        let ancestor = ancestor(conn, device_id, &entry.record_id)?;
+        match classify(entry.version, Some(mine.version), ancestor) {
+            Verdict::Take => want.push(entry.record_id.clone()),
+            Verdict::Keep => {}
+            // Расхождение просим ОТДЕЛЬНО от свежести: при равных счётчиках
+            // чужая версия иначе не приедет вовсе, и поднимать конфликт будет
+            // не из чего. Кроме случая, когда тот же самый спор уже висит: он
+            // разобран, и возить его по проводу каждую минуту незачем.
+            Verdict::Conflict if standing(conn, &entry.record_id, mine.version, entry.version)? => {
             }
-            Some(_) => {}
-            None => want.push(entry.record_id.clone()),
+            Verdict::Conflict => want.push(entry.record_id.clone()),
         }
     }
 
@@ -280,7 +361,7 @@ pub fn plan(conn: &Connection, remote: &Manifest) -> CoreResult<SyncPlan> {
     want.truncate(WANT_LIMIT);
 
     let settled = if want_complete {
-        settled_from(&local.entries, &send, &want)
+        settled_from(&local.entries, &send, &want, &open_conflicts)
     } else {
         Vec::new()
     };
@@ -293,21 +374,42 @@ pub fn plan(conn: &Connection, remote: &Manifest) -> CoreResult<SyncPlan> {
     })
 }
 
+/// Тот же спор, что уже лежит: обе стороны с тех пор не менялись.
+fn standing(
+    conn: &Connection,
+    record_id: &str,
+    local_version: i64,
+    remote_version: i64,
+) -> CoreResult<bool> {
+    Ok(conflicts::open_for(conn, record_id)?
+        .is_some_and(|open| open.local_version == local_version && open.version == remote_version))
+}
+
 /// «Ни туда, ни оттуда» — значит, сошлись.
 ///
 /// Считается вычитанием, а не отдельным проходом по манифесту собеседника:
 /// каждая наша синкаемая запись либо едет к нему, либо ждёт его версию, либо
 /// уже совпадает. Третий случай и есть отметка.
+///
+/// Спорные записи из отметок **вычитаются**, и это не мелочь: отметка — это
+/// общий предок, а объявить предком текущую версию значило бы стереть само
+/// расхождение. Одна такая отметка — и конфликт становится неотличим от
+/// сходимости навсегда.
 fn settled_from(
     local: &[ManifestEntry],
     send: &[RecordId],
     want: &[RecordId],
+    disputed: &HashSet<RecordId>,
 ) -> Vec<(RecordId, i64)> {
     let moving: HashSet<&str> = send.iter().chain(want.iter()).map(String::as_str).collect();
 
     local
         .iter()
-        .filter(|entry| entry.shared && !moving.contains(entry.record_id.as_str()))
+        .filter(|entry| {
+            entry.shared
+                && !moving.contains(entry.record_id.as_str())
+                && !disputed.contains(&entry.record_id)
+        })
         .map(|entry| (entry.record_id.clone(), entry.version))
         .collect()
 }
@@ -322,7 +424,8 @@ pub fn settled_after(
     received: &[RecordId],
 ) -> CoreResult<Vec<(RecordId, i64)>> {
     let local = manifest(conn)?;
-    Ok(settled_from(&local.entries, wanted, received))
+    let disputed = conflicts::open_ids(conn)?;
+    Ok(settled_from(&local.entries, wanted, received, &disputed))
 }
 
 fn index_by_id(entries: &[ManifestEntry]) -> HashMap<&str, &ManifestEntry> {
@@ -444,6 +547,17 @@ impl StoredForSync {
     }
 }
 
+/// Что легло по итогам диффа.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Applied {
+    /// Записи, которые правда применились, с их новыми версиями. Именно они —
+    /// и только они — двигают общий предок.
+    pub records: Vec<(RecordId, i64)>,
+    /// Записи, по которым поднялось НОВОЕ расхождение. Про них уходит
+    /// `conflict_raised`; повторно приехавший тот же спор сюда не попадает.
+    pub raised: Vec<RecordId>,
+}
+
 /// Применить приехавший дифф.
 ///
 /// Работает по **транзакции**, а не по соединению: наполовину применённый дифф
@@ -451,15 +565,16 @@ impl StoredForSync {
 /// граница, потом нечем.
 ///
 /// Возвращает то, что правда применилось: запись, чья секция здесь локальная,
-/// не применяется вовсе, а запись со старой версией не трогается (§5.2).
+/// не применяется вовсе, запись со старой версией не трогается (§5.2), а
+/// разошедшаяся откладывается в спор и живой записи не касается (§5.5).
 pub fn apply(
     tx: &Transaction<'_>,
     key: &VaultKey,
     device_id: &str,
     incoming: &[SyncRecord],
-) -> CoreResult<Vec<(RecordId, i64)>> {
+) -> CoreResult<Applied> {
     let at = now_iso();
-    let mut applied = Vec::new();
+    let mut out = Applied::default();
 
     for record in incoming {
         let vault = vaults::adopt(
@@ -481,7 +596,40 @@ pub fn apply(
                 |row| row.get(0),
             )
             .ok();
-        if !remote_wins(record.version, local_version) {
+
+        let ancestor = ancestor(tx, device_id, &record.record_id)?;
+        let take = match classify(record.version, local_version, ancestor) {
+            Verdict::Take => true,
+            Verdict::Keep => false,
+            Verdict::Conflict => match dispute(tx, key, record)? {
+                // Удаление сильнее расхождения и сильнее счётчика (§5.4).
+                // Показать удалённую сторону человеку всё равно нечем — секретов
+                // у надгробия нет, — а не поехавшее удаление воскресает, и это
+                // худшая поломка, какая бывает у менеджера паролей.
+                Dispute::RemoteDeleted => true,
+                Dispute::LocalDeleted => false,
+                // Обе стороны пришли к одному и тому же — спора нет, решает
+                // счётчик, как решал бы и без всякого предка.
+                Dispute::SameContent => remote_wins(record.version, local_version),
+                Dispute::Divergence => {
+                    // Живую запись не трогаем вовсе: чужая версия ложится в спор
+                    // и ждёт человека. В `records` она легла бы поверх местной —
+                    // то есть ровно тем тихим затиранием, от которого конфликт и
+                    // защищает.
+                    if conflicts::raise(
+                        tx,
+                        key,
+                        device_id,
+                        record,
+                        local_version.unwrap_or_default(),
+                    )? {
+                        out.raised.push(record.record_id.clone());
+                    }
+                    false
+                }
+            },
+        };
+        if !take {
             continue;
         }
 
@@ -541,11 +689,68 @@ pub fn apply(
             ],
         )?;
 
-        applied.push((record.record_id.clone(), record.version));
+        // Запись переехала целиком — спорить о её версиях больше не о чем.
+        conflicts::drop_for(tx, &record.record_id)?;
+        out.records.push((record.record_id.clone(), record.version));
     }
 
-    note_in(tx, device_id, &applied, &at)?;
-    Ok(applied)
+    note_in(tx, device_id, &out.records, &at)?;
+    Ok(out)
+}
+
+/// Что на самом деле стоит за разошедшимися счётчиками.
+enum Dispute {
+    /// Приехало надгробие. Удаление важнее спора (§5.4).
+    RemoteDeleted,
+    /// Надгробие здесь. Воскрешать запись приехавшей правкой нельзя.
+    LocalDeleted,
+    /// Счётчики разошлись, содержимое — нет.
+    SameContent,
+    /// Настоящее расхождение: обе стороны правили, и правили по-разному.
+    Divergence,
+}
+
+/// Разобрать, спор перед нами или совпадение.
+///
+/// Два устройства сплошь и рядом приходят к одному и тому же значению одной и
+/// той же правкой — например, приняв её от третьего. Поднимать на этом конфликт
+/// значило бы звать человека решать спор, которого нет. Это же сравнение
+/// закрывает круг после разрешения: выбранная сторона приезжает соседу с
+/// содержимым, которое у него уже лежит.
+fn dispute(tx: &Transaction<'_>, key: &VaultKey, record: &SyncRecord) -> CoreResult<Dispute> {
+    if record.deleted_at.is_some() {
+        return Ok(Dispute::RemoteDeleted);
+    }
+    // `local_side` отдаёт только живую запись: `None` здесь и значит надгробие.
+    let Some(local) = conflicts::local_side(tx, key, &record.record_id)? else {
+        return Ok(Dispute::LocalDeleted);
+    };
+
+    let remote_fields = conflicts::Fields {
+        vault_id: &record.vault_id,
+        service_name: &record.service_name,
+        urls: &record.urls,
+        login: &record.login,
+        account_label: record.account_label.as_deref(),
+    };
+    let remote_secrets = conflicts::Secrets {
+        password: record.password.clone(),
+        notes: record.notes.clone(),
+        totp_secret: record.totp_secret.clone(),
+    };
+
+    if conflicts::differing_fields(
+        &local.fields(),
+        &local.secrets,
+        &remote_fields,
+        &remote_secrets,
+    )
+    .is_empty()
+    {
+        Ok(Dispute::SameContent)
+    } else {
+        Ok(Dispute::Divergence)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -621,11 +826,35 @@ mod tests {
     fn a_newer_version_wins_and_an_older_one_does_not() {
         assert!(remote_wins(2, Some(1)));
         assert!(!remote_wins(1, Some(2)));
-        // Равные версии не двигают ничего: расхождение при равных счётчиках —
-        // это конфликт, и разрешать его молча нельзя (§5.5, S5).
+        // Равные счётчики сами по себе никого не двигают.
         assert!(!remote_wins(2, Some(2)));
         // Записи нет вовсе — берём любую, включая надгробие.
         assert!(remote_wins(1, None));
+    }
+
+    #[test]
+    fn without_a_common_ancestor_the_counter_decides_alone() {
+        // Так выглядит первая встреча и возврат после отзыва: отметок нет,
+        // и объявлять расхождением каждую запись нельзя (§5.5).
+        assert_eq!(classify(2, Some(1), None), Verdict::Take);
+        assert_eq!(classify(1, Some(2), None), Verdict::Keep);
+        assert_eq!(classify(2, Some(2), None), Verdict::Keep);
+        assert_eq!(classify(1, None, None), Verdict::Take);
+        // Записи нет вовсе — спорить не с чем даже при известном предке.
+        assert_eq!(classify(1, None, Some(1)), Verdict::Take);
+    }
+
+    #[test]
+    fn only_a_move_on_both_sides_is_a_conflict() {
+        // Ушли обе — расхождение, и неважно, чей счётчик больше.
+        assert_eq!(classify(5, Some(5), Some(3)), Verdict::Conflict);
+        assert_eq!(classify(6, Some(5), Some(3)), Verdict::Conflict);
+        assert_eq!(classify(4, Some(7), Some(3)), Verdict::Conflict);
+        // Ушла одна — обычное обновление в ту или другую сторону.
+        assert_eq!(classify(5, Some(3), Some(3)), Verdict::Take);
+        assert_eq!(classify(3, Some(5), Some(3)), Verdict::Keep);
+        // Не ушёл никто — сошлись.
+        assert_eq!(classify(3, Some(3), Some(3)), Verdict::Keep);
     }
 
     #[test]
