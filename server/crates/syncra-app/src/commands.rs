@@ -7,7 +7,7 @@
 //! Логики здесь нет и быть не должно: всё, что тут появляется, — это разбор
 //! запроса, вызов ядра и (для команд замка) событие наружу.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use syncra_core::{
@@ -256,14 +256,22 @@ fn announce_locked(app: &AppHandle, reason: &'static str) {
 /// две правды о том, заперто ли хранилище.
 ///
 /// Отравленный мьютекс здесь не повод падать: сторож — не команда пользователя,
-/// и уронить приложение из фонового потока он не должен.
+/// и уронить приложение из фонового потока он не должен. Но и молчать он не
+/// имеет права: тихий выход на каждом тике означал бы, что хранилище больше
+/// НИКОГДА не запрётся само, — ключ остаётся в памяти процесса, человек уходит
+/// от компьютера, а замок не щёлкает. Невозможность проверить срок — это
+/// причина запереть, а не причина не запирать.
 pub fn autolock_tick(app: &AppHandle) {
     let state = app.state::<CoreState>();
-    let Ok(mut core) = state.0.lock() else {
-        return;
-    };
+    let poisoned = state.0.is_poisoned();
+    let mut core = state.0.lock().unwrap_or_else(PoisonError::into_inner);
 
-    if !core.autolock_due(std::time::Instant::now()) {
+    if !poisoned && !core.autolock_due(std::time::Instant::now()) {
+        return;
+    }
+    // Уже заперто — рассказывать не о чем. Без этой проверки отравленный
+    // мьютекс слал бы «заперлись» каждую секунду до конца работы приложения.
+    if !core.is_unlocked() {
         return;
     }
     core.lock();
@@ -271,7 +279,10 @@ pub fn autolock_tick(app: &AppHandle) {
 
     // Событие уходит уже с отпущенным замком: подписчик наверняка попросит
     // статус в ответ, и держать мьютекс в этот момент незачем.
-    announce_locked(app, "timeout");
+    //
+    // `system`, а не `timeout`: срок здесь ни при чём, заперло не бездействие
+    // человека, а поломка (`contract.ts:1287`).
+    announce_locked(app, if poisoned { "system" } else { "timeout" });
 }
 
 /// Быстрый вход по PIN (F13). Завести PIN пока нечем — команды энролмента нет в

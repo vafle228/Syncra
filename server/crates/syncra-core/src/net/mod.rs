@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use crate::crypto::DeviceKeypair;
@@ -197,6 +197,20 @@ const FACTS_STEP: Duration = Duration::from_secs(1);
 // Общее состояние
 // ---------------------------------------------------------------------------
 
+/// Взять замок общего состояния, не считаясь с отравой.
+///
+/// [`Shared`] — это счётчики и кэши. Паника в потоке, который держал такой
+/// замок, делает их устаревшими, а не неверными, и продолжать с ними честнее,
+/// чем ослепнуть: при `.lock().ok()` отравленный мьютекс означал бы «соседей
+/// ноль» и «статус рассылать некому» **навсегда** — то есть UI спокойно
+/// показывал бы нормальную работу вместо поломки.
+///
+/// Мьютекс ЯДРА так брать нельзя и не берётся: отравленное ядро правда нельзя
+/// считать целым — см. [`Context::with_core`] и `commands.rs::core!`.
+fn held<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 #[derive(Default)]
 struct Peers {
     /// Что видно в сети. Кто это — ещё неизвестно.
@@ -257,28 +271,22 @@ impl Shared {
     /// просто неверен. Без этого только что сопряжённое (или возвращённое из
     /// отзыва) устройство ждало бы своей пробы до конца отката.
     fn forget_strangers(&self) {
-        if let Ok(mut peers) = self.peers.lock() {
-            peers.strangers.clear();
-        }
+        held(&self.peers).strangers.clear();
     }
 
     fn failure(&self) -> Option<Failure> {
-        self.failure.lock().ok().and_then(|failure| failure.clone())
+        held(&self.failure).clone()
     }
 
     fn fail_with(&self, message: impl Into<String>, peer_name: Option<String>) {
-        if let Ok(mut failure) = self.failure.lock() {
-            *failure = Some(Failure {
-                message: message.into(),
-                peer_name,
-            });
-        }
+        *held(&self.failure) = Some(Failure {
+            message: message.into(),
+            peer_name,
+        });
     }
 
     fn forget_failure(&self) {
-        if let Ok(mut failure) = self.failure.lock() {
-            *failure = None;
-        }
+        *held(&self.failure) = None;
     }
 
     fn announce(&self, event: CoreEvent) {
@@ -305,7 +313,7 @@ struct Busy<'a> {
 impl<'a> Busy<'a> {
     fn claim(shared: &'a Shared, peer_name: &str) -> Option<Self> {
         {
-            let mut slot = shared.syncing.lock().ok()?;
+            let mut slot = held(&shared.syncing);
             if slot.is_some() {
                 return None;
             }
@@ -320,9 +328,7 @@ impl<'a> Busy<'a> {
 
 impl Drop for Busy<'_> {
     fn drop(&mut self) {
-        if let Ok(mut slot) = self.shared.syncing.lock() {
-            *slot = None;
-        }
+        *held(&self.shared.syncing) = None;
     }
 }
 
@@ -441,11 +447,13 @@ impl Node {
     /// бы дедлок в первой же строчке. Зернистость в секунду здесь та же, что у
     /// автоблокировки, и приемлема по той же причине.
     pub fn tick(&self) {
-        let Ok(core) = self.core.lock() else {
-            return;
+        let unlocked = match self.core.lock() {
+            Ok(core) => core.is_unlocked(),
+            // Отравленное ядро — это поломка, а не «заперто»: спокойный ноль в
+            // индикаторе соврал бы про неё, а сеть с таким ядром всё равно не
+            // работает (`Context::with_core` вернёт `None` каждому потоку).
+            Err(_) => return self.fail_poisoned(),
         };
-        let unlocked = core.is_unlocked();
-        drop(core);
 
         match (unlocked, self.shared.running.load(Ordering::SeqCst)) {
             (true, false) => self.start(),
@@ -470,12 +478,11 @@ impl Node {
     /// это не даёт никакого: адрес только говорит, куда звонить, а пускать или
     /// нет решает рукопожатие (§2.1).
     pub fn seed_peer(&self, addr: SocketAddr) {
-        if let Ok(mut peers) = self.shared.peers.lock() {
-            if !peers.addrs.contains(&addr) {
-                peers.addrs.push(addr);
-            }
-            peers.strangers.remove(&addr);
+        let mut peers = held(&self.shared.peers);
+        if !peers.addrs.contains(&addr) {
+            peers.addrs.push(addr);
         }
+        peers.strangers.remove(&addr);
     }
 
     /// Текущее состояние синхронизации целиком.
@@ -494,9 +501,7 @@ impl Node {
     /// сети, а команда должна вернуться сразу; о том, чем он кончился, расскажет
     /// событие `sync_status` (так же устроен и `mock/index.ts::syncNow`).
     pub fn sync_now(&self) -> SyncStatus {
-        if let Ok(mut until) = self.shared.searching_until.lock() {
-            *until = Some(Instant::now() + self.settings.search_window);
-        }
+        *held(&self.shared.searching_until) = Some(Instant::now() + self.settings.search_window);
         self.shared.forget_failure();
         self.shared.probe_requested.store(true, Ordering::SeqCst);
         self.shared.sync_requested.store(true, Ordering::SeqCst);
@@ -589,9 +594,7 @@ impl Node {
         };
 
         self.shared.forget_failure();
-        if let Ok(mut until) = self.shared.searching_until.lock() {
-            *until = Some(Instant::now() + self.settings.search_window);
-        }
+        *held(&self.shared.searching_until) = Some(Instant::now() + self.settings.search_window);
         self.shared.port.store(u64::from(port), Ordering::SeqCst);
         self.shared.running.store(true, Ordering::SeqCst);
         // «Последний обмен» переживает не только замок, но и перезапуск: он
@@ -618,25 +621,27 @@ impl Node {
         self.shared.running.store(false, Ordering::SeqCst);
         self.shared.port.store(0, Ordering::SeqCst);
 
-        if let Ok(mut peers) = self.shared.peers.lock() {
-            *peers = Peers::default();
-        }
-        if let Ok(mut until) = self.shared.searching_until.lock() {
-            *until = None;
-        }
+        *held(&self.shared.peers) = Peers::default();
+        *held(&self.shared.searching_until) = None;
         // Запертое хранилище — это спокойный ноль, а не «обмен не удался»:
         // рассказывать про соседей и ждущие записи ему нечем и незачем.
         self.shared.forget_failure();
-        if let Ok(mut syncing) = self.shared.syncing.lock() {
-            *syncing = None;
-        }
-        if let Ok(mut pending) = self.shared.pending.lock() {
-            pending.clear();
-        }
-        if let Ok(mut last) = self.shared.last_sync_at.lock() {
-            *last = None;
-        }
+        *held(&self.shared.syncing) = None;
+        held(&self.shared.pending).clear();
+        *held(&self.shared.last_sync_at) = None;
         publish_status(&self.shared, Instant::now());
+    }
+
+    /// Ядро отравлено: сеть с ним не работает, и молчать об этом нельзя.
+    ///
+    /// Сначала опустить сеть (иначе её потоки останутся крутиться впустую),
+    /// потом зажечь `error`: `stop` гасит неудачу, и порядок здесь обратный
+    /// был бы порядком, в котором сообщение стирается сразу после появления.
+    fn fail_poisoned(&self) {
+        if self.shared.running.load(Ordering::SeqCst) {
+            self.stop();
+        }
+        self.fail("Ядро в несогласованном состоянии — синхронизация остановлена.");
     }
 
     fn fail(&self, message: impl Into<String>) {
@@ -672,9 +677,9 @@ impl Node {
         // ровно тот, с кем мы и собираемся сопрягаться. Откат придуман для
         // пробы доверенных, чтобы не звонить соседскому принтеру каждые
         // пятнадцать секунд; сопряжение — действие человека и разовое.
-        let addrs = context.shared.peers.lock().map(|peers| peers.addrs.clone());
+        let addrs = held(&context.shared.peers).addrs.clone();
 
-        for addr in addrs.unwrap_or_default() {
+        for addr in addrs {
             if let Some(payload) = ask_for_payload(&context, addr, code) {
                 return Ok(payload);
             }
@@ -710,21 +715,12 @@ fn compute_status(shared: &Shared, now: Instant) -> SyncStatus {
         };
     }
 
-    let online = shared
-        .peers
-        .lock()
-        .map(|peers| peers.online.len() as u32)
-        .unwrap_or(0);
-    let syncing = shared.syncing.lock().ok().and_then(|peer| peer.clone());
+    let online = held(&shared.peers).online.len() as u32;
+    let syncing = held(&shared.syncing).clone();
     let searching = online == 0
         && syncing.is_none()
         && failure.is_none()
-        && shared
-            .searching_until
-            .lock()
-            .ok()
-            .and_then(|until| *until)
-            .is_some_and(|until| now < until);
+        && held(&shared.searching_until).is_some_and(|until| now < until);
 
     // Порядок — это приоритет: то, что происходит прямо сейчас, важнее того,
     // чем кончился прошлый круг.
@@ -741,12 +737,8 @@ fn compute_status(shared: &Shared, now: Instant) -> SyncStatus {
         phase,
         peers_online: online,
         peer_name,
-        pending_records: shared
-            .pending
-            .lock()
-            .map(|pending| pending.clone())
-            .unwrap_or_default(),
-        last_sync_at: shared.last_sync_at.lock().ok().and_then(|at| at.clone()),
+        pending_records: held(&shared.pending).clone(),
+        last_sync_at: held(&shared.last_sync_at).clone(),
         message,
     }
 }
@@ -756,14 +748,10 @@ fn compute_status(shared: &Shared, now: Instant) -> SyncStatus {
 /// Зовётся с уже взятым замком ядра — и ничего сетевого внутри не делает.
 fn refresh_facts(shared: &Shared, core: &mut Core) {
     if let Ok(pending) = core.pending_records() {
-        if let Ok(mut slot) = shared.pending.lock() {
-            *slot = pending;
-        }
+        *held(&shared.pending) = pending;
     }
     if let Ok(at) = core.last_sync_at() {
-        if let Ok(mut slot) = shared.last_sync_at.lock() {
-            *slot = at;
-        }
+        *held(&shared.last_sync_at) = at;
     }
 }
 
@@ -775,15 +763,13 @@ fn refresh_facts(shared: &Shared, core: &mut Core) {
 fn publish_status(shared: &Shared, now: Instant) -> SyncStatus {
     let status = compute_status(shared, now);
 
-    let changed = match shared.last_status.lock() {
-        Ok(mut last) => {
-            let changed = last.as_ref() != Some(&status);
-            if changed {
-                *last = Some(status.clone());
-            }
-            changed
+    let changed = {
+        let mut last = held(&shared.last_status);
+        let changed = last.as_ref() != Some(&status);
+        if changed {
+            *last = Some(status.clone());
         }
-        Err(_) => false,
+        changed
     };
     if changed {
         shared.announce(CoreEvent::SyncStatus(Box::new(status.clone())));
@@ -794,13 +780,10 @@ fn publish_status(shared: &Shared, now: Instant) -> SyncStatus {
 /// Устройство отозвалось: подвинуть `last_seen_at`, сказать про него, если оно
 /// только что появилось.
 fn mark_online(context: &Context, device_id: &str) {
-    let fresh = match context.shared.peers.lock() {
-        Ok(mut peers) => peers
-            .online
-            .insert(device_id.to_owned(), Instant::now())
-            .is_none(),
-        Err(_) => return,
-    };
+    let fresh = held(&context.shared.peers)
+        .online
+        .insert(device_id.to_owned(), Instant::now())
+        .is_none();
 
     let device = context.with_core(|core| core.mark_peer_seen(device_id).ok().flatten());
     let Some(Some(device)) = device else {
@@ -823,15 +806,13 @@ fn mark_online(context: &Context, device_id: &str) {
 /// Отдельного события об уходе в контракте нет намеренно: уход виден по
 /// упавшему `peers_online` в общем статусе.
 fn expire_online(context: &Context, now: Instant) {
-    let dropped = match context.shared.peers.lock() {
-        Ok(mut peers) => {
-            let before = peers.online.len();
-            peers
-                .online
-                .retain(|_, seen| now.duration_since(*seen) < context.settings.peer_ttl);
-            before != peers.online.len()
-        }
-        Err(_) => false,
+    let dropped = {
+        let mut peers = held(&context.shared.peers);
+        let before = peers.online.len();
+        peers
+            .online
+            .retain(|_, seen| now.duration_since(*seen) < context.settings.peer_ttl);
+        before != peers.online.len()
     };
     if dropped {
         publish_status(&context.shared, now);
@@ -1096,9 +1077,7 @@ fn walk_loop(context: &Context, discovery: Discovery) {
 }
 
 fn absorb(context: &Context, sightings: Vec<Sighting>) {
-    let Ok(mut peers) = context.shared.peers.lock() else {
-        return;
-    };
+    let mut peers = held(&context.shared.peers);
     for sighting in sightings {
         match sighting {
             Sighting::Seen { addrs, .. } => {
@@ -1117,8 +1096,9 @@ fn absorb(context: &Context, sightings: Vec<Sighting>) {
 
 fn probe_round(context: &Context, exchange: bool) {
     let now = Instant::now();
-    let addrs = match context.shared.peers.lock() {
-        Ok(peers) => peers
+    let addrs = {
+        let peers = held(&context.shared.peers);
+        peers
             .addrs
             .iter()
             .filter(|addr| {
@@ -1128,8 +1108,7 @@ fn probe_round(context: &Context, exchange: bool) {
                     .map_or(true, |until| now >= *until)
             })
             .copied()
-            .collect::<Vec<_>>(),
-        Err(_) => return,
+            .collect::<Vec<_>>()
     };
 
     for addr in addrs {
@@ -1138,17 +1117,13 @@ fn probe_round(context: &Context, exchange: bool) {
         }
         match visit(context, addr, exchange) {
             Some(device_id) => {
-                if let Ok(mut peers) = context.shared.peers.lock() {
-                    peers.strangers.remove(&addr);
-                }
+                held(&context.shared.peers).strangers.remove(&addr);
                 mark_online(context, &device_id);
             }
             None => {
-                if let Ok(mut peers) = context.shared.peers.lock() {
-                    peers
-                        .strangers
-                        .insert(addr, Instant::now() + context.settings.stranger_backoff);
-                }
+                held(&context.shared.peers)
+                    .strangers
+                    .insert(addr, Instant::now() + context.settings.stranger_backoff);
             }
         }
     }
@@ -1289,12 +1264,7 @@ fn announce_pairing(context: &Context, announcement: &PairingAnnouncement) {
 
 /// Один проход по известным адресам. Возвращает тот, по которому дошло.
 fn deliver_once(context: &Context, announcement: &PairingAnnouncement) -> Option<SocketAddr> {
-    let addrs = context
-        .shared
-        .peers
-        .lock()
-        .map(|peers| peers.addrs.clone())
-        .unwrap_or_default();
+    let addrs = held(&context.shared.peers).addrs.clone();
 
     addrs
         .into_iter()
@@ -1330,5 +1300,86 @@ fn deliver_pairing(
     match session.channel.request(&message) {
         Ok(Msg::PairingAck) => Some(()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Отравить мьютекс так, как это случается в жизни: паникой в потоке,
+    /// который его держал.
+    fn poison<T: Send + Sync>(mutex: &Mutex<T>) {
+        std::thread::scope(|scope| {
+            let _ = scope
+                .spawn(|| {
+                    let _guard = mutex.lock().unwrap();
+                    panic!("поток упал с замком в руках");
+                })
+                .join();
+        });
+        assert!(mutex.is_poisoned(), "мьютекс должен был отравиться");
+    }
+
+    /// Общее состояние и приёмник его событий: приёмник должен жить до конца
+    /// теста, иначе `announce` начнёт отваливаться и проверять мы будем не то.
+    fn shared() -> (Arc<Shared>, Receiver<CoreEvent>) {
+        let (events, inbox) = mpsc::channel();
+        let shared = Arc::new(Shared {
+            generation: AtomicU64::new(0),
+            running: AtomicBool::new(true),
+            peers: Mutex::new(Peers::default()),
+            searching_until: Mutex::new(None),
+            probe_requested: AtomicBool::new(false),
+            sync_requested: AtomicBool::new(false),
+            syncing: Mutex::new(None),
+            failure: Mutex::new(None),
+            pending: Mutex::new(Vec::new()),
+            last_sync_at: Mutex::new(None),
+            last_status: Mutex::new(None),
+            events,
+            port: AtomicU64::new(0),
+            handlers: AtomicUsize::new(0),
+        });
+        (shared, inbox)
+    }
+
+    #[test]
+    fn a_poisoned_lock_does_not_turn_the_status_into_a_lie() {
+        let (shared, _inbox) = shared();
+        held(&shared.peers)
+            .online
+            .insert("телефон".to_owned(), Instant::now());
+        held(&shared.pending).push("r-1".to_owned());
+
+        poison(&shared.peers);
+        poison(&shared.pending);
+        poison(&shared.last_status);
+
+        // Соседи на месте, ждущие записи на месте — состояние после паники
+        // устарело, но не стало неверным, и показывать вместо него спокойный
+        // ноль значило бы соврать про поломку.
+        let status = compute_status(&shared, Instant::now());
+        assert_eq!(status.peers_online, 1);
+        assert_eq!(status.pending_records, vec!["r-1".to_owned()]);
+
+        // И рассылка статуса не онемела: `last_status` под отравой читается.
+        assert_eq!(publish_status(&shared, Instant::now()), status);
+        assert!(held(&shared.last_status).is_some());
+    }
+
+    #[test]
+    fn a_poisoned_failure_slot_still_takes_a_message() {
+        let (shared, _inbox) = shared();
+        poison(&shared.failure);
+
+        shared.fail_with("обмен не удался", Some("Телефон".to_owned()));
+        assert_eq!(
+            shared.failure().map(|failure| failure.message),
+            Some("обмен не удался".to_owned())
+        );
+
+        shared.forget_failure();
+        assert!(shared.failure().is_none());
     }
 }
