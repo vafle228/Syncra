@@ -31,7 +31,7 @@ use crate::net::{NetIdentity, RemotePeer};
 use crate::pairing;
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
 use crate::storage::{records, schema, vaults, Storage};
-use crate::sync::{self, conflicts};
+use crate::sync::{self, conflicts, tombstones};
 use crate::transfer;
 use crate::trust;
 
@@ -265,9 +265,31 @@ impl Core {
         // хранилище навсегда осталось бы без права представляться собой.
         self.ensure_identity(&key)?;
 
-        Ok(UnlockResponse {
-            unlocked_at: self.accept_key(key),
-        })
+        let unlocked_at = self.accept_key(key);
+        // Уборка, а не часть отпирания — см. [`Core::collect_tombstones`].
+        self.collect_tombstones();
+
+        Ok(UnlockResponse { unlocked_at })
+    }
+
+    /// Стереть отжившие надгробия (S7.2, §5.4).
+    ///
+    /// Зовётся из двух мест, и оба — «попутно»: при отпирании и в конце
+    /// успешного круга обмена. Первое ловит хранилище, которое неделями не
+    /// выходило в сеть; второе — единственный момент, когда про надгробие
+    /// впервые становится известно, что оно **разошлось**, а без этого чистить
+    /// его нельзя.
+    ///
+    /// Отказ проглатывается намеренно, и это единственное такое место в ядре.
+    /// Чистка надгробий — уборка: человек её не заказывал, результата её не
+    /// увидит, и запереть его снаружи собственного хранилища из-за неудавшейся
+    /// уборки было бы обменом важного на неважное. Всё, что она делает, —
+    /// один `DELETE`; не прошёл он сейчас, пройдёт при следующем отпирании.
+    fn collect_tombstones(&self) {
+        let Ok(device_id) = self.device_id() else {
+            return;
+        };
+        let _ = tombstones::collect(self.storage.conn(), &device_id);
     }
 
     /// Досоздать идентичность, если её нет. Идемпотентна и обычно ничего не делает.
@@ -1105,6 +1127,9 @@ impl Core {
         let at = now_iso();
         self.storage
             .meta_set(schema::META_LAST_SYNC_AT, at.as_bytes())?;
+        // Круг только что закрыл отметки обмена — а значит, про какие-то
+        // надгробия впервые стало известно, что они разошлись (S7.2, §5.4).
+        self.collect_tombstones();
         Ok(at)
     }
 
