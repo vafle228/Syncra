@@ -7,17 +7,20 @@
 //! Логики здесь нет и быть не должно: всё, что тут появляется, — это разбор
 //! запроса, вызов ядра и (для команд замка) событие наружу.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use syncra_core::{
     ChangeMasterPasswordResponse, ConflictSecrets, ConflictSide, Core, CoreError, Device,
-    GeneratedPasswords, GeneratorProfile, InitVaultResponse, Node, PairingHandshake, PairingOffer,
-    PairingResult, RecordConflict, RecordDraft, RecordMeta, RecordPatch, RecordSecrets,
+    ExportFile, GeneratedPasswords, GeneratorProfile, ImportOptions, ImportPreview, ImportResult,
+    ImportSource, InitVaultResponse, Node, PairingHandshake, PairingOffer, PairingResult,
+    RecordConflict, RecordDraft, RecordMeta, RecordPatch, RecordSecrets, RestoreBackupResult,
     SecretField, SecuritySettings, SecuritySettingsPatch, SyncStatus, UnlockResponse, Vault,
     VaultPatch, VaultStatus,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 /// Ядро под замком процесса. Команды синхронные: они короткие, а самая долгая
 /// (вывод ключа при `unlock`) выполняется один раз за сеанс.
@@ -583,6 +586,156 @@ pub fn get_conflict_secret(
 }
 
 // ---------------------------------------------------------------------------
+// Перенос данных: экспорт, импорт, бэкап (F12, §6.2 · §6.3)
+// ---------------------------------------------------------------------------
+//
+// Здесь оболочка делает ровно две вещи, которых не умеет ядро: спрашивает у
+// системы папку и открывает диалог выбора файла. Всё остальное — в ядре, и путь
+// приходит туда готовым аргументом, как и путь к БД (§8.2).
+
+#[derive(Deserialize)]
+pub struct DeleteExportRequest {
+    path: String,
+}
+
+#[derive(Deserialize)]
+pub struct BeginImportRequest {
+    source: String,
+}
+
+#[derive(Deserialize)]
+pub struct CommitImportRequest {
+    session_id: String,
+    options: ImportOptions,
+}
+
+#[derive(Deserialize)]
+pub struct ImportSessionRequest {
+    session_id: String,
+}
+
+/// Куда ядро кладёт созданные файлы.
+///
+/// Папка загрузок — и для CSV, и для бэкапа. Фейк-ядро рисует для бэкапа
+/// `~/Backups`, но такой папки на Windows нет, а «одно место, куда смотреть»
+/// человеку понятнее двух: имена файлов и так различаются (`syncra-plain-…csv`
+/// против `syncra-…syncra`).
+fn export_dir(app: &AppHandle) -> Answer<PathBuf> {
+    app.path()
+        .download_dir()
+        // Папки загрузок может не быть вовсе — тогда пусть файл ляжет рядом с
+        // хранилищем: это хуже для поиска глазами, но лучше, чем отказ.
+        .or_else(|_| app.path().app_data_dir())
+        .map_err(|_| CoreError::internal("Не удалось найти папку для сохранения файла."))
+}
+
+#[tauri::command]
+pub fn export_csv(
+    request: MasterPasswordRequest,
+    state: State<'_, CoreState>,
+    app: AppHandle,
+) -> Answer<ExportFile> {
+    let dir = export_dir(&app)?;
+    core!(state).export_csv(&request.master_password, &dir)
+}
+
+#[tauri::command]
+pub fn export_backup(
+    request: MasterPasswordRequest,
+    state: State<'_, CoreState>,
+    app: AppHandle,
+) -> Answer<ExportFile> {
+    let dir = export_dir(&app)?;
+    core!(state).export_backup(&request.master_password, &dir)
+}
+
+#[tauri::command]
+pub fn delete_export(request: DeleteExportRequest, state: State<'_, CoreState>) -> Answer<()> {
+    core!(state).delete_export(&request.path)
+}
+
+/// Восстановление из бэкапа (§6.3).
+///
+/// `null` в ответе — «человек закрыл окно выбора файла». Это не ошибка, и
+/// ядро о ней не узнаёт вовсе: его в таком случае просто не зовут.
+#[tauri::command]
+pub fn restore_backup(
+    request: MasterPasswordRequest,
+    state: State<'_, CoreState>,
+    app: AppHandle,
+) -> Answer<Option<RestoreBackupResult>> {
+    let Some(file) = pick_file(&app, "Резервная копия Syncra", &["syncra"]) else {
+        return Ok(None);
+    };
+
+    let result = core!(state).restore_backup(&request.master_password, &file)?;
+    // Хранилище открылось — остальной UI должен узнать об этом так же, как
+    // после обычного `unlock`.
+    announce(
+        &app,
+        "unlocked",
+        UnlockedEvent {
+            unlocked_at: result.unlocked_at.clone(),
+        },
+    );
+    Ok(Some(result))
+}
+
+#[tauri::command]
+pub fn begin_import(
+    request: BeginImportRequest,
+    state: State<'_, CoreState>,
+    app: AppHandle,
+) -> Answer<Option<ImportPreview>> {
+    // Источник разбирается ДО диалога: показывать окно выбора файла, чтобы
+    // потом ответить «неизвестный источник», незачем.
+    let source = ImportSource::parse(&request.source)?;
+    let (name, extensions) = import_filter(source);
+
+    let Some(file) = pick_file(&app, name, extensions) else {
+        return Ok(None);
+    };
+    core!(state).begin_import(source, &file).map(Some)
+}
+
+#[tauri::command]
+pub fn commit_import(
+    request: CommitImportRequest,
+    state: State<'_, CoreState>,
+) -> Answer<ImportResult> {
+    core!(state).commit_import(&request.session_id, &request.options)
+}
+
+#[tauri::command]
+pub fn cancel_import(request: ImportSessionRequest, state: State<'_, CoreState>) -> Answer<()> {
+    core!(state).cancel_import(&request.session_id)
+}
+
+/// Что предложить в окне выбора. Фильтр — подсказка, а не проверка: разбирает
+/// файл всё равно ядро, и оно же отвечает, если принесли не то.
+fn import_filter(source: ImportSource) -> (&'static str, &'static [&'static str]) {
+    match source {
+        ImportSource::Bitwarden => ("Экспорт Bitwarden", &["json", "csv"]),
+        ImportSource::KeePass => ("Экспорт KeePass", &["csv", "kdbx"]),
+        _ => ("Экспорт паролей", &["csv"]),
+    }
+}
+
+/// Системное окно выбора файла.
+///
+/// **Мьютекс ядра здесь не взят, и это не случайность.** Модальное окно живёт
+/// столько, сколько человек думает; взятый на это время замок заморозил бы весь
+/// UI, включая кнопку «Запереть», — тот же закон, по которому сеть не держит
+/// `Mutex<Core>` (см. README, «Сеть не держит Mutex<Core>»).
+fn pick_file(app: &AppHandle, name: &str, extensions: &[&str]) -> Option<PathBuf> {
+    app.dialog()
+        .file()
+        .add_filter(name, extensions)
+        .blocking_pick_file()
+        .and_then(|picked| picked.into_path().ok())
+}
+
+// ---------------------------------------------------------------------------
 // Ещё не сделанные части контракта
 // ---------------------------------------------------------------------------
 
@@ -606,12 +759,4 @@ macro_rules! not_ready {
 not_ready![
     // Коды подтверждения (фаза 2)
     get_totp_code,
-    // Экспорт, импорт, бэкап (F12)
-    export_csv,
-    export_backup,
-    delete_export,
-    restore_backup,
-    begin_import,
-    commit_import,
-    cancel_import,
 ];

@@ -100,10 +100,10 @@ impl Storage {
 /// Неудача проглатывается намеренно: не сумели ужать права — это не повод не
 /// открыть хранилище человеку, который его и так открывает своим.
 #[cfg(unix)]
-fn restrict(path: &Path, mode: u32) {
+pub(crate) fn restrict(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
 }
 
 #[cfg(not(unix))]
-fn restrict(_path: &Path, _mode: u32) {}
+pub(crate) fn restrict(_path: &Path, _mode: u32) {}

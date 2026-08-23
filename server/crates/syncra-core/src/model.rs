@@ -16,6 +16,7 @@ pub type RecordId = String;
 pub type VaultId = String;
 pub type DeviceId = String;
 pub type PairingSessionId = String;
+pub type ImportSessionId = String;
 /// ISO-8601 UTC, напр. `2026-08-05T21:14:03.000Z`.
 pub type IsoDateTime = String;
 
@@ -601,6 +602,155 @@ pub struct ChangeMasterPasswordResponse {
     pub devices_to_update: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Перенос данных: экспорт, импорт, бэкап (F12, §6.2)
+// ---------------------------------------------------------------------------
+
+/// Файл, который ядро СОЗДАЛО на диске (`contract.ts:948`).
+///
+/// Содержимого здесь нет — только след файла. И это главное решение всего F12:
+/// ни CSV, ни бэкап не пересекают границу IPC. Иначе экспорт стал бы четвёртой
+/// командой Закона №1, причём выкладывающей наружу не одно поле по нажатию, а
+/// ВСЕ пароли разом.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExportFile {
+    /// Полный путь: его показывают человеку — он пойдёт искать файл.
+    pub path: String,
+    pub file_name: String,
+    pub size_bytes: i64,
+    pub record_count: i64,
+    pub created_at: IsoDateTime,
+    /// Закрыт ли файл мастер-паролем. `false` у CSV — и UI обязан продолжать
+    /// говорить об этом после экспорта, а не только до него.
+    pub encrypted: bool,
+}
+
+/// Итог восстановления из бэкапа (`contract.ts:1015`).
+///
+/// `null` вместо этого ответа возвращает ОБОЛОЧКА, когда человек закрыл окно
+/// выбора файла: ядро об отмене не знает вовсе — его просто не позвали.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RestoreBackupResult {
+    pub file_name: String,
+    /// Числа из файла, а не из UI.
+    pub records: i64,
+    pub vaults: i64,
+    pub initialized_at: IsoDateTime,
+    /// Восстановленное хранилище сразу открыто: пароль только что вводили.
+    pub unlocked_at: IsoDateTime,
+}
+
+/// Откуда переносим (`contract.ts:1032`). На проводе — только имя источника:
+/// как добыть из него файл, объясняет UI, а как разобрать — знает ядро.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ImportSource {
+    #[serde(rename = "chrome")]
+    Chrome,
+    #[serde(rename = "firefox")]
+    Firefox,
+    #[serde(rename = "1password")]
+    OnePassword,
+    #[serde(rename = "bitwarden")]
+    Bitwarden,
+    #[serde(rename = "keepass")]
+    KeePass,
+    #[serde(rename = "csv")]
+    Csv,
+}
+
+impl ImportSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chrome => "chrome",
+            Self::Firefox => "firefox",
+            Self::OnePassword => "1password",
+            Self::Bitwarden => "bitwarden",
+            Self::KeePass => "keepass",
+            Self::Csv => "csv",
+        }
+    }
+
+    /// Разобрать имя источника, пришедшее из IPC — именем, а не `Deserialize`,
+    /// по той же причине, что и у [`SecretField::parse`]: от неизвестного
+    /// значения контракт обещает `VALIDATION` с человеческим текстом
+    /// (`mock/index.ts:1489`), а провал serde на границе Tauri дал бы безликое
+    /// «непредвиденная ошибка ядра».
+    pub fn parse(raw: &str) -> CoreResult<Self> {
+        match raw {
+            "chrome" => Ok(Self::Chrome),
+            "firefox" => Ok(Self::Firefox),
+            "1password" => Ok(Self::OnePassword),
+            "bitwarden" => Ok(Self::Bitwarden),
+            "keepass" => Ok(Self::KeePass),
+            "csv" => Ok(Self::Csv),
+            _ => Err(CoreError::validation("Неизвестный источник импорта.")),
+        }
+    }
+}
+
+/// Что будет со строкой файла (`contract.ts:1044`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRowStatus {
+    New,
+    Duplicate,
+    NoPassword,
+}
+
+/// Строка предпросмотра. Пароля здесь НЕТ — то же правило, что у [`RecordMeta`]:
+/// показать, что попадёт внутрь, нужно, а выкладывать на экран сотни чужих
+/// паролей — нет.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportPreviewRow {
+    pub site: String,
+    pub login: String,
+    pub status: ImportRowStatus,
+}
+
+/// Разобранный файл, ждущий согласия человека (`contract.ts:1065`).
+///
+/// Сами строки вместе с паролями остаются В ЯДРЕ до `commit_import` — как и
+/// одноразовый ключ сеанса при сопряжении, гонять их через UI незачем.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportPreview {
+    pub session_id: ImportSessionId,
+    pub source: ImportSource,
+    pub file_name: String,
+    pub total_rows: i64,
+    pub new_count: i64,
+    pub duplicate_count: i64,
+    pub no_password_count: i64,
+    /// Первые [`IMPORT_PREVIEW_ROWS`] строк — образец, а не весь файл.
+    pub rows: Vec<ImportPreviewRow>,
+    /// Имя секции, которую ядро заведёт под этот импорт.
+    pub target_vault_name: String,
+}
+
+/// Сколько строк показывает предпросмотр (`contract.ts:1080`). Политика ЯДРА:
+/// во фронте это число живёт только ради текста «и ещё N».
+pub const IMPORT_PREVIEW_ROWS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct ImportOptions {
+    /// Совпал адрес и логин — оставить то, что уже есть в Syncra.
+    pub skip_duplicates: bool,
+    /// Посчитать пароли, повторяющиеся на разных сайтах. Импорт не блокирует:
+    /// это наследство прошлого менеджера, а не повод не переезжать.
+    pub flag_reused: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportResult {
+    pub imported: i64,
+    pub skipped: i64,
+    /// Куда всё легло: ядро заводит под импорт отдельную секцию.
+    pub vault: Vault,
+    /// Исходный файл удалён с диска. Флаг, а не обещание: удалить не всегда
+    /// удаётся (флешка, права), а обещание §3.10 макета должно быть проверяемым.
+    pub source_file_deleted: bool,
+    /// Сколько импортированных паролей повторяется. `0`, если не просили считать.
+    pub reused_passwords: i64,
+}
 // ---------------------------------------------------------------------------
 // Валидация — общая для create и update, чтобы правила не разъехались
 // ---------------------------------------------------------------------------

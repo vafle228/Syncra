@@ -39,6 +39,12 @@ fn host_device() -> HostDevice {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Единственный плагин в сборке. Нужен ровно двум командам — импорту и
+        // восстановлению из бэкапа: системное окно выбора файла живёт на этой
+        // стороне вместе с файловой системой (§8.2). Разрешений в
+        // `capabilities/default.json` он не требует: они гейтят вызовы из
+        // фронта, а зовём мы его из Rust.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let path = app.path().app_data_dir()?.join(DB_FILE_NAME);
             let core = Arc::new(Mutex::new(Core::open(&path, host_device())?));
@@ -115,8 +121,7 @@ pub fn run() {
             commands::list_conflicts,
             commands::resolve_conflict,
             commands::get_conflict_secret,
-            // Следующие шаги — зарегистрированы ради внятного отказа
-            commands::get_totp_code,
+            // Перенос данных (F12)
             commands::export_csv,
             commands::export_backup,
             commands::delete_export,
@@ -124,6 +129,8 @@ pub fn run() {
             commands::begin_import,
             commands::commit_import,
             commands::cancel_import,
+            // Следующие шаги — зарегистрированы ради внятного отказа
+            commands::get_totp_code,
         ])
         .run(tauri::generate_context!())
         .expect("не удалось запустить Syncra");

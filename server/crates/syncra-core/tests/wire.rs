@@ -8,8 +8,9 @@ mod common;
 
 use serde_json::{json, Value};
 use syncra_core::{
-    ConflictField, ConflictSecrets, ConflictSide, ConflictVersion, DeviceKind, GeneratorProfile,
-    PeerFound, RecordConflict, SecuritySettings, SyncPhase, SyncStatus,
+    ConflictField, ConflictSecrets, ConflictSide, ConflictVersion, Core, DeviceKind,
+    GeneratorProfile, ImportOptions, ImportRowStatus, ImportSource, PeerFound, RecordConflict,
+    SecuritySettings, SyncPhase, SyncStatus,
 };
 
 fn json_of<T: serde::Serialize>(value: &T) -> Value {
@@ -377,4 +378,190 @@ fn a_found_peer_looks_like_the_contract() {
     keys.sort_unstable();
     assert_eq!(keys, ["device_id", "found_at", "kind", "name"]);
     assert_eq!(wire["kind"], json!("mobile"));
+}
+
+// ---------------------------------------------------------------------------
+// Перенос данных (F12, §6.2)
+// ---------------------------------------------------------------------------
+
+/// Ключи объекта по алфавиту — «полей ровно столько и ровно эти».
+fn keys_of(value: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = value.as_object().expect("объект").keys().cloned().collect();
+    keys.sort_unstable();
+    keys
+}
+
+#[test]
+fn an_export_file_looks_like_the_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = common::unlocked();
+    core.create_record(&common::draft("GitHub", "octocat", "тайна"))
+        .unwrap();
+    let mut core = core;
+
+    let wire = json_of(
+        &core
+            .export_csv(common::MASTER_PASSWORD, dir.path())
+            .unwrap(),
+    );
+
+    // Содержимого файла здесь нет и быть не может — только его след.
+    assert_eq!(
+        keys_of(&wire),
+        [
+            "created_at",
+            "encrypted",
+            "file_name",
+            "path",
+            "record_count",
+            "size_bytes",
+        ]
+    );
+    assert_eq!(wire["encrypted"], json!(false));
+    assert_eq!(wire["record_count"], json!(1));
+}
+
+#[test]
+fn an_import_preview_looks_like_the_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("passwords.csv");
+    std::fs::write(
+        &file,
+        "name,url,username,password\nFigma,figma.com,me,тайна\n",
+    )
+    .unwrap();
+
+    let mut core = common::unlocked();
+    let wire = json_of(&core.begin_import(ImportSource::Csv, &file).unwrap());
+
+    assert_eq!(
+        keys_of(&wire),
+        [
+            "duplicate_count",
+            "file_name",
+            "new_count",
+            "no_password_count",
+            "rows",
+            "session_id",
+            "source",
+            "target_vault_name",
+            "total_rows",
+        ]
+    );
+    assert_eq!(wire["source"], json!("csv"));
+
+    // ЗАКОН №1 в форме ответа: у строки предпросмотра нет поля под пароль.
+    let row = &wire["rows"][0];
+    assert_eq!(keys_of(row), ["login", "site", "status"]);
+    assert_eq!(row["status"], json!("new"));
+}
+
+#[test]
+fn an_import_result_looks_like_the_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("passwords.csv");
+    std::fs::write(
+        &file,
+        "name,url,username,password\nFigma,figma.com,me,тайна\n",
+    )
+    .unwrap();
+
+    let mut core = common::unlocked();
+    let preview = core.begin_import(ImportSource::Csv, &file).unwrap();
+    let wire = json_of(
+        &core
+            .commit_import(
+                &preview.session_id,
+                &ImportOptions {
+                    skip_duplicates: true,
+                    flag_reused: true,
+                },
+            )
+            .unwrap(),
+    );
+
+    assert_eq!(
+        keys_of(&wire),
+        [
+            "imported",
+            "reused_passwords",
+            "skipped",
+            "source_file_deleted",
+            "vault",
+        ]
+    );
+    // Секция приезжает целиком — фронту незачем перечитывать список ради неё.
+    assert_eq!(
+        keys_of(&wire["vault"]),
+        [
+            "color",
+            "created_at",
+            "is_default",
+            "name",
+            "sync",
+            "vault_id"
+        ]
+    );
+}
+
+#[test]
+fn a_restore_result_looks_like_the_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut source = common::unlocked();
+    let file = source
+        .export_backup(common::MASTER_PASSWORD, dir.path())
+        .unwrap();
+
+    let fresh = tempfile::tempdir().unwrap();
+    let mut restored = Core::open(&fresh.path().join("syncra.db"), common::host()).unwrap();
+    let wire = json_of(
+        &restored
+            .restore_backup(common::MASTER_PASSWORD, std::path::Path::new(&file.path))
+            .unwrap(),
+    );
+
+    assert_eq!(
+        keys_of(&wire),
+        [
+            "file_name",
+            "initialized_at",
+            "records",
+            "unlocked_at",
+            "vaults",
+        ]
+    );
+}
+
+#[test]
+fn every_import_row_status_is_spelled_the_way_the_contract_spells_it() {
+    for (status, name) in [
+        (ImportRowStatus::New, "new"),
+        (ImportRowStatus::Duplicate, "duplicate"),
+        (ImportRowStatus::NoPassword, "no_password"),
+    ] {
+        assert_eq!(json_of(&status), json!(name));
+    }
+}
+
+#[test]
+fn every_import_source_is_spelled_the_way_the_contract_spells_it() {
+    // Оба направления: имя уходит в предпросмотр и приходит из запроса.
+    for (source, name) in [
+        (ImportSource::Chrome, "chrome"),
+        (ImportSource::Firefox, "firefox"),
+        (ImportSource::OnePassword, "1password"),
+        (ImportSource::Bitwarden, "bitwarden"),
+        (ImportSource::KeePass, "keepass"),
+        (ImportSource::Csv, "csv"),
+    ] {
+        assert_eq!(json_of(&source), json!(name));
+        assert_eq!(ImportSource::parse(name).unwrap(), source);
+    }
+
+    // Незнакомый источник — VALIDATION с человеческим текстом, а не провал
+    // serde на границе Tauri (`mock/index.ts:1489`).
+    assert_eq!(
+        ImportSource::parse("lastpass").unwrap_err().code,
+        syncra_core::CoreErrorCode::Validation
+    );
 }

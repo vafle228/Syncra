@@ -20,16 +20,19 @@ use crate::crypto::{self, KdfParams, VaultKey};
 use crate::error::{CoreError, CoreResult};
 use crate::generator::{self, GeneratedPasswords, GeneratorProfile, Rules};
 use crate::model::{
-    now_iso, ChangeMasterPasswordResponse, ConflictSecrets, ConflictSide, Device, HostDevice,
-    InitVaultResponse, IsoDateTime, PairingHandshake, PairingOffer, PairingResult, PinStatus,
-    RecordConflict, RecordDraft, RecordId, RecordMeta, RecordPatch, RecordSecrets, SecretField,
-    UnlockResponse, Vault, VaultPatch, VaultStatus, MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
+    now_iso, ChangeMasterPasswordResponse, ConflictSecrets, ConflictSide, Device, ExportFile,
+    HostDevice, ImportOptions, ImportPreview, ImportPreviewRow, ImportResult, ImportRowStatus,
+    ImportSessionId, ImportSource, InitVaultResponse, IsoDateTime, PairingHandshake, PairingOffer,
+    PairingResult, PinStatus, RecordConflict, RecordDraft, RecordId, RecordMeta, RecordPatch,
+    RecordSecrets, RestoreBackupResult, SecretField, UnlockResponse, Vault, VaultPatch,
+    VaultStatus, IMPORT_PREVIEW_ROWS, MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
 };
 use crate::net::{NetIdentity, RemotePeer};
 use crate::pairing;
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
 use crate::storage::{records, schema, vaults, Storage};
 use crate::sync::{self, conflicts};
+use crate::transfer;
 use crate::trust;
 
 /// Имя и цвет первой секции: одна секция по умолчанию заводится сразу, потому
@@ -67,6 +70,13 @@ pub struct Core {
     /// Забирается узлом сети СРАЗУ после `confirm_pairing` и уже без замка:
     /// доставка идёт по сети, а держать под мьютексом сетевое ожидание нельзя.
     announcement: Option<PairingAnnouncement>,
+    /// Файлы, которые ядро создало в этом сеансе (F12). Только их и удаляет
+    /// `delete_export`: команда, которой можно передать произвольный путь, —
+    /// это способ стереть с диска что угодно чужими руками.
+    exports: Vec<ExportFile>,
+    /// Разобранные файлы чужих менеджеров, ждущие согласия человека. Здесь
+    /// лежат ЧУЖИЕ пароли открытым текстом — потому и здесь, а не в UI.
+    imports: HashMap<ImportSessionId, transfer::Session>,
 }
 
 /// Показанный код и всё, что за ним стоит. В БД не попадает: код даёт право
@@ -145,6 +155,8 @@ impl Core {
             retired_codes: HashMap::new(),
             handshakes: HashMap::new(),
             announcement: None,
+            exports: Vec::new(),
+            imports: HashMap::new(),
         }
     }
 
@@ -402,6 +414,11 @@ impl Core {
         self.retired_codes.clear();
         self.handshakes.clear();
         self.announcement = None;
+        // Разобранный, но не подтверждённый импорт — тоже: это чужие пароли,
+        // которые ещё никуда не легли. А вот реестр созданных файлов остаётся:
+        // замок не умеет стереть файл с диска, и делать вид, что умеет, не будет
+        // (`mock/index.ts:601`).
+        self.imports.clear();
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -1268,6 +1285,313 @@ impl Core {
     }
 
     // -----------------------------------------------------------------------
+    // Перенос данных: экспорт, импорт, бэкап (F12, §6.2 · §6.3)
+    //
+    // Файлы собирает и пишет ядро; наружу уходит только след файла. Про то,
+    // почему это так и почему иначе нельзя, — в шапке `transfer::mod`.
+    //
+    // «Человек закрыл окно выбора файла» сюда не доходит вовсе: `null` рождает
+    // оболочка, которая в таком случае просто не зовёт ядро. Моделировать
+    // отмену, которой не видел, ядру незачем.
+    // -----------------------------------------------------------------------
+
+    /// CSV для переезда в другой менеджер (§6.2).
+    ///
+    /// Мастер-пароль обязателен, даже когда хранилище открыто: открытая
+    /// программа на своём компьютере и файл со всеми паролями открытым текстом
+    /// — поступки разной цены, и второй подтверждается отдельно.
+    pub fn export_csv(&mut self, master_password: &str, dir: &Path) -> CoreResult<ExportFile> {
+        self.confirm_master_password(master_password)?;
+
+        let (text, records) = {
+            let key = self.key()?;
+            transfer::build_csv(self.storage.conn(), key)?
+        };
+        let file = transfer::write_export(
+            dir,
+            &transfer::csv_file_name(),
+            text.as_bytes(),
+            false,
+            records,
+        )?;
+
+        self.remember_export(file.clone());
+        Ok(file)
+    }
+
+    /// Зашифрованный бэкап: хранилище целиком под тем же мастер-паролем (§6.2).
+    pub fn export_backup(&mut self, master_password: &str, dir: &Path) -> CoreResult<ExportFile> {
+        self.confirm_master_password(master_password)?;
+
+        let (bytes, records) = {
+            let key = self.key()?;
+            let collected = transfer::collect_backup(self.storage.conn(), key)?;
+            let records = collected.records.len() as i64;
+            (
+                transfer::backup::build(master_password, &collected)?,
+                records,
+            )
+        };
+        let file =
+            transfer::write_export(dir, &transfer::backup_file_name(), &bytes, true, records)?;
+
+        self.remember_export(file.clone());
+        Ok(file)
+    }
+
+    /// Удалить созданный экспорт («Удалить файл сейчас», §3.10 макета).
+    ///
+    /// Только тот файл, который ядро само же и создало в этом сеансе: команда,
+    /// которой можно передать произвольный путь, — это способ стереть с диска
+    /// что угодно чужими руками.
+    pub fn delete_export(&mut self, path: &str) -> CoreResult<()> {
+        self.key()?;
+
+        let known = self
+            .exports
+            .iter()
+            .position(|file| file.path == path)
+            .ok_or_else(|| {
+                CoreError::not_found("Этот файл создан не здесь — удалить его отсюда нельзя.")
+            })?;
+
+        if !transfer::remove_file(Path::new(path)) {
+            // Реестр не трогаем: файл на месте, и по кнопке можно попробовать
+            // ещё раз, когда флешка перестанет быть только для чтения.
+            return Err(CoreError::internal(
+                "Не удалось удалить файл — уберите его вручную.",
+            ));
+        }
+        self.exports.remove(known);
+        Ok(())
+    }
+
+    /// Восстановление из бэкапа (§6.3, резервный путь).
+    ///
+    /// Только на устройстве БЕЗ хранилища: восстановление поверх живого — это
+    /// слияние двух историй, то есть задача синхронизации с конфликтами, а
+    /// молча перезаписать чужие записи файлом с флешки нельзя.
+    ///
+    /// Пароль здесь — от ФАЙЛА; он же становится мастер-паролем восстановленного
+    /// хранилища, которое остаётся открытым: его только что ввели.
+    pub fn restore_backup(
+        &mut self,
+        master_password: &str,
+        file: &Path,
+    ) -> CoreResult<RestoreBackupResult> {
+        if self.storage.is_initialized()? {
+            return Err(CoreError::already_initialized());
+        }
+
+        let backup = transfer::backup::open(master_password, &transfer::read_backup_file(file)?)?;
+        if backup.vaults.is_empty() {
+            // Без единой секции записям некуда лечь, а новым — некуда попадать:
+            // «ровно одна секция по умолчанию» это инвариант уровня БД.
+            return Err(CoreError::validation("Файл резервной копии повреждён."));
+        }
+
+        // Соль новая, хотя пароль тот же: соль из файла означала бы, что укравший
+        // бэкап уже посчитал половину работы по подбору пароля к хранилищу.
+        let salt = crypto::random_salt()?;
+        let params = KdfParams::default();
+        let key = crypto::derive_key(master_password, &salt, &params)?;
+        let verifier = crypto::seal_verifier(&key)?;
+
+        let initialized_at = now_iso();
+        let device_id = uuid::Uuid::new_v4().to_string();
+        let params_json = serde_json::to_vec(&params)?;
+        let host = self.host.clone();
+        let (records, vaults_restored) = (backup.records.len() as i64, backup.vaults.len() as i64);
+
+        // Одной транзакцией, как и `init_vault`: наполовину восстановленное
+        // хранилище не открывается ничем и не восстанавливается заново, потому
+        // что «уже создано».
+        let tx = self.storage.conn_mut().transaction()?;
+        for (name, value) in [
+            (schema::META_KDF_SALT, salt.to_vec()),
+            (schema::META_KDF_PARAMS, params_json),
+            (schema::META_DEVICE_ID, device_id.clone().into_bytes()),
+            (schema::META_CREATED_AT, initialized_at.clone().into_bytes()),
+            (schema::META_VERIFIER, verifier),
+        ] {
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)",
+                rusqlite::params![name, value],
+            )?;
+        }
+        transfer::restore_into(&tx, &key, &backup)?;
+        // Пара ключей — НОВАЯ. Идентичность устройства в бэкап не едет (§2.1):
+        // иначе две машины получили бы право представляться одним устройством.
+        // Восстановленное хранилище сопрягается заново, как чистое.
+        trust::provision_identity(&tx, &key, &host, &device_id, &initialized_at)?;
+        tx.commit()?;
+
+        let unlocked_at = self.accept_key(key);
+        Ok(RestoreBackupResult {
+            file_name: file_name_of(file),
+            records,
+            vaults: vaults_restored,
+            initialized_at,
+            unlocked_at,
+        })
+    }
+
+    /// Разобрать файл чужого менеджера и показать, что попадёт внутрь.
+    ///
+    /// Разобранные строки вместе с паролями остаются ЗДЕСЬ до `commit_import` —
+    /// как одноразовый ключ сеанса при сопряжении, гонять их через UI незачем.
+    pub fn begin_import(&mut self, source: ImportSource, file: &Path) -> CoreResult<ImportPreview> {
+        self.key()?;
+
+        let file_name = file_name_of(file);
+        let text = transfer::read_import_file(file)?;
+        let entries = transfer::import::parse(source, &file_name, &text)?;
+
+        let known = transfer::known_pairs(self.storage.conn())?;
+        let statuses: Vec<ImportRowStatus> = entries
+            .iter()
+            .map(|entry| transfer::import::row_status(entry, &known))
+            .collect();
+
+        let preview = ImportPreview {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            source,
+            file_name: file_name.clone(),
+            total_rows: entries.len() as i64,
+            new_count: count_status(&statuses, ImportRowStatus::New),
+            duplicate_count: count_status(&statuses, ImportRowStatus::Duplicate),
+            no_password_count: count_status(&statuses, ImportRowStatus::NoPassword),
+            // Первые несколько строк — образец. Пароля в строке предпросмотра
+            // нет и быть не может.
+            rows: entries
+                .iter()
+                .zip(&statuses)
+                .take(IMPORT_PREVIEW_ROWS)
+                .map(|(entry, status)| ImportPreviewRow {
+                    site: entry.site.clone(),
+                    login: entry.login.clone(),
+                    status: *status,
+                })
+                .collect(),
+            target_vault_name: transfer::import_vault_name(),
+        };
+
+        self.imports.insert(
+            preview.session_id.clone(),
+            transfer::Session {
+                source,
+                file_name,
+                path: file.to_path_buf(),
+                entries,
+            },
+        );
+        Ok(preview)
+    }
+
+    /// Согласие получено: ядро заводит записи.
+    pub fn commit_import(
+        &mut self,
+        session_id: &str,
+        options: &ImportOptions,
+    ) -> CoreResult<ImportResult> {
+        self.key()?;
+
+        // Сеанс одноразовый и забирается ДО записи: «применилось наполовину, а
+        // строки ещё лежат» — состояние, из которого человек выйдет вторым
+        // импортом тех же паролей.
+        let session = self.imports.remove(session_id).ok_or_else(|| {
+            CoreError::not_found("Разобранный файл не найден. Выберите его заново.")
+        })?;
+
+        let known = transfer::known_pairs(self.storage.conn())?;
+        let mut skipped = 0i64;
+        let mut taken: Vec<&transfer::import::ImportEntry> = Vec::new();
+
+        let vault = {
+            let key = self.key()?;
+            // Одной транзакцией: наполовину состоявшийся импорт хуже, чем
+            // несостоявшийся — он оставляет секцию с случайной частью файла.
+            let tx = self.storage.conn().unchecked_transaction()?;
+            let vault = transfer::import_vault(&tx)?;
+
+            for entry in &session.entries {
+                match transfer::import::row_status(entry, &known) {
+                    // Строка без пароля не запись: заведённый пустой пароль
+                    // молча притворится рабочим. В `skipped` она не идёт —
+                    // пропускать было нечего.
+                    ImportRowStatus::NoPassword => continue,
+                    ImportRowStatus::Duplicate if options.skip_duplicates => {
+                        skipped += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+
+                let Some(mut draft) = transfer::draft_from(entry, &vault.vault_id) else {
+                    continue;
+                };
+                transfer::fallback_service_name(&mut draft);
+                if records::create(&tx, key, &draft, &vault.vault_id).is_ok() {
+                    taken.push(entry);
+                }
+            }
+
+            tx.commit()?;
+            vault
+        };
+
+        Ok(ImportResult {
+            imported: taken.len() as i64,
+            skipped,
+            vault,
+            // Обещание §3.10 макета («файл разбирается прямо здесь и удаляется
+            // сразу после импорта») проверяемое, а не декларативное: удалить не
+            // всегда удаётся — флешка, права, — и флаг говорит, как вышло.
+            source_file_deleted: transfer::remove_file(&session.path),
+            reused_passwords: if options.flag_reused {
+                transfer::import::count_reused_passwords(&taken)
+            } else {
+                0
+            },
+        })
+    }
+
+    /// Передумали: ядро забывает разобранные строки вместе с их паролями.
+    /// Идемпотентно, как `cancel_pairing`: по «Отмене» нажимают дважды.
+    pub fn cancel_import(&mut self, session_id: &str) -> CoreResult<()> {
+        self.key()?;
+        self.imports.remove(session_id);
+        Ok(())
+    }
+
+    /// Тот ли это мастер-пароль. Отдельно от `key()`: хранилище открыто, ключ у
+    /// нас уже есть, и проверяется здесь не право войти, а согласие на поступок.
+    fn confirm_master_password(&self, master_password: &str) -> CoreResult<()> {
+        self.key()?;
+
+        let salt = self.meta_required(schema::META_KDF_SALT)?;
+        let params: KdfParams =
+            serde_json::from_slice(&self.meta_required(schema::META_KDF_PARAMS)?)?;
+        let verifier = self.meta_required(schema::META_VERIFIER)?;
+
+        if crypto::verify(
+            &crypto::derive_key(master_password, &salt, &params)?,
+            &verifier,
+        ) {
+            Ok(())
+        } else {
+            Err(CoreError::invalid_master_password())
+        }
+    }
+
+    /// Повторный экспорт в тот же день перезаписывает файл, а не плодит второй,
+    /// — значит и в реестре он один (`mock/index.ts:678`).
+    fn remember_export(&mut self, file: ExportFile) {
+        self.exports.retain(|known| known.path != file.path);
+        self.exports.push(file);
+    }
+
+    // -----------------------------------------------------------------------
     // Генератор паролей (F6)
     // -----------------------------------------------------------------------
 
@@ -1352,6 +1676,19 @@ impl Core {
             None => Ok(SecuritySettings::default()),
         }
     }
+}
+
+/// Имя файла для показа человеку. Путь наружу из этой функции не уходит —
+/// только последний его сегмент (`error.rs`: путей к файлам в ответах не бывает,
+/// а вот имя выбранного файла человек сам только что и выбрал).
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn count_status(statuses: &[ImportRowStatus], wanted: ImportRowStatus) -> i64 {
+    statuses.iter().filter(|status| **status == wanted).count() as i64
 }
 
 #[cfg(test)]
