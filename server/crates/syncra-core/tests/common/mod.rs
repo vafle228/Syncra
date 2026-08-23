@@ -121,7 +121,7 @@ impl Device2 {
     }
 
     pub fn addr(&self) -> SocketAddr {
-        self.node.local_addr().expect("узел слушает порт")
+        self.node.loopback_addr().expect("узел слушает порт")
     }
 
     pub fn with_core<T>(&self, action: impl FnOnce(&mut Core) -> T) -> T {

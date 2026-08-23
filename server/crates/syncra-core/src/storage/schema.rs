@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{CoreError, CoreResult};
 
 /// Версия схемы. Растёт вместе с миграциями; лежит в `meta`.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Ключи таблицы `meta`.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
@@ -158,6 +158,58 @@ CREATE TABLE IF NOT EXISTS conflicts (
 );
 "#;
 
+/// `ON DELETE CASCADE` на обеих ссылках, которые смотрят в `records` (S7.2).
+///
+/// Сегодня записи физически не удаляются — от них остаётся надгробие (§5.4), —
+/// и разницы нет никакой. Но чистка надгробий по сроку упрётся во внешние
+/// ключи: `sync_state.record_id` и `conflicts.record_id` ссылаются на
+/// `records(record_id)`, а `PRAGMA foreign_keys` включена, и `DELETE` отвалился
+/// бы по ограничению целостности. Решить это миграцией сейчас дешевле, чем в
+/// середине шага, где будет не до схемы.
+///
+/// Форма — стандартная перестройка таблицы: `ALTER TABLE` в SQLite менять
+/// внешние ключи не умеет. Обе таблицы дочерние, на них самих не ссылается
+/// никто, поэтому переименование ничего больше не задевает. Всё это едет одной
+/// транзакцией — см. [`apply`].
+const MIGRATION_5: &str = r#"
+CREATE TABLE sync_state_next (
+  device_id      TEXT    NOT NULL,
+  record_id      TEXT    NOT NULL REFERENCES records(record_id) ON DELETE CASCADE,
+  synced_version INTEGER NOT NULL,
+  synced_at      TEXT    NOT NULL,
+  PRIMARY KEY (device_id, record_id)
+);
+INSERT INTO sync_state_next SELECT device_id, record_id, synced_version, synced_at FROM sync_state;
+DROP TABLE sync_state;
+ALTER TABLE sync_state_next RENAME TO sync_state;
+CREATE INDEX IF NOT EXISTS sync_state_by_record ON sync_state(record_id);
+
+CREATE TABLE conflicts_next (
+  record_id           TEXT    PRIMARY KEY REFERENCES records(record_id) ON DELETE CASCADE,
+  device_id           TEXT    NOT NULL,
+  raised_at           TEXT    NOT NULL,
+  local_version       INTEGER NOT NULL,
+  version             INTEGER NOT NULL,
+  vault_id            TEXT    NOT NULL,
+  service_name        TEXT    NOT NULL,
+  urls                TEXT    NOT NULL,
+  login               TEXT    NOT NULL,
+  account_label       TEXT,
+  password_ct         BLOB,
+  notes_ct            BLOB,
+  totp_ct             BLOB,
+  updated_at          TEXT    NOT NULL,
+  password_updated_at TEXT    NOT NULL
+);
+INSERT INTO conflicts_next SELECT
+  record_id, device_id, raised_at, local_version, version, vault_id, service_name,
+  urls, login, account_label, password_ct, notes_ct, totp_ct, updated_at,
+  password_updated_at
+FROM conflicts;
+DROP TABLE conflicts;
+ALTER TABLE conflicts_next RENAME TO conflicts;
+"#;
+
 /// Без `meta` не прочитать версию схемы, а без версии не выбрать миграции —
 /// поэтому одна эта таблица создаётся до всякой цепочки. В `MIGRATION_1` она
 /// тоже есть, и повторение здесь безвредно: обе формы — `IF NOT EXISTS`.
@@ -167,8 +219,13 @@ const BOOTSTRAP: &str = "CREATE TABLE IF NOT EXISTS meta (
 );";
 
 /// Миграции по порядку: индекс `i` переводит схему с версии `i` на `i + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] =
-    [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
+    MIGRATION_1,
+    MIGRATION_2,
+    MIGRATION_3,
+    MIGRATION_4,
+    MIGRATION_5,
+];
 
 /// Применить миграции от записанной в `meta` версии до текущей.
 ///
@@ -275,6 +332,43 @@ mod tests {
         // Повторный проход по готовому хранилищу ничего не ломает.
         migrate(&conn).expect("миграции второй раз");
         assert_eq!(stored_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn a_deleted_record_takes_its_marks_and_its_conflict_with_it() {
+        let conn = opened();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        migrate(&conn).expect("миграции");
+
+        conn.execute_batch(
+            "INSERT INTO vaults VALUES ('v', 'Личное', 'indigo', 1, 1, '2026-08-23T10:00:00.000Z');
+             INSERT INTO records (record_id, vault_id, service_name, urls, login, version,
+                                  created_at, updated_at, password_updated_at)
+               VALUES ('r', 'v', 'GitHub', '[]', 'octocat', 1,
+                       '2026-08-23T10:00:00.000Z', '2026-08-23T10:00:00.000Z',
+                       '2026-08-23T10:00:00.000Z');
+             INSERT INTO sync_state VALUES ('d', 'r', 1, '2026-08-23T10:00:00.000Z');
+             INSERT INTO conflicts (record_id, device_id, raised_at, local_version, version,
+                                    vault_id, service_name, urls, login, updated_at,
+                                    password_updated_at)
+               VALUES ('r', 'd', '2026-08-23T10:00:00.000Z', 1, 2, 'v', 'GitHub', '[]',
+                       'octocat', '2026-08-23T10:00:00.000Z', '2026-08-23T10:00:00.000Z');",
+        )
+        .expect("наполнение");
+
+        // Вот ради этого миграция и написана: без каскада чистка надгробий
+        // (S7.2) отвалилась бы прямо здесь, по ограничению целостности.
+        conn.execute("DELETE FROM records WHERE record_id = 'r'", [])
+            .expect("надгробие удаляется");
+
+        let left: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM sync_state) + (SELECT COUNT(*) FROM conflicts)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "ссылки на удалённую запись остались сиротами");
     }
 
     #[test]

@@ -21,6 +21,7 @@ x25519-dalek.workspace = true
 sha2.workspace = true
 qrcode.workspace = true
 mdns-sd.workspace = true
+subtle.workspace = true
 zeroize.workspace = true
 getrandom.workspace = true
 

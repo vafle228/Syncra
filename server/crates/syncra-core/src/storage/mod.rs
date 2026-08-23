@@ -22,8 +22,13 @@ impl Storage {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|_| crate::error::CoreError::internal("Не удалось создать хранилище."))?;
+            restrict(parent, 0o700);
         }
-        Self::from_connection(Connection::open(path)?)
+        let storage = Self::from_connection(Connection::open(path)?)?;
+        // После открытия, а не до: файла может ещё не быть. WAL и `-shm` создаёт
+        // сам SQLite и наследует права от основного файла.
+        restrict(path, 0o600);
+        Ok(storage)
     }
 
     /// Для тестов и для проверок, которым не нужен файл на диске.
@@ -40,7 +45,12 @@ impl Storage {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = FULL;
-             PRAGMA foreign_keys = ON;",
+             PRAGMA foreign_keys = ON;
+             -- Освобождённые страницы затираются, а не остаются лежать в файле
+             -- со старым содержимым. Секреты в них зашифрованы, но метаданные
+             -- записи (сервис, логин, адреса) лежат открытым текстом и тоже
+             -- попадают во freelist при удалении.
+             PRAGMA secure_delete = ON;",
         )?;
         schema::migrate(&conn)?;
         Ok(Self { conn })
@@ -79,3 +89,21 @@ impl Storage {
         Ok(())
     }
 }
+
+/// Ужать права на файл или папку хранилища.
+///
+/// На Windows это ничего не делает: папка приложения там и так пользовательская,
+/// а прав в понимании POSIX у файла нет. Для сборки под Linux и для MVP 2 (iOS)
+/// — делает: `create_dir_all` и `Connection::open` оставляют права на усмотрение
+/// umask, а хранилище менеджера паролей читаемым для всех быть не должно.
+///
+/// Неудача проглатывается намеренно: не сумели ужать права — это не повод не
+/// открыть хранилище человеку, который его и так открывает своим.
+#[cfg(unix)]
+fn restrict(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn restrict(_path: &Path, _mode: u32) {}

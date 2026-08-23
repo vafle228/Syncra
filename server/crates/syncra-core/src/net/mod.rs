@@ -583,8 +583,13 @@ impl Node {
         self.shared.running.load(Ordering::SeqCst)
     }
 
-    /// Адрес слушателя. Нужен тестам и тому, кто сводит два экземпляра руками.
-    pub fn local_addr(&self) -> Option<SocketAddr> {
+    /// Адрес узла на loopback. Нужен тестам и тому, кто сводит два экземпляра
+    /// руками.
+    ///
+    /// Именно loopback, а не «адрес слушателя»: слушатель стоит на `0.0.0.0`
+    /// (см. `start`), и настоящих адресов у него столько, сколько у машины
+    /// интерфейсов. Имя обещает ровно то, что метод отдаёт.
+    pub fn loopback_addr(&self) -> Option<SocketAddr> {
         let port = self.shared.port.load(Ordering::SeqCst) as u16;
         (port != 0).then(|| SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
     }

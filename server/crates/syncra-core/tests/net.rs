@@ -419,7 +419,7 @@ fn a_locked_core_is_not_on_the_network() {
     a.node.tick();
 
     assert!(!a.node.is_running());
-    assert!(a.node.local_addr().is_none());
+    assert!(a.node.loopback_addr().is_none());
     assert_eq!(a.node.status().phase, SyncPhase::Idle);
     assert_eq!(a.node.status().peers_online, 0);
 
@@ -441,7 +441,7 @@ fn unlocking_puts_the_device_back_on_the_network() {
     a.node.tick();
 
     assert!(a.node.is_running());
-    assert!(a.node.local_addr().is_some());
+    assert!(a.node.loopback_addr().is_some());
 }
 
 // ---------------------------------------------------------------------------

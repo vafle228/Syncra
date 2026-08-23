@@ -9,11 +9,12 @@
 //! Здесь нет ни Tauri, ни событий: события эмитит оболочка по результату вызова.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use subtle::ConstantTimeEq;
 
 use crate::crypto::{self, KdfParams, VaultKey};
 use crate::error::{CoreError, CoreResult};
@@ -53,10 +54,12 @@ pub struct Core {
     autolock_ms: i64,
     /// Код, который это устройство показывает прямо сейчас (F8, §2.2).
     offer: Option<OfferState>,
-    /// Коды, которые оно показывало раньше: по ним отвечаем «истёк», а не
-    /// «незнакомый». Человек читает со второго экрана устаревший QR чаще, чем
-    /// ошибается символом.
-    retired_codes: HashSet<String>,
+    /// Коды, которые оно показывало раньше, и до какого момента про каждый из
+    /// них ещё стоит помнить: по ним отвечаем «истёк», а не «незнакомый».
+    /// Человек читает со второго экрана устаревший QR чаще, чем ошибается
+    /// символом. Дальше срока помнить незачем — и нечего копить (см.
+    /// [`Core::forget_expired_pairings`]).
+    retired_codes: HashMap<String, IsoDateTime>,
     /// Прочитанные пейлоады, ждущие, пока человек сверит слова.
     handshakes: HashMap<String, PendingPeer>,
     /// Сопряжение, о котором осталось рассказать второй стороне (S3).
@@ -139,7 +142,7 @@ impl Core {
             last_activity: Cell::new(Instant::now()),
             autolock_ms: SecuritySettings::default().autolock_ms,
             offer: None,
-            retired_codes: HashSet::new(),
+            retired_codes: HashMap::new(),
             handshakes: HashMap::new(),
             announcement: None,
         }
@@ -518,11 +521,17 @@ impl Core {
 
     pub fn delete_record(&self, record_id: &str) -> CoreResult<RecordMeta> {
         self.key()?;
-        let meta = records::delete(self.storage.conn(), record_id)?;
+
+        // Обе записи — одной транзакцией. Падение между ними оставило бы
+        // конфликт на надгробии: видимого вреда нет (`list_conflicts` такую
+        // строку пропустит), но строка-сирота осталась бы в БД навсегда.
+        let tx = self.storage.conn().unchecked_transaction()?;
+        let meta = records::delete(&tx, record_id)?;
         // Спорить о версиях удалённой записи не о чем: конфликт снимается
         // вместе с ней (§5.5, `mock/index.ts:1023`). Надгробие поедет дальше и
         // так — удаление важнее любого расхождения (§5.4).
-        conflicts::drop_for(self.storage.conn(), record_id)?;
+        conflicts::drop_for(&tx, record_id)?;
+        tx.commit()?;
         Ok(meta)
     }
 
@@ -605,8 +614,13 @@ impl Core {
         };
         let device_id = self.device_id()?;
 
+        // Заодно подмести за собой: и отработавшие коды, и прочитанные
+        // пейлоады живут по три минуты, а уходили до сих пор только вместе с
+        // замком. Место для чистки одно — то, из которого они и берутся.
+        self.forget_expired_pairings(Utc::now());
         if let Some(previous) = self.offer.take() {
-            self.retired_codes.insert(previous.code);
+            self.retired_codes
+                .insert(previous.code, previous.expires_at);
         }
 
         let code = pairing::manual_code()?;
@@ -671,7 +685,7 @@ impl Core {
         // Свой же код, который уже не действует, — самая частая ошибка: человек
         // читает со второго экрана устаревший QR.
         let own_offer = self.offer.as_ref().filter(|offer| offer.code == code);
-        if self.retired_codes.contains(&code)
+        if self.retired_codes.contains_key(&code)
             || own_offer.is_some_and(|offer| pairing::is_expired(&offer.expires_at, now))
         {
             return Err(CoreError::pairing_expired(
@@ -865,7 +879,10 @@ impl Core {
         if pairing::is_expired(&offer.expires_at, Utc::now()) {
             return Ok(None);
         }
-        if pairing::code_commitment(transcript, &offer.code)[..] == *commitment {
+        // Сравнение постоянного времени: попыток по офферу всего пять, и
+        // таймингом здесь ничего не набрать, — но `==` над секретоподобным
+        // значением создаёт прецедент, который потом скопируют в место похуже.
+        if bool::from(pairing::code_commitment(transcript, &offer.code).ct_eq(commitment)) {
             return Ok(Some(offer.payload.clone()));
         }
 
@@ -874,7 +891,7 @@ impl Core {
         offer.attempts += 1;
         if offer.attempts >= PAIRING_ATTEMPT_LIMIT {
             if let Some(burned) = self.offer.take() {
-                self.retired_codes.insert(burned.code);
+                self.retired_codes.insert(burned.code, burned.expires_at);
             }
         }
         Ok(None)
@@ -910,7 +927,7 @@ impl Core {
             return Ok(None);
         };
         if pairing::is_expired(&offer.expires_at, Utc::now())
-            || pairing::code_commitment(transcript, &offer.code)[..] != *commitment
+            || !bool::from(pairing::code_commitment(transcript, &offer.code).ct_eq(commitment))
         {
             // Промах считается тем же счётчиком, что и у поиска: перебирать
             // код можно и через эту дверь.
@@ -946,7 +963,7 @@ impl Core {
         // Код сделал свою работу и больше не действует: одноразовый ключ на то
         // и одноразовый.
         if let Some(used) = self.offer.take() {
-            self.retired_codes.insert(used.code);
+            self.retired_codes.insert(used.code, used.expires_at);
         }
 
         Ok(Some(PairingResult {
@@ -961,11 +978,25 @@ impl Core {
             offer.attempts += 1;
             if offer.attempts >= PAIRING_ATTEMPT_LIMIT {
                 if let Some(burned) = self.offer.take() {
-                    self.retired_codes.insert(burned.code);
+                    self.retired_codes.insert(burned.code, burned.expires_at);
                 }
             }
         }
         Ok(None)
+    }
+
+    /// Забыть сеансы сопряжения, чей срок вышел.
+    ///
+    /// Растут оба списка не быстро — границу задаёт человек, нажимающий
+    /// «показать код», — но сжимались они только в [`Core::lock`], а хранилище
+    /// бывает открытым сутками. Время приходит аргументом по той же причине,
+    /// что и в `autolock_due`: иначе это нельзя проверить, не проспав три
+    /// минуты в тесте.
+    fn forget_expired_pairings(&mut self, now: DateTime<Utc>) {
+        self.retired_codes
+            .retain(|_, until| !pairing::is_expired(until, now));
+        self.handshakes
+            .retain(|_, pending| !pairing::is_expired(&pending.expires_at, now));
     }
 
     /// Забрать сопряжение, о котором осталось доложить второй стороне.
@@ -1320,5 +1351,40 @@ impl Core {
             Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
             None => Ok(SecuritySettings::default()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::HostDevice;
+
+    fn unlocked() -> Core {
+        let mut core = Core::in_memory(HostDevice::desktop("Стенд")).expect("хранилище в памяти");
+        core.init_vault("мастер-пароль-1").expect("init_vault");
+        core
+    }
+
+    #[test]
+    fn expired_pairing_sessions_do_not_pile_up() {
+        let mut core = unlocked();
+
+        // Человек нажимал «показать код» трижды: два прошлых кода отработали и
+        // помнятся только затем, чтобы ответить «истёк», а не «незнакомый».
+        for _ in 0..3 {
+            core.get_pairing_payload().expect("код сопряжения");
+        }
+        assert_eq!(core.retired_codes.len(), 2);
+
+        // Три минуты спустя помнить о них незачем — и до сих пор они уходили
+        // только вместе с замком, а хранилище бывает открытым сутками.
+        core.forget_expired_pairings(Utc::now() + chrono::Duration::minutes(10));
+        assert!(core.retired_codes.is_empty());
+        assert!(core.handshakes.is_empty());
+
+        // Действующий оффер чистка не трогает: он ещё на экране.
+        assert!(core.offer.is_some());
+        core.forget_expired_pairings(Utc::now());
+        assert!(core.offer.is_some());
     }
 }
