@@ -1,0 +1,83 @@
+# Definition of Done из `server/FEATURE_PLAN.md`, выполняемый машиной.
+#
+# Три проверки, а не «сборка»: собрать ядро мало, оно должно быть зелёным по
+# тестам, чистым по clippy и по форматированию. Держало их до сих пор ничто —
+# только память того, кто последним коммитил.
+#
+# `windows-latest`, потому что таргет проекта — MSVC: та же цепочка, что у
+# разработчика, и те же тесты на настоящем loopback.
+
+name: core
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Отладочная информация в CI ничего не даёт, а кэш раздувает вдвое.
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  check:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Версию и компоненты диктует `rust-toolchain.toml` — второго места, где
+      # они названы, быть не должно.
+      - name: Toolchain
+        run: |
+          rustup show
+          rustc --version
+          cargo --version
+
+      # Сборка тянет bundled SQLite и Tauri: без кэша каждый прогон начинается
+      # с компиляции полусотни крейтов заново.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            server/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('server/Cargo.lock', 'server/rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
+
+  # Зависимостей немного и список curated, но у `mdns-sd`, `rusqlite` и
+  # `*-dalek` бывают advisories, а узнавать о них из новостей поздно.
+  # Отдельной работой: она не про этот код и не должна прятать его поломки.
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit
+        run: cargo audit
