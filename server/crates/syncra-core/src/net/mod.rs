@@ -14,18 +14,21 @@
 //! # Что здесь происходит
 //!
 //! ```text
-//! слушатель  ── accept ──► рукопожатие ──► доверенный: ping/pong, peer_found
+//! слушатель  ── accept ──► рукопожатие ──► доверенный: ping/pong, обмен,
+//!                                                        peer_found
 //!                                      └─► сопряжение: показать пейлоад,
 //!                                                      принять «я тебя записал»
 //! обходчик   ── mDNS ──► адреса ──► проба доверенным рукопожатием ──► peer_found
+//!                              └──► назрел круг обмена ──► манифест и дифф
 //! ```
 //!
-//! Синхронизации здесь нет: манифест и дифф приезжают в S4 — в доверенный режим,
-//! рядом с `Ping`.
+//! Круг обмена ведёт [`sync`]: там чередование реплик и нарезка на порции, здесь
+//! — когда его затевать и что показывать человеку, пока он идёт.
 
 pub mod channel;
 pub mod discovery;
 pub mod handshake;
+pub mod sync;
 pub mod wire;
 
 use std::collections::HashMap;
@@ -38,8 +41,8 @@ use std::time::{Duration, Instant};
 use crate::crypto::DeviceKeypair;
 use crate::error::{CoreError, CoreResult};
 use crate::model::{
-    now_iso, DeviceKind, HostDevice, PairingHandshake, PairingResult, PeerFound, SyncPhase,
-    SyncStatus,
+    now_iso, Device, DeviceKind, HostDevice, IsoDateTime, PairingHandshake, PairingResult,
+    PeerFound, RecordId, SyncPhase, SyncStatus,
 };
 use crate::pairing;
 use crate::session::{Core, PairingAnnouncement};
@@ -113,6 +116,8 @@ pub struct NodeSettings {
     pub stranger_backoff: Duration,
     /// Сколько показывать «ищем устройства», прежде чем успокоиться.
     pub search_window: Duration,
+    /// Как часто затевать круг обмена сам, без просьбы человека (§5.3).
+    pub sync_interval: Duration,
 }
 
 impl Default for NodeSettings {
@@ -133,6 +138,11 @@ impl Default for NodeSettings {
             // Дольше пульсирующий индикатор врёт: если рядом никого, это надо
             // сказать спокойно, а не искать вечно.
             search_window: Duration::from_secs(10),
+            // «Следующая попытка через минуту, вручную можно раньше» — обещание
+            // макета, и цифра здесь именно из него. Чаще незачем: обмен идёт
+            // диффом и в тишине не везёт ничего, но каждый круг — это дозвон до
+            // соседа и работа с его диском.
+            sync_interval: Duration::from_secs(60),
         }
     }
 }
@@ -151,6 +161,14 @@ const ANNOUNCE_ATTEMPTS: u32 = 6;
 /// Пауза между попытками доставки.
 const ANNOUNCE_PAUSE: Duration = Duration::from_secs(2);
 
+/// Как часто обходчик переспрашивает ядро про «ждут отправки» и «последний
+/// обмен».
+///
+/// Не каждый шаг: это запрос к БД под мьютексом ядра, а секунда — та же
+/// зернистость, с какой работает сторож автоблокировки. Правка записи попадёт
+/// в индикатор не позже чем через неё.
+const FACTS_STEP: Duration = Duration::from_secs(1);
+
 // ---------------------------------------------------------------------------
 // Общее состояние
 // ---------------------------------------------------------------------------
@@ -165,6 +183,16 @@ struct Peers {
     online: HashMap<String, Instant>,
 }
 
+/// Почему последняя попытка не удалась.
+///
+/// Имя пира лежит рядом с текстом, потому что макет в фазе `error` пишет
+/// «Соединение с «X» оборвалось»: имя переживает ошибку и гаснет вместе с ней.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Failure {
+    message: String,
+    peer_name: Option<String>,
+}
+
 struct Shared {
     /// Номер поколения. Растёт на каждом старте; потоки прошлых поколений это
     /// видят и уходят. Проще и надёжнее, чем будить каждый поток по отдельности.
@@ -175,8 +203,20 @@ struct Shared {
     searching_until: Mutex<Option<Instant>>,
     /// Внеочередная просьба поискать (`sync_now`).
     probe_requested: AtomicBool,
-    /// Почему сеть не поднялась. Непусто только в фазе `error`.
-    failure: Mutex<Option<String>>,
+    /// Внеочередная просьба обменяться — она же (`sync_now`).
+    sync_requested: AtomicBool,
+    /// С кем прямо сейчас идёт круг. Оно же и есть фаза `syncing`: двух правд о
+    /// том, идёт ли обмен, быть не должно.
+    syncing: Mutex<Option<String>>,
+    /// Почему сеть не поднялась или сорвался обмен. Непусто только в фазе `error`.
+    failure: Mutex<Option<Failure>>,
+    /// Кэш ответов ядра для статуса.
+    ///
+    /// Кэш, а не запрос на месте: статус пересчитывается из сетевых потоков, в
+    /// том числе изнутри разговора с соседом, и лезть за ним в ядро значило бы
+    /// брать нереентрантный мьютекс, который, может быть, уже взят.
+    pending: Mutex<Vec<RecordId>>,
+    last_sync_at: Mutex<Option<IsoDateTime>>,
     /// Последний разосланный статус — чтобы не слать одно и то же дважды.
     last_status: Mutex<Option<SyncStatus>>,
     events: Sender<CoreEvent>,
@@ -196,11 +236,67 @@ impl Shared {
         }
     }
 
+    fn failure(&self) -> Option<Failure> {
+        self.failure.lock().ok().and_then(|failure| failure.clone())
+    }
+
+    fn fail_with(&self, message: impl Into<String>, peer_name: Option<String>) {
+        if let Ok(mut failure) = self.failure.lock() {
+            *failure = Some(Failure {
+                message: message.into(),
+                peer_name,
+            });
+        }
+    }
+
+    fn forget_failure(&self) {
+        if let Ok(mut failure) = self.failure.lock() {
+            *failure = None;
+        }
+    }
+
     fn announce(&self, event: CoreEvent) {
         // Событие — не отчёт об успехе: некому доставить, значит некому. Ронять
         // из-за этого сетевой поток нельзя (та же логика, что в `announce`
         // оболочки).
         let _ = self.events.send(event);
+    }
+}
+
+/// Право вести круг обмена — ровно одно на узел.
+///
+/// Оба устройства ходят друг к другу сами, и встречные круги неизбежны. Второй
+/// круг ничего не испортит (применение идёт транзакцией, а правило свежести
+/// идемпотентно), но проделает ту же работу впустую и заставит индикатор
+/// мигать. Проще договориться: кто первый занял — тот и ведёт.
+///
+/// Освобождается на выходе из области видимости, в том числе если круг оборвался
+/// ошибкой или поток ушёл по смене поколения.
+struct Busy<'a> {
+    shared: &'a Shared,
+}
+
+impl<'a> Busy<'a> {
+    fn claim(shared: &'a Shared, peer_name: &str) -> Option<Self> {
+        {
+            let mut slot = shared.syncing.lock().ok()?;
+            if slot.is_some() {
+                return None;
+            }
+            *slot = Some(peer_name.to_owned());
+        }
+        // Круг начался — прошлая неудача больше не описывает происходящее
+        // (`mock/index.ts::doStartSync` гасит `message` ровно здесь же).
+        shared.forget_failure();
+        Some(Self { shared })
+    }
+}
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.shared.syncing.lock() {
+            *slot = None;
+        }
     }
 }
 
@@ -267,7 +363,11 @@ impl Node {
             peers: Mutex::new(Peers::default()),
             searching_until: Mutex::new(None),
             probe_requested: AtomicBool::new(false),
+            sync_requested: AtomicBool::new(false),
+            syncing: Mutex::new(None),
             failure: Mutex::new(None),
+            pending: Mutex::new(Vec::new()),
+            last_sync_at: Mutex::new(None),
             last_status: Mutex::new(None),
             events,
             port: AtomicU64::new(0),
@@ -329,20 +429,34 @@ impl Node {
     }
 
     /// Текущее состояние синхронизации целиком.
+    ///
+    /// Спрашивают его командой, из потока UI: замок ядра здесь свободен, и
+    /// «ждут отправки» можно освежить прямо сейчас, а не ждать шага обходчика.
     pub fn status(&self) -> SyncStatus {
+        self.refresh_facts();
         compute_status(&self.shared, Instant::now())
     }
 
     /// «Синхронизировать сейчас» (F10).
     ///
-    /// **Граница шага:** обмена ещё нет — есть поиск. Кнопка честно перезапускает
-    /// обход соседей и не ждёт следующего круга; манифест и дифф приедут в S4.
+    /// Не ждать своей минуты: обходчик обойдёт соседей и проведёт круг обмена на
+    /// ближайшем же шаге. Ответ команды при этом круга НЕ ждёт — обмен идёт по
+    /// сети, а команда должна вернуться сразу; о том, чем он кончился, расскажет
+    /// событие `sync_status` (так же устроен и `mock/index.ts::syncNow`).
     pub fn sync_now(&self) -> SyncStatus {
         if let Ok(mut until) = self.shared.searching_until.lock() {
             *until = Some(Instant::now() + self.settings.search_window);
         }
+        self.shared.forget_failure();
         self.shared.probe_requested.store(true, Ordering::SeqCst);
+        self.shared.sync_requested.store(true, Ordering::SeqCst);
+        self.refresh_facts();
         publish_status(&self.shared, Instant::now())
+    }
+
+    /// Освежить кэш «ждут отправки» и «последний обмен».
+    fn refresh_facts(&self) {
+        let _ = self.lock_core(|core| refresh_facts(&self.shared, core));
     }
 
     // -----------------------------------------------------------------------
@@ -372,15 +486,27 @@ impl Node {
     /// Сверх того, что делает ядро, узел берёт на себя доставку: показавшая код
     /// сторона ничего не вызывала и узнает об успехе только по сети.
     pub fn confirm_pairing(&self, session_id: &str) -> CoreResult<PairingResult> {
-        let result = self.lock_core(|core| core.confirm_pairing(session_id))??;
+        let mut result = self.lock_core(|core| core.confirm_pairing(session_id))??;
         self.shared.forget_strangers();
-        let announcement = self.lock_core(|core| core.take_pairing_announcement())?;
+        let Some(announcement) = self.lock_core(|core| core.take_pairing_announcement())? else {
+            return Ok(result);
+        };
 
-        if let Some(announcement) = announcement {
-            let context = self.context();
-            // В фоне и уже без замка: доставка ходит по сети и может не дойти,
-            // а сопряжение здесь уже состоялось и от неё не зависит.
-            std::thread::spawn(move || announce_pairing(&context, &announcement));
+        // Первый проход — здесь и сейчас, уже без замка ядра. Сосед, чей код
+        // только что прочитали, почти наверняка на связи, а первичный перенос
+        // записей человек ждёт именно от этой кнопки: «сопряжено, перенесено
+        // столько-то» — это ответ команды, а не новость через минуту.
+        let context = self.context();
+        match deliver_once(&context, &announcement) {
+            Some(addr) => {
+                result.records_transferred = i64::from(exchange_at(&context, addr).unwrap_or(0));
+            }
+            // Не достучались: сопряжение всё равно состоялось, а доставку и
+            // перенос доделает фон. Ответ команды его не ждёт — держать человека
+            // на экране сопряжения ради шести попыток по две секунды нельзя.
+            None => {
+                std::thread::spawn(move || announce_pairing(&context, &announcement));
+            }
         }
         Ok(result)
     }
@@ -412,14 +538,15 @@ impl Node {
             Discovery::Off
         };
 
-        if let Ok(mut failure) = self.shared.failure.lock() {
-            *failure = None;
-        }
+        self.shared.forget_failure();
         if let Ok(mut until) = self.shared.searching_until.lock() {
             *until = Some(Instant::now() + self.settings.search_window);
         }
         self.shared.port.store(u64::from(port), Ordering::SeqCst);
         self.shared.running.store(true, Ordering::SeqCst);
+        // «Последний обмен» переживает не только замок, но и перезапуск: он
+        // лежит в `meta`, и прочитать его надо ровно один раз, здесь.
+        self.refresh_facts();
 
         let context = Context {
             core: Arc::downgrade(&self.core),
@@ -447,13 +574,23 @@ impl Node {
         if let Ok(mut until) = self.shared.searching_until.lock() {
             *until = None;
         }
+        // Запертое хранилище — это спокойный ноль, а не «обмен не удался»:
+        // рассказывать про соседей и ждущие записи ему нечем и незачем.
+        self.shared.forget_failure();
+        if let Ok(mut syncing) = self.shared.syncing.lock() {
+            *syncing = None;
+        }
+        if let Ok(mut pending) = self.shared.pending.lock() {
+            pending.clear();
+        }
+        if let Ok(mut last) = self.shared.last_sync_at.lock() {
+            *last = None;
+        }
         publish_status(&self.shared, Instant::now());
     }
 
     fn fail(&self, message: impl Into<String>) {
-        if let Ok(mut failure) = self.shared.failure.lock() {
-            *failure = Some(message.into());
-        }
+        self.shared.fail_with(message, None);
         self.shared.running.store(false, Ordering::SeqCst);
         self.shared.port.store(0, Ordering::SeqCst);
         publish_status(&self.shared, Instant::now());
@@ -507,20 +644,20 @@ impl Node {
 // ---------------------------------------------------------------------------
 
 fn compute_status(shared: &Shared, now: Instant) -> SyncStatus {
-    if let Some(message) = shared
-        .failure
-        .lock()
-        .ok()
-        .and_then(|failure| failure.clone())
-    {
-        return SyncStatus {
-            phase: SyncPhase::Error,
-            message: Some(message),
-            ..SyncStatus::idle()
-        };
-    }
+    let failure = shared.failure();
+
     if !shared.running.load(Ordering::SeqCst) {
-        return SyncStatus::idle();
+        // Сеть не поднялась — это ошибка, о которой человеку надо сказать.
+        // Просто заперто — спокойный ноль: `stop` гасит и неудачу, и кэш.
+        return match failure {
+            Some(failure) => SyncStatus {
+                phase: SyncPhase::Error,
+                peer_name: failure.peer_name,
+                message: Some(failure.message),
+                ..SyncStatus::idle()
+            },
+            None => SyncStatus::idle(),
+        };
     }
 
     let online = shared
@@ -528,7 +665,10 @@ fn compute_status(shared: &Shared, now: Instant) -> SyncStatus {
         .lock()
         .map(|peers| peers.online.len() as u32)
         .unwrap_or(0);
+    let syncing = shared.syncing.lock().ok().and_then(|peer| peer.clone());
     let searching = online == 0
+        && syncing.is_none()
+        && failure.is_none()
         && shared
             .searching_until
             .lock()
@@ -536,20 +676,44 @@ fn compute_status(shared: &Shared, now: Instant) -> SyncStatus {
             .and_then(|until| *until)
             .is_some_and(|until| now < until);
 
+    // Порядок — это приоритет: то, что происходит прямо сейчас, важнее того,
+    // чем кончился прошлый круг.
+    let (phase, peer_name, message) = match (syncing, failure) {
+        (Some(peer), _) => (SyncPhase::Syncing, Some(peer), None),
+        (None, Some(failure)) => (SyncPhase::Error, failure.peer_name, Some(failure.message)),
+        (None, None) if searching => (SyncPhase::Searching, None, None),
+        (None, None) => (SyncPhase::Idle, None, None),
+    };
+
     SyncStatus {
         // `idle` с найденными соседями и пустым списком ожидающих — это и есть
         // «всё сошлось»: остальные пять видов индикатора UI выводит сам.
-        phase: if searching {
-            SyncPhase::Searching
-        } else {
-            SyncPhase::Idle
-        },
+        phase,
         peers_online: online,
-        // ГРАНИЦА ШАГА: обмена ещё нет, и заполнять эти поля нечем (S4).
-        peer_name: None,
-        pending_records: Vec::new(),
-        last_sync_at: None,
-        message: None,
+        peer_name,
+        pending_records: shared
+            .pending
+            .lock()
+            .map(|pending| pending.clone())
+            .unwrap_or_default(),
+        last_sync_at: shared.last_sync_at.lock().ok().and_then(|at| at.clone()),
+        message,
+    }
+}
+
+/// Перечитать у ядра то, что статус сам знать не может.
+///
+/// Зовётся с уже взятым замком ядра — и ничего сетевого внутри не делает.
+fn refresh_facts(shared: &Shared, core: &mut Core) {
+    if let Ok(pending) = core.pending_records() {
+        if let Ok(mut slot) = shared.pending.lock() {
+            *slot = pending;
+        }
+    }
+    if let Ok(at) = core.last_sync_at() {
+        if let Ok(mut slot) = shared.last_sync_at.lock() {
+            *slot = at;
+        }
     }
 }
 
@@ -689,8 +853,11 @@ fn serve_trusted(context: &Context, mut session: handshake::Established) -> Core
     };
     mark_online(context, &device.device_id);
 
-    // ГРАНИЦА ШАГА: доверенный разговор пока состоит из «ты жив?» — «жив».
-    // Манифест и дифф встанут сюда же, в S4.
+    // Круг обмена принадлежит соединению: его состояние живёт здесь, локальной
+    // переменной, и умирает вместе с разговором.
+    let mut round = sync::Round::default();
+    let mut busy: Option<Busy<'_>> = None;
+
     while !context.stale() {
         match session.channel.recv() {
             Ok(Msg::Ping) => {
@@ -700,12 +867,54 @@ fn serve_trusted(context: &Context, mut session: handshake::Established) -> Core
                 // только отвечает и сама никому не звонит.
                 mark_online(context, &device.device_id);
             }
+            Ok(message @ (Msg::SyncManifest { .. } | Msg::SyncFetch | Msg::SyncBatch { .. })) => {
+                if busy.is_none() {
+                    // Встречный круг уже идёт — второй сейчас только повторил бы
+                    // ту же работу. Отвечаем кадром, а не обрывом: обрыв зажёг бы
+                    // у соседа «обмен не удался» там, где всё в порядке.
+                    let Some(claimed) = Busy::claim(&context.shared, &device.name) else {
+                        session.channel.send(&Msg::SyncBusy)?;
+                        break;
+                    };
+                    busy = Some(claimed);
+                    publish_status(&context.shared, Instant::now());
+                }
+
+                match sync::answer(context, &mut round, &device.device_id, message) {
+                    Ok((reply, done)) => {
+                        session.channel.send(&reply)?;
+                        mark_online(context, &device.device_id);
+                        if done {
+                            finish_round(context, busy.take());
+                            // Соединение переживает круг, а состояние круга —
+                            // нет: второй круг по той же трубе должен начинаться
+                            // с чистого манифеста, а не с накопленного прошлым.
+                            round = sync::Round::default();
+                        }
+                    }
+                    Err(error) => {
+                        context
+                            .shared
+                            .fail_with(error.message, Some(device.name.clone()));
+                        drop(busy.take());
+                        publish_status(&context.shared, Instant::now());
+                        break;
+                    }
+                }
+            }
             // Всё остальное — либо конец разговора, либо непонятный кадр; в обоих
             // случаях вешаем трубку.
             _ => break,
         }
     }
     Ok(())
+}
+
+/// Круг доехал до конца: отпустить право вести, освежить кэш и рассказать.
+fn finish_round(context: &Context, busy: Option<Busy<'_>>) {
+    drop(busy);
+    context.with_core(|core| refresh_facts(&context.shared, core));
+    publish_status(&context.shared, Instant::now());
 }
 
 fn serve_pairing(context: &Context, mut session: handshake::Established) -> CoreResult<()> {
@@ -758,6 +967,11 @@ fn serve_pairing(context: &Context, mut session: handshake::Established) -> Core
                 Some(result) => {
                     session.channel.send(&Msg::PairingAck)?;
                     context.shared.forget_strangers();
+                    // Записи поедут ближайшим кругом. Здесь их не перенести:
+                    // адреса СЛУШАТЕЛЯ соседа мы не знаем — в сокете сопряжения
+                    // его эфемерный клиентский порт, — и позвонить ему пока
+                    // некуда. Поэтому в событии честный ноль.
+                    context.shared.sync_requested.store(true, Ordering::SeqCst);
                     // Вот ради этого события S3 и нужен сопряжению: здесь код
                     // показывали и никакой команды не вызывали.
                     context
@@ -780,17 +994,31 @@ fn serve_pairing(context: &Context, mut session: handshake::Established) -> Core
 
 fn walk_loop(context: &Context, discovery: Discovery) {
     let mut next_probe = Instant::now();
+    // Первый круг — сразу: хранилище только что отперли, и за время, пока оно
+    // было заперто, у соседа могло измениться что угодно.
+    let mut next_sync = Instant::now();
+    let mut next_facts = Instant::now();
 
     while !context.stale() {
         let now = Instant::now();
         absorb(context, discovery.drain());
 
         let asked = context.shared.probe_requested.swap(false, Ordering::SeqCst);
-        if asked || now >= next_probe {
-            probe_round(context);
+        let exchange =
+            context.shared.sync_requested.swap(false, Ordering::SeqCst) || now >= next_sync;
+        if asked || exchange || now >= next_probe {
+            probe_round(context, exchange);
             next_probe = Instant::now() + context.settings.probe_interval;
+            if exchange {
+                next_sync = Instant::now() + context.settings.sync_interval;
+            }
         }
         expire_online(context, Instant::now());
+
+        if now >= next_facts {
+            context.with_core(|core| refresh_facts(&context.shared, core));
+            next_facts = Instant::now() + FACTS_STEP;
+        }
         publish_status(&context.shared, Instant::now());
 
         std::thread::sleep(WALK_STEP);
@@ -818,7 +1046,7 @@ fn absorb(context: &Context, sightings: Vec<Sighting>) {
     }
 }
 
-fn probe_round(context: &Context) {
+fn probe_round(context: &Context, exchange: bool) {
     let now = Instant::now();
     let addrs = match context.shared.peers.lock() {
         Ok(peers) => peers
@@ -839,7 +1067,7 @@ fn probe_round(context: &Context) {
         if context.stale() {
             return;
         }
-        match probe(context, addr) {
+        match visit(context, addr, exchange) {
             Some(device_id) => {
                 if let Ok(mut peers) = context.shared.peers.lock() {
                     peers.strangers.remove(&addr);
@@ -857,8 +1085,12 @@ fn probe_round(context: &Context) {
     }
 }
 
-/// Позвонить по адресу и выяснить, свой ли там.
-fn probe(context: &Context, addr: SocketAddr) -> Option<String> {
+/// Позвонить по адресу, выяснить, свой ли там, и — если назрело — обменяться.
+///
+/// Круг идёт по тому же соединению, что и проба: рукопожатие уже сделано, а
+/// второй дозвон до того же соседа ради того же разговора — это лишний ECDH и
+/// лишний сокет.
+fn visit(context: &Context, addr: SocketAddr, exchange: bool) -> Option<String> {
     let identity = context.identity()?;
     let mut session = dial(context, addr, &identity, Mode::Trusted).ok()?;
 
@@ -869,9 +1101,66 @@ fn probe(context: &Context, addr: SocketAddr) -> Option<String> {
         .flatten()?;
 
     match session.channel.request(&Msg::Ping) {
-        Ok(Msg::Pong) => Some(device.device_id),
-        _ => None,
+        Ok(Msg::Pong) => {}
+        _ => return None,
     }
+
+    if exchange {
+        // Отметка до круга, а не после: круг бывает долгим, а «устройство на
+        // связи» стало правдой уже сейчас.
+        mark_online(context, &device.device_id);
+        exchange_with(context, &mut session, &device);
+    }
+    Some(device.device_id)
+}
+
+/// Провести круг обмена по готовому соединению, показывая, что происходит.
+///
+/// Возвращает, сколько записей переехало в обе стороны, или `None`, если круг
+/// не состоялся: право вести занято встречным кругом либо обмен сорвался.
+fn exchange_with(
+    context: &Context,
+    session: &mut handshake::Established,
+    device: &Device,
+) -> Option<u32> {
+    let busy = Busy::claim(&context.shared, &device.name)?;
+    publish_status(&context.shared, Instant::now());
+
+    let moved = sync::run_round(context, session, &device.device_id);
+    match moved {
+        // Собеседник занят встречным кругом — ни успеха, ни ошибки.
+        Ok(None) => {
+            drop(busy);
+            publish_status(&context.shared, Instant::now());
+            None
+        }
+        Ok(Some(moved)) => {
+            finish_round(context, Some(busy));
+            Some(moved)
+        }
+        Err(error) => {
+            // Данные целы: не доехал дифф. Так это и объясняет макет, и красный
+            // здесь не нужен — следующая попытка придёт сама.
+            context
+                .shared
+                .fail_with(error.message, Some(device.name.clone()));
+            drop(busy);
+            publish_status(&context.shared, Instant::now());
+            None
+        }
+    }
+}
+
+/// Дозвониться до доверенного соседа по адресу и провести круг.
+fn exchange_at(context: &Context, addr: SocketAddr) -> Option<u32> {
+    let identity = context.identity()?;
+    let mut session = dial(context, addr, &identity, Mode::Trusted).ok()?;
+    let device = context
+        .with_core(|core| core.authorize_peer(&session.peer_signing).ok().flatten())
+        .flatten()?;
+
+    mark_online(context, &device.device_id);
+    exchange_with(context, &mut session, &device)
 }
 
 fn dial(
@@ -908,31 +1197,39 @@ fn ask_for_payload(context: &Context, addr: SocketAddr, code: &str) -> Option<St
     }
 }
 
-/// Доложить показавшей код стороне, что сопряжение состоялось (§2.2).
+/// Повторять доставку «я тебя записал», пока не дойдёт (§2.2).
+///
+/// Первый проход делает сам `confirm_pairing`, поэтому здесь только повторы — и
+/// каждый начинается с паузы. Дошло — тем же заходом переносим записи: сосед
+/// только что узнал про нас, и ждать своей минуты незачем.
 fn announce_pairing(context: &Context, announcement: &PairingAnnouncement) {
-    for attempt in 0..ANNOUNCE_ATTEMPTS {
-        if attempt > 0 {
-            std::thread::sleep(ANNOUNCE_PAUSE);
-        }
+    for _ in 1..ANNOUNCE_ATTEMPTS {
+        std::thread::sleep(ANNOUNCE_PAUSE);
         if pairing::is_expired(&announcement.expires_at, chrono::Utc::now()) {
             return;
         }
-
-        let addrs = context
-            .shared
-            .peers
-            .lock()
-            .map(|peers| peers.addrs.clone())
-            .unwrap_or_default();
-        for addr in addrs {
-            if deliver_pairing(context, addr, announcement).is_some() {
-                return;
-            }
+        if let Some(addr) = deliver_once(context, announcement) {
+            exchange_at(context, addr);
+            return;
         }
     }
     // Не дошло: мы сопряжены, а вторая сторона про нас не знает. Человек увидит
     // это в списке устройств и покажет код заново — врать ему об успехе доставки
     // мы не станем, потому что рассказывать об этом нечем: команда уже ответила.
+}
+
+/// Один проход по известным адресам. Возвращает тот, по которому дошло.
+fn deliver_once(context: &Context, announcement: &PairingAnnouncement) -> Option<SocketAddr> {
+    let addrs = context
+        .shared
+        .peers
+        .lock()
+        .map(|peers| peers.addrs.clone())
+        .unwrap_or_default();
+
+    addrs
+        .into_iter()
+        .find(|addr| deliver_pairing(context, *addr, announcement).is_some())
 }
 
 fn deliver_pairing(

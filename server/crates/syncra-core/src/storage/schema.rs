@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{CoreError, CoreResult};
 
 /// Версия схемы. Растёт вместе с миграциями; лежит в `meta`.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Ключи таблицы `meta`.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
@@ -25,6 +25,10 @@ pub const META_CREATED_AT: &str = "created_at";
 /// требует миграции.
 pub const META_GENERATOR_PROFILE: &str = "generator_profile";
 pub const META_SECURITY_SETTINGS: &str = "security_settings";
+/// Когда последний обмен с соседом успешно закончился (§5.3). Одна строка на
+/// хранилище, а не на устройство: индикатор спрашивает «когда синхронизировались
+/// в последний раз», а не «когда — с ноутбуком».
+pub const META_LAST_SYNC_AT: &str = "last_sync_at";
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -91,6 +95,27 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 "#;
 
+/// Что и до какой версии уже уехало на каждое доверенное устройство (§5.3).
+///
+/// Таблица, а не колонка в `records`: одна и та же запись бывает довезена до
+/// ноутбука и не довезена до телефона — это два разных факта, и одной точкой
+/// отсчёта их не описать. Это же значение — общий предок для разрешения
+/// конфликтов (§5.5), поэтому оно заводится один раз и здесь.
+const MIGRATION_3: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_state (
+  device_id      TEXT    NOT NULL,
+  -- Внешний ключ на записи: надгробие остаётся строкой в `records`, поэтому
+  -- отметка живёт ровно столько же, сколько сама запись.
+  record_id      TEXT    NOT NULL REFERENCES records(record_id),
+  -- Версия, на которой обе стороны сошлись в последний раз (§5.2).
+  synced_version INTEGER NOT NULL,
+  synced_at      TEXT    NOT NULL,
+  PRIMARY KEY (device_id, record_id)
+);
+
+CREATE INDEX IF NOT EXISTS sync_state_by_record ON sync_state(record_id);
+"#;
+
 /// Без `meta` не прочитать версию схемы, а без версии не выбрать миграции —
 /// поэтому одна эта таблица создаётся до всякой цепочки. В `MIGRATION_1` она
 /// тоже есть, и повторение здесь безвредно: обе формы — `IF NOT EXISTS`.
@@ -100,7 +125,7 @@ const BOOTSTRAP: &str = "CREATE TABLE IF NOT EXISTS meta (
 );";
 
 /// Миграции по порядку: индекс `i` переводит схему с версии `i` на `i + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_1, MIGRATION_2];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_1, MIGRATION_2, MIGRATION_3];
 
 /// Применить миграции от записанной в `meta` версии до текущей.
 ///

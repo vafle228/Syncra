@@ -13,9 +13,10 @@
 //! паролей, настройки безопасности с автоблокировкой, смену мастер-пароля,
 //! идентичность устройства с таблицей доверия (`list_devices`, `revoke_device`)
 //! и сопряжение по QR (`get_pairing_payload`, `submit_paired_key`,
-//! `confirm_pairing`, `cancel_pairing`), а также обнаружение соседей в локальной
-//! сети и защищённый транспорт между ними (`net`). Обмен записями, конфликты,
-//! импорт/экспорт, TOTP и энролмент PIN — следующие шаги.
+//! `confirm_pairing`, `cancel_pairing`), обнаружение соседей в локальной сети и
+//! защищённый транспорт между ними (`net`), а также дифференциальный обмен
+//! записями поверх него (`sync`: манифест, дифф, надгробия, `get_sync_status`,
+//! `sync_now`). Конфликты, импорт/экспорт, TOTP и энролмент PIN — следующие шаги.
 
 pub mod crypto;
 pub mod error;
@@ -26,6 +27,7 @@ pub mod pairing;
 pub mod security;
 pub mod session;
 pub mod storage;
+pub mod sync;
 pub mod trust;
 
 pub use error::{CoreError, CoreErrorCode, CoreResult};

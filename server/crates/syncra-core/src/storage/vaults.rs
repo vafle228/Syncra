@@ -7,7 +7,10 @@
 use rusqlite::{Connection, OptionalExtension, Row};
 
 use crate::error::{CoreError, CoreResult};
-use crate::model::{now_iso, valid_vault_color, valid_vault_name, Vault, VaultPatch};
+use crate::model::{
+    now_iso, valid_vault_color, valid_vault_name, Vault, VaultPatch, VAULT_COLORS,
+    VAULT_NAME_MAX_LENGTH,
+};
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Vault> {
     Ok(Vault {
@@ -87,6 +90,72 @@ pub fn create(conn: &Connection, name: &str, color: &str, is_default: bool) -> C
 
     Ok(vault)
 }
+
+/// Завести секцию с ЧУЖИМ `vault_id` — так приезжает секция по синхронизации.
+///
+/// Отдельно от [`create`], потому что `create` выдаёт свой UUID, а здесь
+/// идентификатор обязан совпасть с тем, что у соседа: иначе одна и та же папка
+/// разъедется на две и записи начнут ходить кругами.
+///
+/// Имя и цвет приходят от соседа, а не от человека, и **не валидируются, а
+/// приводятся**: незнакомый цвет и слишком длинное имя — повод нарисовать
+/// секцию иначе, а не оборвать обмен на середине.
+///
+/// `sync = 1`: секция приехала по синхронизации, значит синхронизируется. Выключить
+/// её тумблером человек может и потом — и тогда она перестанет и уезжать, и приезжать.
+/// `is_default = 0`: точку приземления новых записей сосед не выбирает.
+pub fn adopt(conn: &Connection, vault_id: &str, name: &str, color: &str) -> CoreResult<Vault> {
+    if let Some(existing) = find_optional(conn, vault_id)? {
+        return Ok(existing);
+    }
+
+    let vault = Vault {
+        vault_id: vault_id.to_owned(),
+        name: coerce_name(name),
+        color: coerce_color(color),
+        sync: true,
+        is_default: false,
+        created_at: now_iso(),
+    };
+
+    conn.execute(
+        "INSERT INTO vaults (vault_id, name, color, sync, is_default, created_at)
+         VALUES (?1, ?2, ?3, 1, 0, ?4)",
+        rusqlite::params![vault.vault_id, vault.name, vault.color, vault.created_at],
+    )?;
+
+    Ok(vault)
+}
+
+/// Секция или `None` — без ошибки: вызывающему интересно именно «а есть ли».
+pub fn find_optional(conn: &Connection, vault_id: &str) -> CoreResult<Option<Vault>> {
+    let sql = "SELECT vault_id, name, color, sync, is_default, created_at
+               FROM vaults WHERE vault_id = ?1";
+    Ok(conn.query_row(sql, [vault_id], from_row).optional()?)
+}
+
+/// Имя соседа как есть не берём: пустое подменяем, длинное подрезаем — ровно как
+/// [`crate::model::HostDevice::new`] поступает с именем машины из ОС.
+fn coerce_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return REMOTE_VAULT_NAME.to_owned();
+    }
+    trimmed.chars().take(VAULT_NAME_MAX_LENGTH).collect()
+}
+
+/// Цвет — ступень нашей палитры. Незнакомая ступень значит, что сосед новее нас;
+/// показать секцию первым цветом честнее, чем не показать её вовсе.
+fn coerce_color(color: &str) -> String {
+    if VAULT_COLORS.contains(&color) {
+        color.to_owned()
+    } else {
+        VAULT_COLORS[0].to_owned()
+    }
+}
+
+/// Чем подписывается приехавшая секция, у которой не оказалось имени.
+const REMOTE_VAULT_NAME: &str = "Секция с другого устройства";
 
 /// Переименовать / перекрасить. Флаг синхронизации сюда намеренно не входит.
 pub fn update(conn: &Connection, vault_id: &str, patch: &VaultPatch) -> CoreResult<Vault> {

@@ -342,6 +342,32 @@ pub(crate) fn push_short_string(bytes: &mut Vec<u8>, value: &str) -> CoreResult<
     Ok(())
 }
 
+/// Строка произвольной длины: четыре байта длины и тело.
+///
+/// Отдельно от [`push_short_string`], у которой длина в один байт: имя
+/// устройства в двести пятьдесят пять байт помещается, а заметка к записи —
+/// нет, и синхронизация возит именно заметки ([`crate::sync::SyncRecord`]).
+/// Потолок здесь не нужен: его ставит сам кадр (`net::wire::MAX_FRAME`).
+pub(crate) fn push_long_string(bytes: &mut Vec<u8>, value: &str) {
+    let value = value.as_bytes();
+    bytes.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(value);
+}
+
+/// Необязательная строка: байт наличия и, если есть, сама строка.
+///
+/// Пустая строка и её отсутствие — разные вещи (заметка из пробелов уже
+/// приведена к `None` в `normalize_optional_secret`), поэтому флаг отдельный.
+pub(crate) fn push_optional_string(bytes: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        Some(text) => {
+            bytes.push(1);
+            push_long_string(bytes, text);
+        }
+        None => bytes.push(0),
+    }
+}
+
 /// Чтение тела по порядку. Любой выход за край — испорченный код, а не паника.
 ///
 /// Тем же курсором разбирает свои кадры сетевой слой ([`crate::net::wire`]):
@@ -373,6 +399,19 @@ impl Cursor<'_> {
     pub(crate) fn short_string(&mut self) -> CoreResult<String> {
         let len = usize::from(self.byte()?);
         String::from_utf8(self.take(len)?.to_vec()).map_err(|_| damaged_code())
+    }
+
+    pub(crate) fn long_string(&mut self) -> CoreResult<String> {
+        let len = u32::from_be_bytes(self.array::<4>()?) as usize;
+        String::from_utf8(self.take(len)?.to_vec()).map_err(|_| damaged_code())
+    }
+
+    pub(crate) fn optional_string(&mut self) -> CoreResult<Option<String>> {
+        match self.byte()? {
+            0 => Ok(None),
+            1 => self.long_string().map(Some),
+            _ => Err(damaged_code()),
+        }
     }
 
     pub(crate) fn is_at_end(&self) -> bool {

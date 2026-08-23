@@ -345,7 +345,7 @@ pub fn rekey_all(tx: &rusqlite::Transaction<'_>, from: &VaultKey, to: &VaultKey)
     Ok(())
 }
 
-fn seal_field(
+pub(crate) fn seal_field(
     key: &VaultKey,
     record_id: &str,
     field: SecretField,
@@ -362,7 +362,7 @@ fn seal_field(
     }
 }
 
-fn open_field(
+pub(crate) fn open_field(
     key: &VaultKey,
     record_id: &str,
     field: SecretField,

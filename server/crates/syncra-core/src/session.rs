@@ -20,14 +20,15 @@ use crate::error::{CoreError, CoreResult};
 use crate::generator::{self, GeneratedPasswords, GeneratorProfile, Rules};
 use crate::model::{
     now_iso, ChangeMasterPasswordResponse, Device, HostDevice, InitVaultResponse, IsoDateTime,
-    PairingHandshake, PairingOffer, PairingResult, PinStatus, RecordDraft, RecordMeta, RecordPatch,
-    RecordSecrets, UnlockResponse, Vault, VaultPatch, VaultStatus, MASTER_PASSWORD_MIN_LENGTH,
-    PIN_LENGTH,
+    PairingHandshake, PairingOffer, PairingResult, PinStatus, RecordDraft, RecordId, RecordMeta,
+    RecordPatch, RecordSecrets, UnlockResponse, Vault, VaultPatch, VaultStatus,
+    MASTER_PASSWORD_MIN_LENGTH, PIN_LENGTH,
 };
 use crate::net::{NetIdentity, RemotePeer};
 use crate::pairing;
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
 use crate::storage::{records, schema, vaults, Storage};
+use crate::sync;
 use crate::trust;
 
 /// Имя и цвет первой секции: одна секция по умолчанию заводится сразу, потому
@@ -564,9 +565,17 @@ impl Core {
         trust::list(self.storage.conn(), &self.device_id()?)
     }
 
+    /// Отзыв доступа (§2.3).
+    ///
+    /// Вместе со строкой доверия стираются и отметки обмена: если отозванный
+    /// ноутбук когда-нибудь вернут новым сопряжением, хранилище он должен
+    /// получить заново. Довериться отметкам, сделанным до отзыва, — значит
+    /// молча не довезти всё, что изменилось, пока он был отозван.
     pub fn revoke_device(&self, device_id: &str) -> CoreResult<Device> {
         self.key()?;
-        trust::revoke(self.storage.conn(), &self.device_id()?, device_id)
+        let device = trust::revoke(self.storage.conn(), &self.device_id()?, device_id)?;
+        self.forget_sync_state(device_id)?;
+        Ok(device)
     }
 
     // -----------------------------------------------------------------------
@@ -740,6 +749,9 @@ impl Core {
             &this_device_id,
             &now_iso(),
         )?;
+        // Сопряжение — точка отсчёта: старых отметок с этим `device_id` быть не
+        // должно, иначе первичный перенос молча пропустит половину хранилища.
+        self.forget_sync_state(&pending.body.device_id)?;
 
         // Второй стороне об этом рассказать некому, кроме нас: она показывала
         // код и ничего не вызывала. Доставку делает узел сети — уже без замка.
@@ -920,6 +932,7 @@ impl Core {
             &this_device_id,
             &now_iso(),
         )?;
+        self.forget_sync_state(peer.device_id)?;
 
         // Код сделал свою работу и больше не действует: одноразовый ключ на то
         // и одноразовый.
@@ -952,6 +965,103 @@ impl Core {
     /// нельзя.
     pub fn take_pairing_announcement(&mut self) -> Option<PairingAnnouncement> {
         self.announcement.take()
+    }
+
+    // -----------------------------------------------------------------------
+    // Что нужно синхронизации (S4, §5.3)
+    //
+    // Тот же порядок, что и у сетевых методов выше: вход за замок через
+    // `key_quiet`, потому что зовёт всё это фоновый обмен, а не человек.
+    // Продлевать сеанс обменом с телефоном в кармане нельзя.
+    // -----------------------------------------------------------------------
+
+    /// Чем это хранилище отчитывается перед соседом (§5.3, шаг 1).
+    pub fn sync_manifest(&self) -> CoreResult<sync::Manifest> {
+        self.key_quiet()?;
+        sync::manifest(self.storage.conn())
+    }
+
+    /// Что посылать и что просить по манифесту соседа (§5.3, шаг 2).
+    pub fn sync_plan(&self, remote: &sync::Manifest) -> CoreResult<sync::SyncPlan> {
+        self.key_quiet()?;
+        sync::plan(self.storage.conn(), remote)
+    }
+
+    /// Собрать дифф, распечатав секреты своим ключом (§5.3, шаг 3).
+    ///
+    /// Открытый текст отсюда уходит в сеть — и только в неё: границу IPC он не
+    /// пересекает, четвёртой команды Закона №1 не появилось.
+    pub fn sync_export(&self, ids: &[RecordId]) -> CoreResult<Vec<sync::SyncRecord>> {
+        let key = self.key_quiet()?;
+        sync::export(self.storage.conn(), key, ids)
+    }
+
+    /// Применить приехавший дифф — одной транзакцией.
+    ///
+    /// Возвращает то, что правда легло: чужая версия старше нашей не трогается,
+    /// а запись локальной секции не принимается вовсе (§4.2, §5.2).
+    pub fn sync_apply(
+        &mut self,
+        device_id: &str,
+        incoming: &[sync::SyncRecord],
+    ) -> CoreResult<Vec<(RecordId, i64)>> {
+        // Ключ клонируется до транзакции: `conn_mut()` займёт `self` целиком.
+        let key = self.key_quiet()?.clone();
+
+        let tx = self.storage.conn_mut().transaction()?;
+        let applied = sync::apply(&tx, &key, device_id, incoming)?;
+        tx.commit()?;
+        Ok(applied)
+    }
+
+    /// Что «сошлось» с точки зрения стороны, которая чужого манифеста не
+    /// видела: инициатор круга знает только, что у него попросили и что ему
+    /// прислали.
+    pub fn sync_settled_after(
+        &self,
+        wanted: &[RecordId],
+        received: &[RecordId],
+    ) -> CoreResult<Vec<(RecordId, i64)>> {
+        self.key_quiet()?;
+        sync::settled_after(self.storage.conn(), wanted, received)
+    }
+
+    /// Отметить, на какой версии сошлись с устройством.
+    pub fn sync_note(&self, device_id: &str, agreed: &[(RecordId, i64)]) -> CoreResult<()> {
+        self.key_quiet()?;
+        sync::note(self.storage.conn(), device_id, agreed)
+    }
+
+    /// Круг закончился успехом: запомнить, когда это было.
+    ///
+    /// Одна строка на хранилище, а не на устройство: индикатор спрашивает
+    /// «когда синхронизировались в последний раз», а не «когда — с ноутбуком».
+    pub fn sync_finish(&self) -> CoreResult<IsoDateTime> {
+        self.key_quiet()?;
+        let at = now_iso();
+        self.storage
+            .meta_set(schema::META_LAST_SYNC_AT, at.as_bytes())?;
+        Ok(at)
+    }
+
+    pub fn last_sync_at(&self) -> CoreResult<Option<IsoDateTime>> {
+        self.key_quiet()?;
+        match self.storage.meta_get(schema::META_LAST_SYNC_AT)? {
+            Some(raw) => Ok(String::from_utf8(raw).ok()),
+            None => Ok(None),
+        }
+    }
+
+    /// Записи, которые ещё не уехали ни на одно действующее устройство.
+    pub fn pending_records(&self) -> CoreResult<Vec<RecordId>> {
+        self.key_quiet()?;
+        sync::pending(self.storage.conn(), &self.device_id()?)
+    }
+
+    /// Забыть отметки обмена с устройством: отзыв и (повторное) сопряжение
+    /// начинают перенос с нуля.
+    fn forget_sync_state(&self, device_id: &str) -> CoreResult<()> {
+        sync::forget_device(self.storage.conn(), device_id)
     }
 
     // -----------------------------------------------------------------------

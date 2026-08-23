@@ -108,7 +108,7 @@ pub fn run() {
             commands::change_master_password,
             commands::get_security_settings,
             commands::save_security_settings,
-            // Синхронизация (F10): обнаружение есть, обмена записями ещё нет
+            // Синхронизация (F10)
             commands::get_sync_status,
             commands::sync_now,
             commands::list_conflicts,

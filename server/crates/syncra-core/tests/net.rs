@@ -13,126 +13,12 @@
 mod common;
 
 use std::net::SocketAddr;
-use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{assert_code, MASTER_PASSWORD};
+use common::{assert_code, pair, settings, trust_each_other, Device2, MASTER_PASSWORD};
 use syncra_core::net::wire::{Mode, Msg};
 use syncra_core::net::{handshake, CoreEvent};
-use syncra_core::{
-    Core, CoreErrorCode, Device, DeviceKind, HostDevice, Node, NodeSettings, SyncPhase,
-};
-
-// ---------------------------------------------------------------------------
-// Стенд
-// ---------------------------------------------------------------------------
-
-/// Сроки, ужатые до тестовых: ждать по пятнадцать секунд здесь нечего.
-fn settings() -> NodeSettings {
-    NodeSettings {
-        discovery: false,
-        port: 0,
-        io_timeout: Duration::from_secs(3),
-        connect_timeout: Duration::from_millis(800),
-        probe_interval: Duration::from_millis(150),
-        peer_ttl: Duration::from_millis(600),
-        stranger_backoff: Duration::from_millis(200),
-        search_window: Duration::from_millis(300),
-    }
-}
-
-/// Устройство целиком: ядро, узел и очередь его событий.
-struct Device2 {
-    core: Arc<Mutex<Core>>,
-    node: Node,
-    events: Receiver<CoreEvent>,
-}
-
-impl Device2 {
-    fn new(name: &str, master_password: &str) -> Self {
-        Self::with_settings(name, master_password, settings())
-    }
-
-    fn with_settings(name: &str, master_password: &str, settings: NodeSettings) -> Self {
-        let mut core = Core::in_memory(HostDevice::desktop(name)).expect("хранилище в памяти");
-        core.init_vault(master_password).expect("init_vault");
-
-        let core = Arc::new(Mutex::new(core));
-        let (node, events) = Node::new(Arc::clone(&core), settings);
-        node.tick();
-        Self { core, node, events }
-    }
-
-    fn addr(&self) -> SocketAddr {
-        self.node.local_addr().expect("узел слушает порт")
-    }
-
-    fn with_core<T>(&self, action: impl FnOnce(&mut Core) -> T) -> T {
-        action(&mut self.core.lock().unwrap())
-    }
-
-    fn peers(&self) -> Vec<Device> {
-        self.with_core(|core| core.list_devices().unwrap())
-            .into_iter()
-            .filter(|device| !device.is_this_device)
-            .collect()
-    }
-
-    /// Дождаться события, подходящего под условие. Дольше секунды здесь ничего
-    /// не происходит — а если происходит, тест обязан упасть, а не висеть.
-    fn wait_event(&self, matches: impl Fn(&CoreEvent) -> bool) -> CoreEvent {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if let Ok(event) = self.events.recv_timeout(Duration::from_millis(100)) {
-                if matches(&event) {
-                    return event;
-                }
-            }
-        }
-        panic!("события так и не дождались");
-    }
-}
-
-/// Свести два устройства так, как это сделал бы человек с камерой: код с одного
-/// экрана подаётся в другое ядро. Возвращает обе стороны уже доверенными.
-fn pair(shows: &Device2, reads: &Device2) {
-    let payload = shows.with_core(|core| {
-        core.get_pairing_payload().expect("код сопряжения");
-        core.shown_pairing_payload()
-            .expect("показанный код")
-            .to_owned()
-    });
-
-    let handshake = reads
-        .with_core(|core| core.submit_paired_key(&payload))
-        .expect("прочитанный код");
-    reads
-        .with_core(|core| core.confirm_pairing(&handshake.session_id))
-        .expect("подтверждение");
-
-    // Показавшая сторона узнаёт об этом по сети — как и в жизни.
-    shows.node.seed_peer(reads.addr());
-    reads.node.seed_peer(shows.addr());
-}
-
-/// Записать соседа в доверенные напрямую, минуя сеть: так проще готовить стенд
-/// там, где проверяется не сопряжение, а рукопожатие.
-fn trust_each_other(a: &Device2, b: &Device2) {
-    for (left, right) in [(a, b), (b, a)] {
-        let payload = right.with_core(|core| {
-            core.get_pairing_payload().unwrap();
-            core.shown_pairing_payload().unwrap().to_owned()
-        });
-        let handshake = left
-            .with_core(|core| core.submit_paired_key(&payload))
-            .unwrap();
-        left.with_core(|core| core.confirm_pairing(&handshake.session_id))
-            .unwrap();
-    }
-    a.node.seed_peer(b.addr());
-    b.node.seed_peer(a.addr());
-}
+use syncra_core::{CoreErrorCode, DeviceKind, NodeSettings, SyncPhase};
 
 // ---------------------------------------------------------------------------
 // Рукопожатие

@@ -11,8 +11,9 @@ use std::io::{Read, Write};
 
 use crate::crypto::DEVICE_PUBLIC_LEN;
 use crate::error::{CoreError, CoreResult};
-use crate::model::DeviceKind;
+use crate::model::{DeviceKind, RecordId, VaultId};
 use crate::pairing::{self, Cursor, CODE_COMMITMENT_LEN};
+use crate::sync::{ManifestEntry, SyncRecord};
 
 /// Версия протокола. Едет открытым текстом в первом же кадре: разговаривают два
 /// разных ядра, и одно из них может быть старше другого.
@@ -207,6 +208,15 @@ const TAG_PAIRING_OFFER: u8 = 0x11;
 const TAG_PAIRING_REFUSED: u8 = 0x12;
 const TAG_PAIRING_COMPLETE: u8 = 0x13;
 const TAG_PAIRING_ACK: u8 = 0x14;
+// Обмен записями (S4, §5.3). Своя десятка тегов: сопряжение и синхронизация —
+// разные разговоры, и путать их номера незачем.
+const TAG_SYNC_MANIFEST: u8 = 0x20;
+const TAG_SYNC_ACK: u8 = 0x21;
+const TAG_SYNC_NEED: u8 = 0x22;
+const TAG_SYNC_FETCH: u8 = 0x23;
+const TAG_SYNC_BATCH: u8 = 0x24;
+const TAG_SYNC_DONE: u8 = 0x25;
+const TAG_SYNC_BUSY: u8 = 0x26;
 
 /// Всё, что ходит по каналу после приветствия. Уже зашифровано.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,6 +255,148 @@ pub enum Msg {
         agreement_public: [u8; HALF_PUBLIC_LEN],
     },
     PairingAck,
+    /// Порция манифеста (§5.3, шаг 1).
+    ///
+    /// Порция, а не весь манифест целиком: хранилище на тысячу записей в один
+    /// кадр не влезает, а длину кадра называет сторона на том конце, и потолок
+    /// ей поднимать нельзя. `last` закрывает манифест — по нему собеседник и
+    /// начинает считать.
+    SyncManifest {
+        entries: Vec<ManifestEntry>,
+        /// Секции, выключенные из синхронизации на стороне отправителя. Едут в
+        /// каждой порции: их единицы, и склеивать их отдельно дороже.
+        local_vaults: Vec<VaultId>,
+        last: bool,
+    },
+    /// «Порцию принял, продолжай».
+    SyncAck,
+    /// Ответ на закрытый манифест: что собеседник хочет получить.
+    SyncNeed {
+        wanted: Vec<RecordId>,
+        /// Влез ли список целиком. Обрезанный не закрывает круг: остаток
+        /// приедет следующим, и отмечать по нему «сошлись» нельзя.
+        complete: bool,
+    },
+    /// «Давай следующую порцию диффа».
+    SyncFetch,
+    /// Порция диффа. Ходит в обе стороны: ответом на [`Msg::SyncFetch`] и
+    /// собственной посылкой в конце круга.
+    SyncBatch {
+        records: Vec<SyncRecord>,
+        last: bool,
+    },
+    /// Круг закрыт: столько записей у собеседника правда легло.
+    SyncDone {
+        applied: u32,
+    },
+    /// «Сейчас не могу: со мной уже кто-то меняется».
+    ///
+    /// Отдельный ответ, а не обрыв связи: оба устройства ходят друг к другу
+    /// сами, и встречные круги — обычное дело, а не поломка. Обрыв здесь
+    /// зажигал бы у соседа «обмен не удался» на ровном месте, хотя всё в
+    /// порядке и следующая попытка пройдёт.
+    SyncBusy,
+}
+
+/// Счётчик элементов списка. Четыре байта, а не один: записей в манифесте
+/// бывают тысячи.
+fn push_count(bytes: &mut Vec<u8>, count: usize) {
+    bytes.extend_from_slice(&(count as u32).to_be_bytes());
+}
+
+fn read_count(cursor: &mut Cursor<'_>) -> CoreResult<usize> {
+    Ok(u32::from_be_bytes(cursor.array::<4>()?) as usize)
+}
+
+fn push_flag(bytes: &mut Vec<u8>, flag: bool) {
+    bytes.push(u8::from(flag));
+}
+
+/// Флаг читается строго: всё, кроме нуля и единицы, — это не наш кадр.
+fn read_flag(cursor: &mut Cursor<'_>) -> CoreResult<bool> {
+    match cursor.byte()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(malformed()),
+    }
+}
+
+fn push_entry(bytes: &mut Vec<u8>, entry: &ManifestEntry) {
+    pairing::push_long_string(bytes, &entry.record_id);
+    pairing::push_long_string(bytes, &entry.vault_id);
+    bytes.extend_from_slice(&entry.version.to_be_bytes());
+    pairing::push_long_string(bytes, &entry.updated_at);
+    pairing::push_optional_string(bytes, entry.deleted_at.as_deref());
+    push_flag(bytes, entry.shared);
+}
+
+fn read_entry(cursor: &mut Cursor<'_>) -> CoreResult<ManifestEntry> {
+    Ok(ManifestEntry {
+        record_id: cursor.long_string()?,
+        vault_id: cursor.long_string()?,
+        version: i64::from_be_bytes(cursor.array::<8>()?),
+        updated_at: cursor.long_string()?,
+        deleted_at: cursor.optional_string()?,
+        shared: read_flag(cursor)?,
+    })
+}
+
+fn push_record(bytes: &mut Vec<u8>, record: &SyncRecord) {
+    pairing::push_long_string(bytes, &record.record_id);
+    pairing::push_long_string(bytes, &record.vault_id);
+    pairing::push_long_string(bytes, &record.vault_name);
+    pairing::push_long_string(bytes, &record.vault_color);
+    pairing::push_long_string(bytes, &record.service_name);
+    push_count(bytes, record.urls.len());
+    for url in &record.urls {
+        pairing::push_long_string(bytes, url);
+    }
+    pairing::push_long_string(bytes, &record.login);
+    pairing::push_optional_string(bytes, record.account_label.as_deref());
+    pairing::push_optional_string(bytes, record.password.as_deref());
+    pairing::push_optional_string(bytes, record.notes.as_deref());
+    pairing::push_optional_string(bytes, record.totp_secret.as_deref());
+    bytes.extend_from_slice(&record.version.to_be_bytes());
+    pairing::push_long_string(bytes, &record.created_at);
+    pairing::push_long_string(bytes, &record.updated_at);
+    pairing::push_long_string(bytes, &record.password_updated_at);
+    pairing::push_optional_string(bytes, record.deleted_at.as_deref());
+}
+
+fn read_record(cursor: &mut Cursor<'_>) -> CoreResult<SyncRecord> {
+    let record_id = cursor.long_string()?;
+    let vault_id = cursor.long_string()?;
+    let vault_name = cursor.long_string()?;
+    let vault_color = cursor.long_string()?;
+    let service_name = cursor.long_string()?;
+
+    let count = read_count(cursor)?;
+    let mut urls = Vec::new();
+    for _ in 0..count {
+        // Ёмкость под `count` заранее не резервируется: число называет сторона
+        // на том конце, и просьба выделить память под четыре миллиарда доменов
+        // — ровно то, что выполнять не надо (ср. потолок кадра выше).
+        urls.push(cursor.long_string()?);
+    }
+
+    Ok(SyncRecord {
+        record_id,
+        vault_id,
+        vault_name,
+        vault_color,
+        service_name,
+        urls,
+        login: cursor.long_string()?,
+        account_label: cursor.optional_string()?,
+        password: cursor.optional_string()?,
+        notes: cursor.optional_string()?,
+        totp_secret: cursor.optional_string()?,
+        version: i64::from_be_bytes(cursor.array::<8>()?),
+        created_at: cursor.long_string()?,
+        updated_at: cursor.long_string()?,
+        password_updated_at: cursor.long_string()?,
+        deleted_at: cursor.optional_string()?,
+    })
 }
 
 impl Msg {
@@ -284,6 +436,45 @@ impl Msg {
                 pairing::push_short_string(&mut bytes, name)?;
             }
             Self::PairingAck => bytes.push(TAG_PAIRING_ACK),
+            Self::SyncManifest {
+                entries,
+                local_vaults,
+                last,
+            } => {
+                bytes.push(TAG_SYNC_MANIFEST);
+                push_flag(&mut bytes, *last);
+                push_count(&mut bytes, entries.len());
+                for entry in entries {
+                    push_entry(&mut bytes, entry);
+                }
+                push_count(&mut bytes, local_vaults.len());
+                for vault_id in local_vaults {
+                    pairing::push_long_string(&mut bytes, vault_id);
+                }
+            }
+            Self::SyncAck => bytes.push(TAG_SYNC_ACK),
+            Self::SyncNeed { wanted, complete } => {
+                bytes.push(TAG_SYNC_NEED);
+                push_flag(&mut bytes, *complete);
+                push_count(&mut bytes, wanted.len());
+                for record_id in wanted {
+                    pairing::push_long_string(&mut bytes, record_id);
+                }
+            }
+            Self::SyncFetch => bytes.push(TAG_SYNC_FETCH),
+            Self::SyncBatch { records, last } => {
+                bytes.push(TAG_SYNC_BATCH);
+                push_flag(&mut bytes, *last);
+                push_count(&mut bytes, records.len());
+                for record in records {
+                    push_record(&mut bytes, record);
+                }
+            }
+            Self::SyncDone { applied } => {
+                bytes.push(TAG_SYNC_DONE);
+                bytes.extend_from_slice(&applied.to_be_bytes());
+            }
+            Self::SyncBusy => bytes.push(TAG_SYNC_BUSY),
         }
         Ok(bytes)
     }
@@ -325,6 +516,48 @@ impl Msg {
                 }
             }
             TAG_PAIRING_ACK => Self::PairingAck,
+            TAG_SYNC_MANIFEST => {
+                let last = read_flag(&mut cursor)?;
+                let count = read_count(&mut cursor)?;
+                let mut entries = Vec::new();
+                for _ in 0..count {
+                    entries.push(read_entry(&mut cursor)?);
+                }
+                let count = read_count(&mut cursor)?;
+                let mut local_vaults = Vec::new();
+                for _ in 0..count {
+                    local_vaults.push(cursor.long_string()?);
+                }
+                Self::SyncManifest {
+                    entries,
+                    local_vaults,
+                    last,
+                }
+            }
+            TAG_SYNC_ACK => Self::SyncAck,
+            TAG_SYNC_NEED => {
+                let complete = read_flag(&mut cursor)?;
+                let count = read_count(&mut cursor)?;
+                let mut wanted = Vec::new();
+                for _ in 0..count {
+                    wanted.push(cursor.long_string()?);
+                }
+                Self::SyncNeed { wanted, complete }
+            }
+            TAG_SYNC_FETCH => Self::SyncFetch,
+            TAG_SYNC_BATCH => {
+                let last = read_flag(&mut cursor)?;
+                let count = read_count(&mut cursor)?;
+                let mut records = Vec::new();
+                for _ in 0..count {
+                    records.push(read_record(&mut cursor)?);
+                }
+                Self::SyncBatch { records, last }
+            }
+            TAG_SYNC_DONE => Self::SyncDone {
+                applied: u32::from_be_bytes(cursor.array::<4>()?),
+            },
+            TAG_SYNC_BUSY => Self::SyncBusy,
             _ => return Err(malformed()),
         };
 
@@ -365,6 +598,139 @@ mod tests {
             agreement_public: [4u8; HALF_PUBLIC_LEN],
         });
         round_trip(Msg::PairingAck);
+
+        round_trip(Msg::SyncManifest {
+            entries: vec![
+                sample_entry(),
+                ManifestEntry {
+                    shared: false,
+                    ..sample_entry()
+                },
+            ],
+            local_vaults: vec!["v-local".to_owned()],
+            last: true,
+        });
+        round_trip(Msg::SyncManifest {
+            entries: Vec::new(),
+            local_vaults: Vec::new(),
+            last: false,
+        });
+        round_trip(Msg::SyncAck);
+        round_trip(Msg::SyncNeed {
+            wanted: vec!["r1".to_owned(), "r2".to_owned()],
+            complete: false,
+        });
+        round_trip(Msg::SyncFetch);
+        round_trip(Msg::SyncBatch {
+            records: vec![sample_record(), tombstone()],
+            last: true,
+        });
+        round_trip(Msg::SyncDone { applied: 17 });
+        round_trip(Msg::SyncBusy);
+    }
+
+    fn sample_entry() -> ManifestEntry {
+        ManifestEntry {
+            record_id: "e5e1a6b8-0f4e-4f2b-9a1e-7f0d2c3b4a59".to_owned(),
+            vault_id: "3f2a1b0c-1111-2222-3333-444455556666".to_owned(),
+            version: 7,
+            updated_at: "2026-08-23T10:00:00.000Z".to_owned(),
+            deleted_at: None,
+            shared: true,
+        }
+    }
+
+    fn sample_record() -> SyncRecord {
+        SyncRecord {
+            record_id: "e5e1a6b8-0f4e-4f2b-9a1e-7f0d2c3b4a59".to_owned(),
+            vault_id: "3f2a1b0c-1111-2222-3333-444455556666".to_owned(),
+            vault_name: "Личное".to_owned(),
+            vault_color: "indigo".to_owned(),
+            service_name: "GitHub".to_owned(),
+            urls: vec!["github.com".to_owned(), "gist.github.com".to_owned()],
+            login: "octocat".to_owned(),
+            account_label: Some("рабочий".to_owned()),
+            password: Some("  пробелы по краям — часть пароля  ".to_owned()),
+            // Заметка длиннее двухсот пятидесяти пяти байт: короткой строкой с
+            // однобайтовой длиной такое не закодировать, и ради этого случая
+            // у синхронизации своя, четырёхбайтовая.
+            notes: Some("длинная заметка ".repeat(64)),
+            totp_secret: None,
+            version: 7,
+            created_at: "2026-08-01T09:00:00.000Z".to_owned(),
+            updated_at: "2026-08-23T10:00:00.000Z".to_owned(),
+            password_updated_at: "2026-08-10T12:00:00.000Z".to_owned(),
+            deleted_at: None,
+        }
+    }
+
+    /// Надгробие: секретов нет, есть дата удаления (§5.4).
+    fn tombstone() -> SyncRecord {
+        SyncRecord {
+            password: None,
+            notes: None,
+            totp_secret: None,
+            deleted_at: Some("2026-08-23T11:00:00.000Z".to_owned()),
+            version: 8,
+            ..sample_record()
+        }
+    }
+
+    #[test]
+    fn a_truncated_batch_of_records_is_refused_and_does_not_panic() {
+        let full = Msg::SyncBatch {
+            records: vec![sample_record()],
+            last: true,
+        }
+        .encode()
+        .unwrap();
+
+        for cut in 0..full.len() {
+            assert!(Msg::decode(&full[..cut]).is_err(), "обрезка на {cut}");
+        }
+        let mut extra = full.clone();
+        extra.push(0);
+        assert!(Msg::decode(&extra).is_err());
+    }
+
+    #[test]
+    fn a_promised_count_that_is_not_delivered_is_refused() {
+        // Число элементов называет сторона на том конце. Обещать четыре
+        // миллиарда записей и не прислать ни одной — это отказ, а не паника и
+        // не попытка выделить память под обещание.
+        let mut wire = vec![TAG_SYNC_MANIFEST, 1];
+        wire.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(Msg::decode(&wire).is_err());
+
+        let mut wire = vec![TAG_SYNC_BATCH, 1];
+        wire.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(Msg::decode(&wire).is_err());
+    }
+
+    #[test]
+    fn a_flag_byte_outside_zero_and_one_is_refused() {
+        let mut wire = vec![TAG_SYNC_FETCH];
+        assert!(Msg::decode(&wire).is_ok());
+
+        wire = vec![TAG_SYNC_MANIFEST, 2];
+        wire.extend_from_slice(&0u32.to_be_bytes());
+        wire.extend_from_slice(&0u32.to_be_bytes());
+        assert!(Msg::decode(&wire).is_err());
+    }
+
+    #[test]
+    fn a_batch_of_records_does_not_print_its_passwords() {
+        // `Msg` выводит `Debug` производным, и без ручного `Debug` у записи
+        // одна отладочная строчка в чужом коде положила бы пароль в лог.
+        let printed = format!(
+            "{:?}",
+            Msg::SyncBatch {
+                records: vec![sample_record()],
+                last: true,
+            }
+        );
+        assert!(!printed.contains("часть пароля"), "{printed}");
+        assert!(printed.contains("<скрыт>"), "{printed}");
     }
 
     #[test]
