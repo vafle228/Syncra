@@ -91,6 +91,17 @@ impl Channel {
         Msg::decode(&plaintext)
     }
 
+    /// Переставить сроки ожидания на уже установленном канале.
+    ///
+    /// Нужно ровно одному месту: до подписи сокет держат коротким сроком, а
+    /// после — обычным (`net::HANDSHAKE_TIMEOUT`). Заводить ради этого второй
+    /// путь к сокету незачем.
+    pub fn set_timeouts(&mut self, timeout: std::time::Duration) -> CoreResult<()> {
+        self.stream.set_read_timeout(Some(timeout))?;
+        self.stream.set_write_timeout(Some(timeout))?;
+        Ok(())
+    }
+
     /// Обмен «спросил — получил ответ» одним движением.
     pub fn request(&mut self, msg: &Msg) -> CoreResult<Msg> {
         self.send(msg)?;

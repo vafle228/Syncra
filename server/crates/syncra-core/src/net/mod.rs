@@ -33,7 +33,7 @@ pub mod wire;
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -154,6 +154,26 @@ impl Default for NodeSettings {
 /// Как часто слушатель просыпается посмотреть, не пора ли уходить.
 const ACCEPT_POLL: Duration = Duration::from_millis(200);
 
+/// Сколько разговоров узел ведёт одновременно.
+///
+/// Поток обработчика заводится ДО всякой аутентификации — до рукопожатия, до
+/// проверки подписи, до `authorize_peer`, — и каждый такой поток это ECDH, свой
+/// стек и до мегабайта под кадр (`wire::MAX_FRAME`). Слушатель стоит на
+/// `0.0.0.0`, поэтому позвонить может кто угодно, и без потолка тысяча сокетов
+/// от одного хоста в сети превращается в тысячу потоков ядра.
+///
+/// Десятки, а не тысячи: соседей у человека единицы, и даже они звонят по
+/// одному соединению за круг.
+pub const MAX_HANDLERS: usize = 32;
+
+/// Сколько ждать неаутентифицированный сокет — от `accept` до подписи.
+///
+/// Отдельно от `io_timeout` и заметно короче: полноценный разговор бывает
+/// медленным (на той стороне диск и мьютекс ядра), а рукопожатие — это две
+/// посылки и ECDH. Тот, кто позвонил и молчит, не должен занимать место в
+/// [`MAX_HANDLERS`] пять секунд.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(1500);
+
 /// Шаг обходчика. Не то же, что `probe_interval`: обходчик просыпается чаще,
 /// чтобы вовремя заметить остановку и внеочередную просьбу поискать.
 const WALK_STEP: Duration = Duration::from_millis(250);
@@ -225,6 +245,8 @@ struct Shared {
     last_status: Mutex<Option<SyncStatus>>,
     events: Sender<CoreEvent>,
     port: AtomicU64,
+    /// Сколько обработчиков входящих соединений живёт прямо сейчас.
+    handlers: AtomicUsize,
 }
 
 impl Shared {
@@ -304,6 +326,29 @@ impl Drop for Busy<'_> {
     }
 }
 
+/// Место в списке одновременных разговоров.
+///
+/// Занимается ДО того, как заведён поток: считать уже запущенные значило бы
+/// сначала запустить тысячу. Освобождается в [`Drop`], поэтому ни ошибка, ни
+/// паника внутри `serve` его не заклинивают.
+struct Handler(Arc<Shared>);
+
+impl Handler {
+    fn claim(shared: &Arc<Shared>) -> Option<Self> {
+        if shared.handlers.fetch_add(1, Ordering::SeqCst) >= MAX_HANDLERS {
+            shared.handlers.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(Arc::clone(shared)))
+    }
+}
+
+impl Drop for Handler {
+    fn drop(&mut self) {
+        self.0.handlers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Контекст рабочих потоков
 // ---------------------------------------------------------------------------
@@ -375,6 +420,7 @@ impl Node {
             last_status: Mutex::new(None),
             events,
             port: AtomicU64::new(0),
+            handlers: AtomicUsize::new(0),
         });
         (
             Self {
@@ -800,10 +846,17 @@ fn accept_loop(context: &Context, listener: TcpListener) {
     while !context.stale() {
         match listener.accept() {
             Ok((stream, _)) => {
+                // Сверх потолка — закрыть молча. Ответить «занято» значило бы
+                // потратить на позвонившего ещё немного себя, а он пока никто.
+                let Some(handler) = Handler::claim(&context.shared) else {
+                    drop(stream);
+                    continue;
+                };
                 let context = context.clone();
                 // Каждое соединение — свой поток: разговор с одним соседом не
                 // должен мешать принять второго.
                 std::thread::spawn(move || {
+                    let _handler = handler;
                     let _ = serve(&context, stream);
                 });
             }
@@ -816,10 +869,18 @@ fn accept_loop(context: &Context, listener: TcpListener) {
 }
 
 fn serve(context: &Context, stream: TcpStream) -> CoreResult<()> {
+    // Поколение прошлое — хранилище уже заперто, и разговаривать нечем. ECDH
+    // ради того, чтобы тут же положить трубку, не нужен никому.
+    if context.stale() {
+        return Ok(());
+    }
+
     // Принятый сокет наследует неблокирующий режим слушателя — а разговор с ним
     // ведётся обычными чтениями с таймаутом.
     stream.set_nonblocking(false)?;
-    let stream = channel::with_timeouts(stream, context.settings.io_timeout)?;
+    // До подписи — короткий срок, после неё — обычный: см. `HANDSHAKE_TIMEOUT`.
+    let first = context.settings.io_timeout.min(HANDSHAKE_TIMEOUT);
+    let stream = channel::with_timeouts(stream, first)?;
 
     let identity = context
         .identity()
@@ -837,7 +898,11 @@ fn serve(context: &Context, stream: TcpStream) -> CoreResult<()> {
         },
         Mode::Trusted => handshake::ephemeral_secret(),
     };
-    let established = handshake::accept(stream, &identity.keypair, secret_for)?;
+    let mut established = handshake::accept(stream, &identity.keypair, secret_for)?;
+    // Собеседник подтверждён подписью — дальше разговор идёт обычными сроками.
+    established
+        .channel
+        .set_timeouts(context.settings.io_timeout)?;
 
     match established.mode {
         Mode::Trusted => serve_trusted(context, established),

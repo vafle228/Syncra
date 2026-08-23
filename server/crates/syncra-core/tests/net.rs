@@ -126,6 +126,55 @@ fn the_channel_is_actually_encrypted() {
     assert_eq!(session.channel.request(&Msg::Ping).unwrap(), Msg::Pong);
 }
 
+#[test]
+fn a_flood_of_silent_sockets_does_not_spawn_a_thread_each() {
+    let a = Device2::new("Ноутбук", MASTER_PASSWORD);
+    let b = Device2::new("Телефон", "мастер-пароль-2");
+    trust_each_other(&a, &b);
+
+    // Играем за хост в той же сети, который просто открывает сокеты и молчит.
+    // Аутентификации здесь нет вовсе: поток обработчика заводился бы до неё.
+    let flood = syncra_core::net::MAX_HANDLERS * 2;
+    let sockets: Vec<_> = (0..flood)
+        .filter_map(|_| std::net::TcpStream::connect(a.addr()).ok())
+        .collect();
+    assert_eq!(sockets.len(), flood, "сокеты открылись все");
+
+    // Дать слушателю разобрать очередь — и посмотреть, что он с ней сделал.
+    // Чтения неблокирующие: ждать здесь нельзя, иначе первые обработчики
+    // отвалятся по своему сроку и картина размажется.
+    std::thread::sleep(Duration::from_millis(500));
+    let refused = sockets
+        .iter()
+        .filter(|socket| {
+            socket.set_nonblocking(true).is_ok()
+                && matches!(std::io::Read::read(&mut { *socket }, &mut [0u8; 1]), Ok(0))
+        })
+        .count();
+
+    // Сверх потолка сокет закрывается молча, не разбудив ни одного потока.
+    assert!(
+        refused >= flood - syncra_core::net::MAX_HANDLERS,
+        "молчащих сокетов приняли слишком много: закрыто {refused} из {flood}"
+    );
+    assert!(
+        refused < flood,
+        "узел закрыл вообще всё, а должен был часть"
+    );
+
+    // Наплыв кончился — узел как ни в чём не бывало разговаривает с соседом.
+    drop(sockets);
+    let identity = b.with_core(|core| core.net_identity().unwrap());
+    common::wait_until(
+        "узел снова отвечает доверенному соседу",
+        || {
+            dial(a.addr(), &identity, Mode::Trusted)
+                .map(|mut session| session.channel.request(&Msg::Ping) == Ok(Msg::Pong))
+                .unwrap_or(false)
+        },
+    );
+}
+
 fn dial(
     addr: SocketAddr,
     identity: &syncra_core::net::NetIdentity,
