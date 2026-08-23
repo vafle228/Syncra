@@ -2,10 +2,13 @@
 
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::crypto::VaultKey;
 use crate::error::{CoreError, CoreResult};
+use crate::model::RecordId;
+use crate::storage::metadata;
 
 /// Версия схемы. Растёт вместе с миграциями; лежит в `meta`.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Ключи таблицы `meta`.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
@@ -210,6 +213,97 @@ DROP TABLE conflicts;
 ALTER TABLE conflicts_next RENAME TO conflicts;
 "#;
 
+/// Метаданные записи уезжают под шифр (S7.1, §3.1).
+///
+/// Здесь только половина дела — та, которую можно сделать **без ключа
+/// хранилища**: заводится колонка под шифротекст. Переложить в неё то, что уже
+/// лежит в файле открытым текстом, и убрать открытые колонки миграция не может:
+/// ключ появляется только при отпирании, а миграции идут при открытии файла.
+/// Вторую половину доделывает [`seal_legacy_metadata`] — по тому же образцу, по
+/// которому S1 доснабжает хранилище схемы 1 парой ключей устройства.
+///
+/// `ALTER TABLE ADD COLUMN`, а не перестройка таблицы: `records` — таблица
+/// **родительская**, на неё смотрят два внешних ключа, и переименование при
+/// включённой `foreign_keys` переписало бы ссылки в детях на промежуточное имя.
+/// Цена — колонка объявлена допускающей NULL, хотя пустой она не бывает; кто
+/// именно её заполняет и почему пустота означает испорченный файл, написано в
+/// `storage::metadata::open`.
+const MIGRATION_6: &str = r#"
+ALTER TABLE records   ADD COLUMN meta_ct BLOB;
+ALTER TABLE conflicts ADD COLUMN meta_ct BLOB;
+"#;
+
+/// Открытые метаданные, оставшиеся от прошлых схем, — под шифр (S7.1).
+///
+/// Зовётся при каждом отпирании и почти всегда не делает ничего: колонок уже
+/// нет, работать не с чем. Хранилище, заведённое до S7.1, проходит через неё
+/// ровно один раз — в первое отпирание после обновления.
+///
+/// Открытые колонки после перекладки **удаляются** (`ALTER TABLE DROP COLUMN`,
+/// SQLite ≥ 3.35), а не обнуляются: колонка, которую забыли перестать
+/// заполнять, — это тихий возврат к открытому тексту через полгода. Страницы,
+/// освободившиеся при удалении, затирает `PRAGMA secure_delete`, включённая при
+/// открытии соединения.
+///
+/// Одной транзакцией с вызывающим: наполовину зашифрованное хранилище — это
+/// строки, часть которых нечем прочитать.
+pub fn seal_legacy_metadata(tx: &rusqlite::Transaction<'_>, key: &VaultKey) -> CoreResult<()> {
+    for (table, place) in [
+        ("records", metadata::Place::Record),
+        ("conflicts", metadata::Place::Conflict),
+    ] {
+        if !has_column(tx, table, "service_name")? {
+            continue;
+        }
+
+        let sql =
+            format!("SELECT record_id, service_name, urls, login, account_label FROM {table}");
+        let mut stmt = tx.prepare(&sql)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, RecordId>("record_id")?,
+                    metadata::RecordFields {
+                        service_name: row.get("service_name")?,
+                        // Битый JSON здесь — испорченный файл, а не ввод
+                        // человека: показать запись без адресов honest-нее,
+                        // чем не открыть хранилище вовсе.
+                        urls: serde_json::from_str(&row.get::<_, String>("urls")?)
+                            .unwrap_or_default(),
+                        login: row.get("login")?,
+                        account_label: row.get("account_label")?,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        let update = format!("UPDATE {table} SET meta_ct = ?2 WHERE record_id = ?1");
+        for (record_id, fields) in rows {
+            let blob = metadata::seal(key, place, &record_id, &fields)?;
+            tx.execute(&update, rusqlite::params![record_id, blob])?;
+        }
+
+        for column in ["service_name", "urls", "login", "account_label"] {
+            tx.execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column};"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Есть ли у таблицы такая колонка. Единственный способ отличить хранилище,
+/// уже прошедшее перекладку, от только что мигрировавшего: номер схемы у них
+/// один и тот же — перекладка не миграция и версии не двигает.
+fn has_column(conn: &Connection, table: &str, column: &str) -> CoreResult<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let found = stmt
+        .query_map([], |row| row.get::<_, String>("name"))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == column);
+    Ok(found)
+}
+
 /// Без `meta` не прочитать версию схемы, а без версии не выбрать миграции —
 /// поэтому одна эта таблица создаётся до всякой цепочки. В `MIGRATION_1` она
 /// тоже есть, и повторение здесь безвредно: обе формы — `IF NOT EXISTS`.
@@ -225,6 +319,7 @@ const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
     MIGRATION_3,
     MIGRATION_4,
     MIGRATION_5,
+    MIGRATION_6,
 ];
 
 /// Применить миграции от записанной в `meta` версии до текущей.

@@ -30,7 +30,7 @@ use crate::model::{
 use crate::net::{NetIdentity, RemotePeer};
 use crate::pairing;
 use crate::security::{SecuritySettings, SecuritySettingsPatch};
-use crate::storage::{records, schema, vaults, Storage};
+use crate::storage::{metadata, records, schema, vaults, Storage};
 use crate::sync::{self, conflicts, tombstones};
 use crate::transfer;
 use crate::trust;
@@ -230,6 +230,11 @@ impl Core {
                 rusqlite::params![key_name, value],
             )?;
         }
+        // Открытых колонок метаданных в новом хранилище быть не должно вовсе.
+        // Перекладывать нечего — строк ещё нет, — но колонки, заведённые первой
+        // миграцией, надо убрать: иначе первая же запись упрётся в их NOT NULL
+        // (S7.1).
+        schema::seal_legacy_metadata(&tx, &key)?;
         vaults::create(&tx, INITIAL_VAULT_NAME, INITIAL_VAULT_COLOR, true)?;
         // Пара ключей заводится здесь же, а не при первом выходе в сеть: без неё
         // устройству нечем представиться, а приватная половина обязана лечь под
@@ -263,6 +268,10 @@ impl Core {
         // но ключ ей взять неоткуда — он запечатывается ключом хранилища, а тот
         // появляется только здесь. Досоздаём при первом же отпирании, иначе такое
         // хранилище навсегда осталось бы без права представляться собой.
+        // Обе доводки — того же рода, что `ensure_identity`: миграции, которым
+        // нужен ключ хранилища, а он появляется только здесь. Обычно ни одна из
+        // них ничего не делает.
+        self.seal_metadata(&key)?;
         self.ensure_identity(&key)?;
 
         let unlocked_at = self.accept_key(key);
@@ -290,6 +299,22 @@ impl Core {
             return;
         };
         let _ = tombstones::collect(self.storage.conn(), &device_id);
+    }
+
+    /// Переложить метаданные записей под шифр, если они ещё лежат открыто (S7.1).
+    ///
+    /// Хранилище, заведённое до S7.1, проходит через это ровно один раз — в
+    /// первое отпирание после обновления. Дальше открытых колонок в схеме нет, и
+    /// звать эту доводку становится не для чего.
+    ///
+    /// Отдельной транзакцией, а не попутно с чем-нибудь: перекладка либо
+    /// случилась целиком, либо не случилась вовсе. Наполовину зашифрованное
+    /// хранилище — это строки, часть которых нечем прочитать.
+    fn seal_metadata(&mut self, key: &VaultKey) -> CoreResult<()> {
+        let tx = self.storage.conn_mut().transaction()?;
+        schema::seal_legacy_metadata(&tx, key)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Досоздать идентичность, если её нет. Идемпотентна и обычно ничего не делает.
@@ -524,8 +549,10 @@ impl Core {
         vault_id: Option<&str>,
         include_deleted: bool,
     ) -> CoreResult<Vec<RecordMeta>> {
-        self.key()?;
-        records::list(self.storage.conn(), vault_id, include_deleted)
+        // Ключ нужен не ради секретов — `RecordMeta` их нести не умеет, — а ради
+        // метаданных: с S7.1 имя сервиса и логин лежат в файле шифротекстом.
+        let key = self.key()?;
+        records::list(self.storage.conn(), key, vault_id, include_deleted)
     }
 
     pub fn get_secret(&self, record_id: &str) -> CoreResult<RecordSecrets> {
@@ -559,13 +586,13 @@ impl Core {
     }
 
     pub fn delete_record(&self, record_id: &str) -> CoreResult<RecordMeta> {
-        self.key()?;
+        let key = self.key()?;
 
         // Обе записи — одной транзакцией. Падение между ними оставило бы
         // конфликт на надгробии: видимого вреда нет (`list_conflicts` такую
         // строку пропустит), но строка-сирота осталась бы в БД навсегда.
         let tx = self.storage.conn().unchecked_transaction()?;
-        let meta = records::delete(&tx, record_id)?;
+        let meta = records::delete(&tx, key, record_id)?;
         // Спорить о версиях удалённой записи не о чем: конфликт снимается
         // вместе с ней (§5.5, `mock/index.ts:1023`). Надгробие поедет дальше и
         // так — удаление важнее любого расхождения (§5.4).
@@ -1218,6 +1245,7 @@ impl Core {
             }
             ConflictSide::Remote => {
                 let secrets = stored.secrets(&key)?;
+                let meta = stored.meta(&key)?;
                 // Секцию приехавшей версии могли к этому моменту удалить — тогда
                 // запись остаётся там, где лежит: секцию удаляли уже с ней внутри.
                 let vault_id = match vaults::find_optional(&tx, &stored.vault_id)? {
@@ -1235,20 +1263,23 @@ impl Core {
 
                 tx.execute(
                     "UPDATE records SET
-                         vault_id = ?2, service_name = ?3, urls = ?4, login = ?5,
-                         account_label = ?6, password_ct = ?7, notes_ct = ?8, totp_ct = ?9,
-                         version = ?10, updated_at = ?11, password_updated_at = ?12
+                         vault_id = ?2, meta_ct = ?3,
+                         password_ct = ?4, notes_ct = ?5, totp_ct = ?6,
+                         version = ?7, updated_at = ?8, password_updated_at = ?9
                      WHERE record_id = ?1",
                     rusqlite::params![
                         record_id,
                         vault_id,
-                        stored.service_name,
-                        serde_json::to_string(&stored.urls)?,
-                        stored.login,
-                        stored.account_label,
-                        // Перепечатываются под ОБЫЧНЫЙ AAD: приехавшая версия
-                        // становится настоящей записью и должна читаться как
-                        // запись, а не как отложенная сторона спора.
+                        // И метаданные, и секреты перепечатываются под ОБЫЧНЫЙ
+                        // AAD: приехавшая версия становится настоящей записью и
+                        // должна читаться как запись, а не как отложенная
+                        // сторона спора.
+                        metadata::seal(
+                            &key,
+                            metadata::Place::Record,
+                            &record_id.to_owned(),
+                            &meta
+                        )?,
                         records::seal_field(
                             &key,
                             record_id,
@@ -1283,7 +1314,7 @@ impl Core {
         )?;
         tx.commit()?;
 
-        records::find_meta(self.storage.conn(), record_id)
+        records::find_meta(self.storage.conn(), &key, record_id)
     }
 
     /// Одно секретное поле обеих версий сразу — вторая из трёх команд Закона №1.
@@ -1444,6 +1475,9 @@ impl Core {
                 rusqlite::params![name, value],
             )?;
         }
+        // ДО восстановления записей: они лягут уже с зашифрованными метаданными,
+        // а открытых колонок к этому моменту не должно остаться (S7.1).
+        schema::seal_legacy_metadata(&tx, &key)?;
         transfer::restore_into(&tx, &key, &backup)?;
         // Пара ключей — НОВАЯ. Идентичность устройства в бэкап не едет (§2.1):
         // иначе две машины получили бы право представляться одним устройством.
@@ -1472,7 +1506,7 @@ impl Core {
         let text = transfer::read_import_file(file)?;
         let entries = transfer::import::parse(source, &file_name, &text)?;
 
-        let known = transfer::known_pairs(self.storage.conn())?;
+        let known = transfer::known_pairs(self.storage.conn(), self.key()?)?;
         let statuses: Vec<ImportRowStatus> = entries
             .iter()
             .map(|entry| transfer::import::row_status(entry, &known))
@@ -1528,7 +1562,7 @@ impl Core {
             CoreError::not_found("Разобранный файл не найден. Выберите его заново.")
         })?;
 
-        let known = transfer::known_pairs(self.storage.conn())?;
+        let known = transfer::known_pairs(self.storage.conn(), self.key()?)?;
         let mut skipped = 0i64;
         let mut taken: Vec<&transfer::import::ImportEntry> = Vec::new();
 

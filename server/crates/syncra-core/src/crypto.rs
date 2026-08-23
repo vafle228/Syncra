@@ -150,6 +150,22 @@ pub fn conflict_field_aad(record_id: &str, field: &str) -> Vec<u8> {
     format!("syncra:conflict:{record_id}:{field}").into_bytes()
 }
 
+/// Метаданные записи — имя сервиса, адреса, логин, подпись аккаунта (S7.1).
+///
+/// Пятое пространство AAD, отдельное от [`field_aad`] по той же причине, по
+/// какой отдельно лежит четвёртое: шифротекст метаданных не должен открываться
+/// на месте пароля, а пароль — на месте метаданных. Имени поля здесь нет, потому
+/// что метаданные едут одним блобом: делить их на четыре шифротекста незачем —
+/// читают и пишут их всегда вместе.
+pub fn record_meta_aad(record_id: &str) -> Vec<u8> {
+    format!("syncra:meta:record:{record_id}").into_bytes()
+}
+
+/// То же для метаданных приехавшей версии, ждущей разрешения спора (§5.5).
+pub fn conflict_meta_aad(record_id: &str) -> Vec<u8> {
+    format!("syncra:meta:conflict:{record_id}").into_bytes()
+}
+
 /// Запечатать проверочное значение — вызывается один раз при создании хранилища.
 pub fn seal_verifier(key: &VaultKey) -> CoreResult<Vec<u8>> {
     seal(key, VERIFIER_AAD, VERIFIER_PLAINTEXT)
@@ -370,6 +386,32 @@ mod tests {
 
         // Секрет устройства нельзя выдать за секрет записи и наоборот.
         assert!(open(&key, &field_aad("rec-1", "password"), &blob).is_err());
+    }
+
+    #[test]
+    fn every_aad_space_is_a_space_of_its_own() {
+        let key = test_key(7);
+        // Пять классов шифротекста одной и той же записи. Взаимно
+        // непереставляемы — иначе тот, кто может писать в файл, подставил бы
+        // метаданные на место пароля или приехавшую версию на место настоящей.
+        let spaces = [
+            field_aad("rec-1", "password"),
+            conflict_field_aad("rec-1", "password"),
+            record_meta_aad("rec-1"),
+            conflict_meta_aad("rec-1"),
+            DEVICE_SECRET_AAD.to_vec(),
+        ];
+
+        for (i, sealed_under) in spaces.iter().enumerate() {
+            let blob = seal(&key, sealed_under, "значение".as_bytes()).unwrap();
+            for (j, opened_under) in spaces.iter().enumerate() {
+                assert_eq!(
+                    open(&key, opened_under, &blob).is_ok(),
+                    i == j,
+                    "пространства {i} и {j} оказались взаимозаменяемы"
+                );
+            }
+        }
     }
 
     #[test]

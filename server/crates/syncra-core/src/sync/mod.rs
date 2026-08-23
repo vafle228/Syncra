@@ -38,6 +38,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use crate::crypto::VaultKey;
 use crate::error::CoreResult;
 use crate::model::{now_iso, IsoDateTime, RecordId, SecretField, VaultId};
+use crate::storage::metadata::{self, Place, RecordFields};
 use crate::storage::{records, vaults};
 
 // ---------------------------------------------------------------------------
@@ -450,8 +451,7 @@ fn id_set(ids: &[VaultId]) -> HashSet<&str> {
 pub fn export(conn: &Connection, key: &VaultKey, ids: &[RecordId]) -> CoreResult<Vec<SyncRecord>> {
     let mut stmt = conn.prepare(
         "SELECT r.vault_id, v.name AS vault_name, v.color AS vault_color, v.sync,
-                r.service_name, r.urls, r.login, r.account_label,
-                r.password_ct, r.notes_ct, r.totp_ct,
+                r.meta_ct, r.password_ct, r.notes_ct, r.totp_ct,
                 r.version, r.created_at, r.updated_at, r.password_updated_at, r.deleted_at
          FROM records r JOIN vaults v ON v.vault_id = r.vault_id
          WHERE r.record_id = ?1",
@@ -480,10 +480,9 @@ struct StoredForSync {
     vault_name: String,
     vault_color: String,
     shared: bool,
-    service_name: String,
-    urls: String,
-    login: String,
-    account_label: Option<String>,
+    /// Метаданные записи — нераспечатанным блобом (S7.1). Открывается тем же
+    /// ключом и в том же месте, что и секреты: [`StoredForSync::into_record`].
+    meta_ct: Option<Vec<u8>>,
     password_ct: Option<Vec<u8>>,
     notes_ct: Option<Vec<u8>>,
     totp_ct: Option<Vec<u8>>,
@@ -501,10 +500,7 @@ impl StoredForSync {
             vault_name: row.get("vault_name")?,
             vault_color: row.get("vault_color")?,
             shared: row.get::<_, i64>("sync")? != 0,
-            service_name: row.get("service_name")?,
-            urls: row.get("urls")?,
-            login: row.get("login")?,
-            account_label: row.get("account_label")?,
+            meta_ct: row.get("meta_ct")?,
             password_ct: row.get("password_ct")?,
             notes_ct: row.get("notes_ct")?,
             totp_ct: row.get("totp_ct")?,
@@ -519,15 +515,19 @@ impl StoredForSync {
     /// Распечатать секреты СВОИМ ключом. Дальше их зашифрует канал, а на той
     /// стороне запечатает уже чужой ключ хранилища — шифротексты не совместимы.
     fn into_record(self, key: &VaultKey, record_id: &RecordId) -> CoreResult<SyncRecord> {
+        // Метаданные тоже под ключом (S7.1) — распечатываются здесь же, вместе с
+        // секретами, и дальше едут по проводу открытым текстом внутри канала.
+        let meta = metadata::open(key, Place::Record, record_id, self.meta_ct.as_deref())?;
+
         Ok(SyncRecord {
             record_id: record_id.clone(),
             vault_id: self.vault_id,
             vault_name: self.vault_name,
             vault_color: self.vault_color,
-            service_name: self.service_name,
-            urls: serde_json::from_str(&self.urls).unwrap_or_default(),
-            login: self.login,
-            account_label: self.account_label,
+            service_name: meta.service_name,
+            urls: meta.urls,
+            login: meta.login,
+            account_label: meta.account_label,
             password: records::open_field(
                 key,
                 record_id,
@@ -636,6 +636,19 @@ pub fn apply(
             continue;
         }
 
+        // Приехавшие метаданные запечатываются СВОИМ ключом — ровно так же, как
+        // секреты, и по той же причине: шифротексты сторон несовместимы (S7.1).
+        let meta_ct = metadata::seal(
+            key,
+            Place::Record,
+            &record.record_id,
+            &RecordFields {
+                service_name: record.service_name.clone(),
+                urls: record.urls.clone(),
+                login: record.login.clone(),
+                account_label: record.account_label.clone(),
+            },
+        )?;
         let password_ct = records::seal_field(
             key,
             &record.record_id,
@@ -656,16 +669,13 @@ pub fn apply(
         )?;
 
         tx.execute(
-            "INSERT INTO records (record_id, vault_id, service_name, urls, login, account_label,
+            "INSERT INTO records (record_id, vault_id, meta_ct,
                                   password_ct, notes_ct, totp_ct,
                                   version, created_at, updated_at, password_updated_at, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(record_id) DO UPDATE SET
                  vault_id = excluded.vault_id,
-                 service_name = excluded.service_name,
-                 urls = excluded.urls,
-                 login = excluded.login,
-                 account_label = excluded.account_label,
+                 meta_ct = excluded.meta_ct,
                  password_ct = excluded.password_ct,
                  notes_ct = excluded.notes_ct,
                  totp_ct = excluded.totp_ct,
@@ -677,10 +687,7 @@ pub fn apply(
             rusqlite::params![
                 record.record_id,
                 record.vault_id,
-                record.service_name,
-                serde_json::to_string(&record.urls)?,
-                record.login,
-                record.account_label,
+                meta_ct,
                 password_ct,
                 notes_ct,
                 totp_ct,

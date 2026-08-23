@@ -756,11 +756,15 @@ fn a_schema_3_vault_migrates_without_losing_anything() {
     };
 
     // Откатываем файл до схемы 3 мимо ядра — ровно то, что лежит на диске у
-    // человека, поставившего прошлую версию.
+    // человека, поставившего прошлую версию: таблицы споров ещё нет, метаданные
+    // записи лежат открыто.
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TABLE conflicts;").unwrap();
+        common::unseal_metadata(&conn, "records");
         conn.execute_batch(
-            "DROP TABLE conflicts;
+            "UPDATE records SET service_name = 'GitHub', urls = '[\"github.com\"]',
+                                login = 'octocat';
              UPDATE meta SET value = CAST('3' AS BLOB) WHERE key = 'schema_version';",
         )
         .unwrap();
@@ -770,6 +774,10 @@ fn a_schema_3_vault_migrates_without_losing_anything() {
     core.unlock(MASTER_PASSWORD).unwrap();
 
     assert_eq!(core.list_records(None, false).unwrap().len(), 1);
+    assert_eq!(
+        core.list_records(None, false).unwrap()[0].service_name,
+        "GitHub"
+    );
     assert_eq!(core.get_secret(&record_id).unwrap().password, "тайна-1");
     assert!(core.list_conflicts().unwrap().is_empty());
 }

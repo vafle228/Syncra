@@ -44,6 +44,23 @@ pub fn draft(service_name: &str, login: &str, password: &str) -> RecordDraft {
     }
 }
 
+/// Откатить таблицу к тому виду, в каком она была до S7.1: метаданные —
+/// открытыми колонками, блоба `meta_ct` нет.
+///
+/// Нужно тестам, которые готовят файл прошлой версии. Ядру такой ручки нет и не
+/// будет: перекладку оно делает только в одну сторону. Значения колонок
+/// проставляет вызывающий — расшифровать `meta_ct` тесту всё равно нечем.
+pub fn unseal_metadata(conn: &rusqlite::Connection, table: &str) {
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN service_name  TEXT NOT NULL DEFAULT '';
+         ALTER TABLE {table} ADD COLUMN urls          TEXT NOT NULL DEFAULT '[]';
+         ALTER TABLE {table} ADD COLUMN login         TEXT NOT NULL DEFAULT '';
+         ALTER TABLE {table} ADD COLUMN account_label TEXT;
+         ALTER TABLE {table} DROP COLUMN meta_ct;"
+    ))
+    .expect("откат метаданных");
+}
+
 /// Дождаться, пока условие станет правдой.
 ///
 /// Дольше нескольких кругов здесь ничего не происходит; если происходит — тест

@@ -1,8 +1,15 @@
 //! Записи паролей (§4.1, F4/F5).
 //!
-//! Единица данных всей системы. Метаданные лежат в БД открыто, секреты — только
-//! шифротекстом, и разделение проведено по колонкам: [`list`] физически не может
-//! вернуть секрет, потому что не читает и не расшифровывает ни одного BLOB.
+//! Единица данных всей системы. В БД от записи лежат открыто только те поля, без
+//! которых её нечем найти и не с чем сравнить: идентификаторы, счётчик версий и
+//! отметки времени. Секреты (`password`, `notes`, `totp_secret`) шифруются по
+//! полям, метаданные (`service_name`, `urls`, `login`, `account_label`) — одним
+//! блобом `meta_ct` (S7.1, [`crate::storage::metadata`]).
+//!
+//! Отсюда следует правило, которого до S7.1 не было: **список записей читается
+//! только за замком**. [`list`] по-прежнему физически не может вернуть секрет —
+//! `RecordMeta` не умеет его нести, — но ключ хранилища ему теперь нужен так же,
+//! как [`secrets`].
 
 use rusqlite::{Connection, OptionalExtension, Row};
 
@@ -13,49 +20,68 @@ use crate::model::{
     valid_urls, IsoDateTime, RecordDraft, RecordId, RecordMeta, RecordPatch, RecordSecrets,
     SecretField,
 };
+use crate::storage::metadata::{self, Place, RecordFields};
 
-/// Запись как она лежит в БД: метаданные плюс нераспечатанные секреты.
+/// Запись как она лежит в БД: открытые поля плюс нераспечатанные блобы.
 struct StoredRecord {
-    meta: RecordMeta,
+    record_id: RecordId,
+    vault_id: String,
+    meta_ct: Option<Vec<u8>>,
     password_ct: Option<Vec<u8>>,
     notes_ct: Option<Vec<u8>>,
     totp_ct: Option<Vec<u8>>,
+    version: i64,
+    created_at: IsoDateTime,
+    updated_at: IsoDateTime,
+    password_updated_at: IsoDateTime,
+    deleted_at: Option<IsoDateTime>,
 }
 
-const COLUMNS: &str = "record_id, vault_id, service_name, urls, login, account_label,
+const COLUMNS: &str = "record_id, vault_id, meta_ct,
                        password_ct, notes_ct, totp_ct,
                        version, created_at, updated_at, password_updated_at, deleted_at";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<StoredRecord> {
-    let urls_json: String = row.get("urls")?;
-    let password_ct: Option<Vec<u8>> = row.get("password_ct")?;
-    let notes_ct: Option<Vec<u8>> = row.get("notes_ct")?;
-    let totp_ct: Option<Vec<u8>> = row.get("totp_ct")?;
-
     Ok(StoredRecord {
-        meta: RecordMeta {
-            record_id: row.get("record_id")?,
-            vault_id: row.get("vault_id")?,
-            service_name: row.get("service_name")?,
-            // Список пришёл из нашей же схемы; битый JSON здесь — испорченный файл,
-            // а не пользовательский ввод, и разумнее показать запись без доменов,
-            // чем уронить весь список.
-            urls: serde_json::from_str(&urls_json).unwrap_or_default(),
-            login: row.get("login")?,
-            account_label: row.get("account_label")?,
-            // Флаги — по наличию шифротекста. Ни одного `open()` ради рамки в карточке.
-            has_notes: notes_ct.is_some(),
-            has_totp: totp_ct.is_some(),
-            version: row.get("version")?,
-            created_at: row.get("created_at")?,
-            updated_at: row.get("updated_at")?,
-            password_updated_at: row.get("password_updated_at")?,
-            deleted_at: row.get("deleted_at")?,
-        },
-        password_ct,
-        notes_ct,
-        totp_ct,
+        record_id: row.get("record_id")?,
+        vault_id: row.get("vault_id")?,
+        meta_ct: row.get("meta_ct")?,
+        password_ct: row.get("password_ct")?,
+        notes_ct: row.get("notes_ct")?,
+        totp_ct: row.get("totp_ct")?,
+        version: row.get("version")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        password_updated_at: row.get("password_updated_at")?,
+        deleted_at: row.get("deleted_at")?,
     })
+}
+
+impl StoredRecord {
+    fn fields(&self, key: &VaultKey) -> CoreResult<RecordFields> {
+        metadata::open(key, Place::Record, &self.record_id, self.meta_ct.as_deref())
+    }
+
+    /// Метаданные для UI: распечатанный блоб плюс открытые поля строки.
+    fn meta(&self, key: &VaultKey) -> CoreResult<RecordMeta> {
+        let fields = self.fields(key)?;
+        Ok(RecordMeta {
+            record_id: self.record_id.clone(),
+            vault_id: self.vault_id.clone(),
+            service_name: fields.service_name,
+            urls: fields.urls,
+            login: fields.login,
+            account_label: fields.account_label,
+            // Флаги — по наличию шифротекста. Ни одного `open()` ради рамки в карточке.
+            has_notes: self.notes_ct.is_some(),
+            has_totp: self.totp_ct.is_some(),
+            version: self.version,
+            created_at: self.created_at.clone(),
+            updated_at: self.updated_at.clone(),
+            password_updated_at: self.password_updated_at.clone(),
+            deleted_at: self.deleted_at.clone(),
+        })
+    }
 }
 
 fn fetch(conn: &Connection, record_id: &str) -> CoreResult<Option<StoredRecord>> {
@@ -67,7 +93,7 @@ fn fetch(conn: &Connection, record_id: &str) -> CoreResult<Option<StoredRecord>>
 /// открывать удалённую запись нечего (§5.4).
 fn fetch_live(conn: &Connection, record_id: &str) -> CoreResult<StoredRecord> {
     match fetch(conn, record_id)? {
-        Some(stored) if stored.meta.deleted_at.is_none() => Ok(stored),
+        Some(stored) if stored.deleted_at.is_none() => Ok(stored),
         _ => Err(CoreError::not_found("Запись не найдена.")),
     }
 }
@@ -76,15 +102,16 @@ fn fetch_live(conn: &Connection, record_id: &str) -> CoreResult<StoredRecord> {
 ///
 /// Отдельно от [`fetch_live`], потому что зовётся оттуда, где запись только что
 /// переписали и надо вернуть её новый вид: разрешение конфликта (§5.5).
-pub fn find_meta(conn: &Connection, record_id: &str) -> CoreResult<RecordMeta> {
+pub fn find_meta(conn: &Connection, key: &VaultKey, record_id: &str) -> CoreResult<RecordMeta> {
     match fetch(conn, record_id)? {
-        Some(stored) => Ok(stored.meta),
+        Some(stored) => stored.meta(key),
         None => Err(CoreError::not_found("Запись не найдена.")),
     }
 }
 
 pub fn list(
     conn: &Connection,
+    key: &VaultKey,
     vault_id: Option<&str>,
     include_deleted: bool,
 ) -> CoreResult<Vec<RecordMeta>> {
@@ -95,15 +122,25 @@ pub fn list(
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut records = stmt
-        .query_map(rusqlite::params![vault_id, include_deleted as i64], |row| {
-            from_row(row).map(|stored| stored.meta)
-        })?
+    let stored = stmt
+        .query_map(
+            rusqlite::params![vault_id, include_deleted as i64],
+            from_row,
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
 
-    // Порядок ядра — по сервису, затем по логину, без учёта регистра. Стор фронта
-    // всё равно пересортировывает у себя через `localeCompare`, поэтому побайтовая
-    // параль с JS не нужна; нужен предсказуемый порядок.
+    let mut records = stored
+        .iter()
+        .map(|record| record.meta(key))
+        .collect::<CoreResult<Vec<_>>>()?;
+
+    // Порядок ядра — по сервису, затем по логину, без учёта регистра. Сортировка
+    // идёт здесь, а не в `ORDER BY`: с S7.1 имя сервиса лежит в файле
+    // шифротекстом, и SQL сравнивать его не умеет. Раньше это был выбор, теперь
+    // — единственный способ. Стор фронта всё равно пересортировывает у себя
+    // через `localeCompare`, поэтому побайтовая параль с JS не нужна; нужен
+    // предсказуемый порядок.
     records.sort_by(|a, b| {
         a.service_name
             .to_lowercase()
@@ -122,17 +159,20 @@ pub fn create(
     draft: &RecordDraft,
     vault_id: &str,
 ) -> CoreResult<RecordMeta> {
-    let service_name = require_non_empty(&draft.service_name, "Сервис")?;
-    let login = require_non_empty(&draft.login, "Логин")?;
+    let fields = RecordFields {
+        service_name: require_non_empty(&draft.service_name, "Сервис")?,
+        urls: valid_urls(&draft.urls)?,
+        login: require_non_empty(&draft.login, "Логин")?,
+        account_label: optional_meta(draft.account_label.as_deref(), "Подпись аккаунта")?,
+    };
     let password = require_present(&draft.password, "Пароль")?;
-    let account_label = optional_meta(draft.account_label.as_deref(), "Подпись аккаунта")?;
-    let urls = valid_urls(&draft.urls)?;
 
     // ID генерирует ядро, а не UI (§4.1): это ключ синхронизации и разрешения
     // конфликтов, и приходить снаружи он не может.
     let record_id: RecordId = uuid::Uuid::new_v4().to_string();
     let created_at: IsoDateTime = now_iso();
 
+    let meta_ct = metadata::seal(key, Place::Record, &record_id, &fields)?;
     let password_ct = seal_field(key, &record_id, SecretField::Password, Some(&password))?;
     let notes_ct = seal_field(
         key,
@@ -148,17 +188,14 @@ pub fn create(
     )?;
 
     conn.execute(
-        "INSERT INTO records (record_id, vault_id, service_name, urls, login, account_label,
+        "INSERT INTO records (record_id, vault_id, meta_ct,
                               password_ct, notes_ct, totp_ct,
                               version, created_at, updated_at, password_updated_at, deleted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?10, ?10, NULL)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7, ?7, NULL)",
         rusqlite::params![
             record_id,
             vault_id,
-            service_name,
-            serde_json::to_string(&urls)?,
-            login,
-            account_label,
+            meta_ct,
             password_ct,
             notes_ct,
             totp_ct,
@@ -166,7 +203,7 @@ pub fn create(
         ],
     )?;
 
-    Ok(fetch_live(conn, &record_id)?.meta)
+    fetch_live(conn, &record_id)?.meta(key)
 }
 
 /// `vault_id` в патче приходит уже проверенным — как и при создании.
@@ -177,6 +214,7 @@ pub fn update(
     patch: &RecordPatch,
 ) -> CoreResult<RecordMeta> {
     let current = fetch_live(conn, record_id)?;
+    let current_fields = current.fields(key)?;
     let changed_at = now_iso();
 
     // Пароль сравниваем по значению, а не по факту прихода поля: форма записи
@@ -218,40 +256,43 @@ pub fn update(
         )?,
     };
 
-    let service_name = match patch.service_name.as_deref() {
-        Some(value) => require_non_empty(value, "Сервис")?,
-        None => current.meta.service_name.clone(),
+    // Метаданные едут одним блобом, поэтому правка любого поля — это новая
+    // печать всех четырёх: непришедшие берутся из распечатанных прежних.
+    let fields = RecordFields {
+        service_name: match patch.service_name.as_deref() {
+            Some(value) => require_non_empty(value, "Сервис")?,
+            None => current_fields.service_name,
+        },
+        urls: match patch.urls.as_deref() {
+            Some(value) => valid_urls(value)?,
+            None => current_fields.urls,
+        },
+        login: match patch.login.as_deref() {
+            Some(value) => require_non_empty(value, "Логин")?,
+            None => current_fields.login,
+        },
+        account_label: match patch.account_label.as_ref() {
+            Some(value) => optional_meta(value.as_deref(), "Подпись аккаунта")?,
+            None => current_fields.account_label,
+        },
     };
-    let login = match patch.login.as_deref() {
-        Some(value) => require_non_empty(value, "Логин")?,
-        None => current.meta.login.clone(),
-    };
-    let urls = match patch.urls.as_deref() {
-        Some(value) => valid_urls(value)?,
-        None => current.meta.urls.clone(),
-    };
-    let account_label = match patch.account_label.as_ref() {
-        Some(value) => optional_meta(value.as_deref(), "Подпись аккаунта")?,
-        None => current.meta.account_label.clone(),
-    };
+    let meta_ct = metadata::seal(key, Place::Record, &current.record_id, &fields)?;
+
     let vault_id = patch
         .vault_id
         .clone()
-        .unwrap_or_else(|| current.meta.vault_id.clone());
+        .unwrap_or_else(|| current.vault_id.clone());
 
     conn.execute(
         "UPDATE records SET
-             vault_id = ?2, service_name = ?3, urls = ?4, login = ?5, account_label = ?6,
-             password_ct = ?7, notes_ct = ?8, totp_ct = ?9,
-             version = version + 1, updated_at = ?10, password_updated_at = ?11
+             vault_id = ?2, meta_ct = ?3,
+             password_ct = ?4, notes_ct = ?5, totp_ct = ?6,
+             version = version + 1, updated_at = ?7, password_updated_at = ?8
          WHERE record_id = ?1",
         rusqlite::params![
             record_id,
             vault_id,
-            service_name,
-            serde_json::to_string(&urls)?,
-            login,
-            account_label,
+            meta_ct,
             password_ct,
             notes_ct,
             totp_ct,
@@ -259,12 +300,12 @@ pub fn update(
             if password_changed {
                 &changed_at
             } else {
-                &current.meta.password_updated_at
+                &current.password_updated_at
             },
         ],
     )?;
 
-    Ok(fetch_live(conn, record_id)?.meta)
+    fetch_live(conn, record_id)?.meta(key)
 }
 
 /// Мягкое удаление (§5.4).
@@ -273,7 +314,11 @@ pub fn update(
 /// секреты стираются здесь же, а не ждут чистки надгробий через 30 дней.
 /// Вместе с ними перестают быть правдой `has_notes` / `has_totp`, и они
 /// обнуляются сами — по тому же правилу «флаг = наличие шифротекста».
-pub fn delete(conn: &Connection, record_id: &str) -> CoreResult<RecordMeta> {
+///
+/// Метаданные при этом **остаются** — зашифрованными, как и были. Надгробие
+/// едет по сети наравне с записью (§5.3), а `SyncRecord` без имени сервиса на
+/// проводе не собирается; после S7.1 они и в файле ничего не выдают.
+pub fn delete(conn: &Connection, key: &VaultKey, record_id: &str) -> CoreResult<RecordMeta> {
     fetch_live(conn, record_id)?;
     let deleted_at = now_iso();
 
@@ -286,7 +331,7 @@ pub fn delete(conn: &Connection, record_id: &str) -> CoreResult<RecordMeta> {
     )?;
 
     match fetch(conn, record_id)? {
-        Some(stored) => Ok(stored.meta),
+        Some(stored) => stored.meta(key),
         None => Err(CoreError::not_found("Запись не найдена.")),
     }
 }
@@ -306,10 +351,14 @@ pub fn secrets(conn: &Connection, key: &VaultKey, record_id: &str) -> CoreResult
     })
 }
 
-/// Перешифровать все секреты хранилища с одного ключа на другой (F13, смена
+/// Перешифровать всё содержимое хранилища с одного ключа на другой (F13, смена
 /// мастер-пароля).
 ///
-/// Метаданные записей не трогаются вовсе: `version`, `updated_at` и
+/// «Всё» — это секреты **и метаданные**: с S7.1 под ключом хранилища лежат и те,
+/// и другие, и забыть про блоб метаданных значило бы сделать половину записей
+/// нечитаемыми новым паролем.
+///
+/// Открытые поля записи не трогаются вовсе: `version`, `updated_at` и
 /// `password_updated_at` остаются прежними. Смена ключа — не изменение записи, и
 /// поднимать из-за неё версию значило бы наплодить расхождений для будущего
 /// синка на ровном месте (§5.2).
@@ -320,14 +369,13 @@ pub fn secrets(conn: &Connection, key: &VaultKey, record_id: &str) -> CoreResult
 /// Работает по транзакции, а не по соединению: наполовину перешифрованное
 /// хранилище не открывается ни старым паролем, ни новым.
 pub fn rekey_all(tx: &rusqlite::Transaction<'_>, from: &VaultKey, to: &VaultKey) -> CoreResult<()> {
-    let mut stmt = tx.prepare(
-        "SELECT record_id, password_ct, notes_ct, totp_ct FROM records
-         WHERE password_ct IS NOT NULL OR notes_ct IS NOT NULL OR totp_ct IS NOT NULL",
-    )?;
+    let mut stmt =
+        tx.prepare("SELECT record_id, meta_ct, password_ct, notes_ct, totp_ct FROM records")?;
     let stored = stmt
         .query_map([], |row| {
             Ok((
-                row.get::<_, String>("record_id")?,
+                row.get::<_, RecordId>("record_id")?,
+                row.get::<_, Option<Vec<u8>>>("meta_ct")?,
                 row.get::<_, Option<Vec<u8>>>("password_ct")?,
                 row.get::<_, Option<Vec<u8>>>("notes_ct")?,
                 row.get::<_, Option<Vec<u8>>>("totp_ct")?,
@@ -336,23 +384,24 @@ pub fn rekey_all(tx: &rusqlite::Transaction<'_>, from: &VaultKey, to: &VaultKey)
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
-    for (record_id, password_ct, notes_ct, totp_ct) in stored {
-        let fields = [
+    for (record_id, meta_ct, password_ct, notes_ct, totp_ct) in stored {
+        let fields = metadata::open(from, Place::Record, &record_id, meta_ct.as_deref())?;
+        let meta_ct = metadata::seal(to, Place::Record, &record_id, &fields)?;
+
+        let mut resealed: Vec<Option<Vec<u8>>> = Vec::with_capacity(3);
+        for (field, blob) in [
             (SecretField::Password, password_ct),
             (SecretField::Notes, notes_ct),
             (SecretField::TotpSecret, totp_ct),
-        ];
-
-        let mut resealed: Vec<Option<Vec<u8>>> = Vec::with_capacity(fields.len());
-        for (field, blob) in fields {
+        ] {
             let plaintext = open_field(from, &record_id, field, &blob)?;
             resealed.push(seal_field(to, &record_id, field, plaintext.as_deref())?);
         }
 
         tx.execute(
-            "UPDATE records SET password_ct = ?2, notes_ct = ?3, totp_ct = ?4
+            "UPDATE records SET meta_ct = ?2, password_ct = ?3, notes_ct = ?4, totp_ct = ?5
              WHERE record_id = ?1",
-            rusqlite::params![record_id, resealed[0], resealed[1], resealed[2]],
+            rusqlite::params![record_id, meta_ct, resealed[0], resealed[1], resealed[2]],
         )?;
     }
 

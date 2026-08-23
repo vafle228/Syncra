@@ -29,7 +29,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::model::{
     now_iso, ExportFile, ImportSource, RecordMeta, SecretField, VAULT_NAME_MAX_LENGTH,
 };
-use crate::storage::{records, vaults};
+use crate::storage::{metadata, records, vaults};
 
 use backup::{Backup, BackupRecord, BackupVault};
 use import::ImportEntry;
@@ -191,7 +191,7 @@ const CSV_HEADER: [&str; 6] = ["name", "url", "username", "password", "note", "t
 /// Включая локальные секции (`sync = 0`): это файл для переезда, а не
 /// синхронизация, и «остаётся на устройстве» здесь ни при чём (`mock/index.ts:1429`).
 pub fn build_csv(conn: &Connection, key: &VaultKey) -> CoreResult<(String, i64)> {
-    let list = records::list(conn, None, false)?;
+    let list = records::list(conn, key, None, false)?;
 
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(list.len() + 1);
     rows.push(CSV_HEADER.iter().map(|name| (*name).to_owned()).collect());
@@ -232,7 +232,7 @@ fn note_column(meta: &RecordMeta, notes: Option<&str>) -> String {
 
 /// Снять с хранилища всё, что уезжает в бэкап.
 pub fn collect_backup(conn: &Connection, key: &VaultKey) -> CoreResult<Backup> {
-    let list = records::list(conn, None, false)?;
+    let list = records::list(conn, key, None, false)?;
     let mut collected = Vec::with_capacity(list.len());
 
     for meta in &list {
@@ -353,18 +353,29 @@ fn insert_restored(
     record: &BackupRecord,
 ) -> CoreResult<()> {
     let id = &record.record_id;
+    // Метаданные — тем же ключом и под тем же AAD, что у любой другой записи
+    // (S7.1): `record_id` тот же, значит и место у шифротекста то же.
+    let meta_ct = metadata::seal(
+        key,
+        metadata::Place::Record,
+        id,
+        &metadata::RecordFields {
+            service_name: clip(&record.service_name, crate::model::META_FIELD_MAX_BYTES),
+            urls: record.urls.clone(),
+            login: clip(&record.login, crate::model::META_FIELD_MAX_BYTES),
+            account_label: record.account_label.clone(),
+        },
+    )?;
+
     tx.execute(
-        "INSERT INTO records (record_id, vault_id, service_name, urls, login, account_label,
+        "INSERT INTO records (record_id, vault_id, meta_ct,
                               password_ct, notes_ct, totp_ct,
                               version, created_at, updated_at, password_updated_at, deleted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
         rusqlite::params![
             id,
             record.vault_id,
-            clip(&record.service_name, crate::model::META_FIELD_MAX_BYTES),
-            serde_json::to_string(&record.urls)?,
-            clip(&record.login, crate::model::META_FIELD_MAX_BYTES),
-            record.account_label,
+            meta_ct,
             records::seal_field(key, id, SecretField::Password, Some(&record.password))?,
             records::seal_field(key, id, SecretField::Notes, record.notes.as_deref())?,
             records::seal_field(
@@ -401,9 +412,9 @@ fn coerce_vault_name(name: &str) -> String {
 /// прохода по файлу: дубликаты внутри самого файла между собой не схлопываются
 /// (`mock/index.ts:1541`) — два аккаунта на один сервис это норма, а не
 /// коллизия (§4.4).
-pub fn known_pairs(conn: &Connection) -> CoreResult<HashSet<String>> {
+pub fn known_pairs(conn: &Connection, key: &VaultKey) -> CoreResult<HashSet<String>> {
     let mut pairs = HashSet::new();
-    for meta in records::list(conn, None, false)? {
+    for meta in records::list(conn, key, None, false)? {
         for url in &meta.urls {
             pairs.insert(import::pair_key(url, &meta.login));
         }

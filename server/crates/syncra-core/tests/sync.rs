@@ -482,11 +482,16 @@ fn a_schema_2_vault_migrates_without_losing_anything() {
     };
 
     // Откатываем файл до схемы 2 мимо ядра — ровно то, что лежит на диске у
-    // человека, поставившего прошлую версию.
+    // человека, поставившего прошлую версию: отметок обмена ещё нет, таблицы
+    // споров тоже, метаданные записи лежат открыто.
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TABLE conflicts; DROP TABLE sync_state;")
+            .unwrap();
+        common::unseal_metadata(&conn, "records");
         conn.execute_batch(
-            "DROP TABLE sync_state;
+            "UPDATE records SET service_name = 'GitHub', urls = '[\"github.com\"]',
+                                login = 'octocat';
              UPDATE meta SET value = CAST('2' AS BLOB) WHERE key = 'schema_version';",
         )
         .unwrap();
@@ -496,6 +501,10 @@ fn a_schema_2_vault_migrates_without_losing_anything() {
     core.unlock(MASTER_PASSWORD).unwrap();
 
     assert_eq!(core.list_records(None, false).unwrap().len(), 1);
+    assert_eq!(
+        core.list_records(None, false).unwrap()[0].service_name,
+        "GitHub"
+    );
     assert_eq!(core.get_secret(&record_id).unwrap().password, "тайна-1");
 
     // Таблица досоздалась и работает: пустой манифест и пустые отметки — это

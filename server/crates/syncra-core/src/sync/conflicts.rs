@@ -35,6 +35,7 @@ use crate::model::{
     now_iso, ConflictField, ConflictSide, ConflictVersion, IsoDateTime, RecordConflict, RecordId,
     SecretField, VaultId,
 };
+use crate::storage::metadata::{self, Place, RecordFields};
 use crate::storage::records;
 use crate::trust;
 
@@ -48,8 +49,8 @@ use super::SyncRecord;
 const UNKNOWN_PEER: &str = "Другое устройство";
 
 const COLUMNS: &str = "record_id, device_id, raised_at, local_version, version,
-                       vault_id, service_name, urls, login, account_label,
-                       password_ct, notes_ct, totp_ct, updated_at, password_updated_at";
+                       vault_id, meta_ct, password_ct, notes_ct, totp_ct,
+                       updated_at, password_updated_at";
 
 // ---------------------------------------------------------------------------
 // Строка таблицы
@@ -66,10 +67,9 @@ pub struct StoredConflict {
     pub local_version: i64,
     pub version: i64,
     pub vault_id: VaultId,
-    pub service_name: String,
-    pub urls: Vec<String>,
-    pub login: String,
-    pub account_label: Option<String>,
+    /// Метаданные приехавшей версии — запечатанные местным ключом под
+    /// конфликтным AAD (S7.1). Распечатываются вместе, [`StoredConflict::fields`].
+    meta_ct: Option<Vec<u8>>,
     password_ct: Option<Vec<u8>>,
     notes_ct: Option<Vec<u8>>,
     totp_ct: Option<Vec<u8>>,
@@ -78,7 +78,6 @@ pub struct StoredConflict {
 }
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<StoredConflict> {
-    let urls: String = row.get("urls")?;
     Ok(StoredConflict {
         record_id: row.get("record_id")?,
         device_id: row.get("device_id")?,
@@ -86,12 +85,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<StoredConflict> {
         local_version: row.get("local_version")?,
         version: row.get("version")?,
         vault_id: row.get("vault_id")?,
-        service_name: row.get("service_name")?,
-        // Список пришёл из нашей же схемы; битый JSON здесь — испорченный файл,
-        // и показать версию без доменов лучше, чем уронить экран разрешения.
-        urls: serde_json::from_str(&urls).unwrap_or_default(),
-        login: row.get("login")?,
-        account_label: row.get("account_label")?,
+        meta_ct: row.get("meta_ct")?,
         password_ct: row.get("password_ct")?,
         notes_ct: row.get("notes_ct")?,
         totp_ct: row.get("totp_ct")?,
@@ -115,32 +109,46 @@ impl StoredConflict {
         })
     }
 
-    fn fields(&self) -> Fields<'_> {
-        Fields {
-            vault_id: &self.vault_id,
-            service_name: &self.service_name,
-            urls: &self.urls,
-            login: &self.login,
-            account_label: self.account_label.as_deref(),
-        }
+    /// Распечатать приехавшие метаданные. Ключ местный, AAD — конфликтный
+    /// (S7.1): блоб из `conflicts` не открывается на месте блоба из `records`.
+    pub fn meta(&self, key: &VaultKey) -> CoreResult<RecordFields> {
+        metadata::open(
+            key,
+            Place::Conflict,
+            &self.record_id,
+            self.meta_ct.as_deref(),
+        )
     }
 
-    fn version_view(&self, device_name: String) -> ConflictVersion {
+    fn version_view(&self, device_name: String, meta: RecordFields) -> ConflictVersion {
         ConflictVersion {
             side: ConflictSide::Remote,
             device_name,
             version: self.version,
             updated_at: self.updated_at.clone(),
             vault_id: self.vault_id.clone(),
-            service_name: self.service_name.clone(),
-            urls: self.urls.clone(),
-            login: self.login.clone(),
-            account_label: self.account_label.clone(),
+            service_name: meta.service_name,
+            urls: meta.urls,
+            login: meta.login,
+            account_label: meta.account_label,
             // По наличию шифротекста, как и у `RecordMeta`: незаполненный секрет
             // в хранилище — это NULL, а не шифротекст пустой строки.
             has_notes: self.notes_ct.is_some(),
             has_totp: self.totp_ct.is_some(),
         }
+    }
+}
+
+/// Свести секцию и распечатанные метаданные в то, что умеет сравнивать
+/// [`differing_fields`]. `vault_id` живёт в строке отдельно от блоба: по нему
+/// решается §4.2, и лезть ради него в шифротекст было бы лишним.
+fn fields_of<'a>(vault_id: &'a str, meta: &'a RecordFields) -> Fields<'a> {
+    Fields {
+        vault_id,
+        service_name: &meta.service_name,
+        urls: &meta.urls,
+        login: &meta.login,
+        account_label: meta.account_label.as_deref(),
     }
 }
 
@@ -247,21 +255,32 @@ pub fn raise(
     let fresh = known != Some((local_version, incoming.version));
 
     let record_id = &incoming.record_id;
+    // Метаданные приехавшей версии — под конфликтным AAD (S7.1): в файле от них
+    // видно не больше, чем от метаданных самой записи.
+    let meta_ct = metadata::seal(
+        key,
+        Place::Conflict,
+        record_id,
+        &RecordFields {
+            service_name: incoming.service_name.clone(),
+            urls: incoming.urls.clone(),
+            login: incoming.login.clone(),
+            account_label: incoming.account_label.clone(),
+        },
+    )?;
+
     conn.execute(
         "INSERT INTO conflicts (record_id, device_id, raised_at, local_version, version,
-                                vault_id, service_name, urls, login, account_label,
-                                password_ct, notes_ct, totp_ct, updated_at, password_updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                                vault_id, meta_ct, password_ct, notes_ct, totp_ct,
+                                updated_at, password_updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(record_id) DO UPDATE SET
              device_id           = excluded.device_id,
              raised_at           = excluded.raised_at,
              local_version       = excluded.local_version,
              version             = excluded.version,
              vault_id            = excluded.vault_id,
-             service_name        = excluded.service_name,
-             urls                = excluded.urls,
-             login               = excluded.login,
-             account_label       = excluded.account_label,
+             meta_ct             = excluded.meta_ct,
              password_ct         = excluded.password_ct,
              notes_ct            = excluded.notes_ct,
              totp_ct             = excluded.totp_ct,
@@ -274,10 +293,7 @@ pub fn raise(
             local_version,
             incoming.version,
             incoming.vault_id,
-            incoming.service_name,
-            serde_json::to_string(&incoming.urls)?,
-            incoming.login,
-            incoming.account_label,
+            meta_ct,
             seal(
                 key,
                 record_id,
@@ -317,14 +333,13 @@ pub fn drop_for(conn: &Connection, record_id: &str) -> CoreResult<()> {
 /// смене мастер-пароля и узнать об этом только на экране разрешения. AAD
 /// прежний: `record_id` и имена полей не меняются.
 pub fn rekey_all(tx: &rusqlite::Transaction<'_>, from: &VaultKey, to: &VaultKey) -> CoreResult<()> {
-    let mut stmt = tx.prepare(
-        "SELECT record_id, password_ct, notes_ct, totp_ct FROM conflicts
-         WHERE password_ct IS NOT NULL OR notes_ct IS NOT NULL OR totp_ct IS NOT NULL",
-    )?;
+    let mut stmt =
+        tx.prepare("SELECT record_id, meta_ct, password_ct, notes_ct, totp_ct FROM conflicts")?;
     let stored = stmt
         .query_map([], |row| {
             Ok((
-                row.get::<_, String>("record_id")?,
+                row.get::<_, RecordId>("record_id")?,
+                row.get::<_, Option<Vec<u8>>>("meta_ct")?,
                 row.get::<_, Option<Vec<u8>>>("password_ct")?,
                 row.get::<_, Option<Vec<u8>>>("notes_ct")?,
                 row.get::<_, Option<Vec<u8>>>("totp_ct")?,
@@ -333,23 +348,27 @@ pub fn rekey_all(tx: &rusqlite::Transaction<'_>, from: &VaultKey, to: &VaultKey)
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
-    for (record_id, password_ct, notes_ct, totp_ct) in stored {
-        let fields = [
+    for (record_id, meta_ct, password_ct, notes_ct, totp_ct) in stored {
+        // Метаданные приехавшей версии лежат под тем же ключом хранилища, что и
+        // её секреты (S7.1). Забыть их — значит оставить в списке споров строки,
+        // которые нечем показать.
+        let meta = metadata::open(from, Place::Conflict, &record_id, meta_ct.as_deref())?;
+        let meta_ct = metadata::seal(to, Place::Conflict, &record_id, &meta)?;
+
+        let mut resealed: Vec<Option<Vec<u8>>> = Vec::with_capacity(3);
+        for (field, blob) in [
             (SecretField::Password, password_ct),
             (SecretField::Notes, notes_ct),
             (SecretField::TotpSecret, totp_ct),
-        ];
-
-        let mut resealed: Vec<Option<Vec<u8>>> = Vec::with_capacity(fields.len());
-        for (field, blob) in fields {
+        ] {
             let plaintext = open(from, &record_id, field, &blob)?;
             resealed.push(seal(to, &record_id, field, plaintext.as_deref())?);
         }
 
         tx.execute(
-            "UPDATE conflicts SET password_ct = ?2, notes_ct = ?3, totp_ct = ?4
+            "UPDATE conflicts SET meta_ct = ?2, password_ct = ?3, notes_ct = ?4, totp_ct = ?5
              WHERE record_id = ?1",
-            rusqlite::params![record_id, resealed[0], resealed[1], resealed[2]],
+            rusqlite::params![record_id, meta_ct, resealed[0], resealed[1], resealed[2]],
         )?;
     }
 
@@ -478,18 +497,14 @@ pub fn local_side(
 ) -> CoreResult<Option<LocalSide>> {
     let row = conn
         .query_row(
-            "SELECT vault_id, service_name, urls, login, account_label,
-                    password_ct, notes_ct, totp_ct, version, updated_at, password_updated_at
+            "SELECT vault_id, meta_ct, password_ct, notes_ct, totp_ct,
+                    version, updated_at, password_updated_at
              FROM records WHERE record_id = ?1 AND deleted_at IS NULL",
             [record_id],
             |row| {
-                let urls: String = row.get("urls")?;
                 Ok(RawLocal {
                     vault_id: row.get("vault_id")?,
-                    service_name: row.get("service_name")?,
-                    urls: serde_json::from_str(&urls).unwrap_or_default(),
-                    login: row.get("login")?,
-                    account_label: row.get("account_label")?,
+                    meta_ct: row.get("meta_ct")?,
                     password_ct: row.get("password_ct")?,
                     notes_ct: row.get("notes_ct")?,
                     totp_ct: row.get("totp_ct")?,
@@ -503,6 +518,15 @@ pub fn local_side(
 
     let Some(raw) = row else { return Ok(None) };
 
+    // Метаданные живой записи — под ОБЫЧНЫМ AAD, как и её секреты: это запись,
+    // а не отложенная версия (S7.1).
+    let meta = metadata::open(
+        key,
+        Place::Record,
+        &record_id.to_owned(),
+        raw.meta_ct.as_deref(),
+    )?;
+
     // Секреты живой записи лежат под ОБЫЧНЫМ AAD: это запись, а не отложенная
     // версия, и распечатывать её надо тем же ключом, что и всегда.
     let secrets = Secrets {
@@ -513,10 +537,10 @@ pub fn local_side(
 
     Ok(Some(LocalSide {
         vault_id: raw.vault_id,
-        service_name: raw.service_name,
-        urls: raw.urls,
-        login: raw.login,
-        account_label: raw.account_label,
+        service_name: meta.service_name,
+        urls: meta.urls,
+        login: meta.login,
+        account_label: meta.account_label,
         version: raw.version,
         updated_at: raw.updated_at,
         password_updated_at: raw.password_updated_at,
@@ -526,14 +550,11 @@ pub fn local_side(
     }))
 }
 
-/// Строка `records` до расшифровки. Отдельный тип, чтобы одиннадцать полей не
+/// Строка `records` до расшифровки. Отдельный тип, чтобы восемь полей не
 /// разъезжались по индексам кортежа — тот же приём, что у `StoredForSync`.
 struct RawLocal {
     vault_id: VaultId,
-    service_name: String,
-    urls: Vec<String>,
-    login: String,
-    account_label: Option<String>,
+    meta_ct: Option<Vec<u8>>,
     password_ct: Option<Vec<u8>>,
     notes_ct: Option<Vec<u8>>,
     totp_ct: Option<Vec<u8>>,
@@ -570,6 +591,13 @@ fn assemble(
     local: &LocalSide,
 ) -> CoreResult<RecordConflict> {
     let remote_secrets = stored.secrets(key)?;
+    let remote_meta = stored.meta(key)?;
+    let differing = differing_fields(
+        &local.fields(),
+        &local.secrets,
+        &fields_of(&stored.vault_id, &remote_meta),
+        &remote_secrets,
+    );
 
     Ok(RecordConflict {
         record_id: stored.record_id.clone(),
@@ -587,13 +615,8 @@ fn assemble(
             has_notes: local.has_notes,
             has_totp: local.has_totp,
         },
-        remote: stored.version_view(device_name(conn, &stored.device_id)?),
-        differing_fields: differing_fields(
-            &local.fields(),
-            &local.secrets,
-            &stored.fields(),
-            &remote_secrets,
-        ),
+        remote: stored.version_view(device_name(conn, &stored.device_id)?, remote_meta),
+        differing_fields: differing,
     })
 }
 
