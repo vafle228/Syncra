@@ -41,6 +41,26 @@ use crate::sync::{self, SyncRecord};
 use super::wire::Msg;
 use super::{handshake::Established, Context, CoreEvent};
 
+// ---------------------------------------------------------------------------
+// Потолки круга
+// ---------------------------------------------------------------------------
+
+/// Сколько записей готовы принять за один круг — в каждую сторону.
+///
+/// Потолок не про честный обмен, а про бесконечный: собеседник, который отвечает
+/// порциями до скончания века, обязан во что-то упереться. Хранилище на
+/// шестьдесят пять тысяч паролей — это уже не хранилище человека, а честная
+/// первая синхронизация всё равно идёт несколькими кругами ([`sync::WANT_LIMIT`]),
+/// так что честной стороне этот потолок не мешает.
+const ROUND_RECORD_LIMIT: usize = 65_536;
+
+/// Сколько строк манифеста готовы принять за один круг.
+///
+/// Кадр ограничен мегабайтом, а число кадров до этого не было ограничено ничем:
+/// `last: false` можно слать, пока не кончится память. Потолок тот же и по той
+/// же причине, что и у записей.
+const ROUND_MANIFEST_LIMIT: usize = 65_536;
+
 /// Единственный способ дотронуться до ядра отсюда — и он же единственный
 /// способ не задержать замок дольше одной короткой операции.
 fn with_core<T>(
@@ -165,11 +185,14 @@ fn pull(
 ) -> CoreResult<(u32, Vec<RecordId>)> {
     let mut applied = 0;
     let mut received = Vec::new();
+    let mut taken = 0;
 
     loop {
         let Msg::SyncBatch { records, last } = session.channel.request(&Msg::SyncFetch)? else {
             return Err(out_of_turn());
         };
+        taken = advance_round(taken, records.len(), last, ROUND_RECORD_LIMIT)?;
+
         let laid = apply_batch(context, device_id, &records)?;
         applied += laid.len() as u32;
         received.extend(laid.into_iter().map(|(record_id, _)| record_id));
@@ -178,6 +201,25 @@ fn pull(
             return Ok((applied, received));
         }
     }
+}
+
+/// Принять очередную порцию потока `last`-ом закрывающихся кадров и вернуть
+/// новый счёт принятого. Ошибка означает «поток не кончится» — а круг обязан.
+///
+/// Две проверки, и вместе они дают конечность. Пустая НЕзакрывающая порция —
+/// это уже нарушение: [`split`] пустых порций не делает, а отвечающая сторона
+/// отдаёт пустоту только вместе с `last` (`answer`, ветка `SyncFetch`). Значит
+/// каждый следующий кадр несёт хотя бы одну строку, и потолок на строки — это
+/// заодно потолок на число кадров.
+fn advance_round(taken: usize, arrived: usize, last: bool, limit: usize) -> CoreResult<usize> {
+    if arrived == 0 && !last {
+        return Err(out_of_turn());
+    }
+    let taken = taken.saturating_add(arrived);
+    if taken > limit {
+        return Err(out_of_turn());
+    }
+    Ok(taken)
 }
 
 /// Шаг 3: отдать то, что попросили.
@@ -221,11 +263,16 @@ fn push(
 #[derive(Default)]
 pub(super) struct Round {
     manifest: sync::Manifest,
+    /// Сколько строк манифеста уже принято за этот круг. Потолок нужен и здесь:
+    /// инициатор — такой же собеседник, каким для него являемся мы.
+    listened: usize,
     /// Дифф, отложенный для собеседника после закрытия манифеста.
     outgoing: Vec<Vec<SyncRecord>>,
     handed: usize,
     sent: Vec<(RecordId, i64)>,
     settled: Vec<(RecordId, i64)>,
+    /// Сколько записей уже принято за этот круг — потолок тот же, что у `pull`.
+    taken: usize,
     applied: u32,
 }
 
@@ -242,6 +289,8 @@ pub(super) fn answer(
             local_vaults,
             last,
         } => {
+            round.listened =
+                advance_round(round.listened, entries.len(), last, ROUND_MANIFEST_LIMIT)?;
             round.manifest.entries.extend(entries);
             round.manifest.local_vaults = local_vaults;
             if !last {
@@ -278,6 +327,7 @@ pub(super) fn answer(
         }
 
         Msg::SyncBatch { records, last } => {
+            round.taken = advance_round(round.taken, records.len(), last, ROUND_RECORD_LIMIT)?;
             let laid = apply_batch(context, device_id, &records)?;
             round.applied += laid.len() as u32;
             if !last {
@@ -386,6 +436,23 @@ mod tests {
             password_updated_at: "2026-08-23T10:00:00.000Z".to_owned(),
             deleted_at: None,
         }
+    }
+
+    #[test]
+    fn a_stream_that_never_closes_runs_out_of_ceiling() {
+        // Честный поток: порции с грузом, последняя закрывает.
+        let taken = advance_round(0, 4, false, 10).unwrap();
+        let taken = advance_round(taken, 4, false, 10).unwrap();
+        assert_eq!(advance_round(taken, 2, true, 10).unwrap(), 10);
+
+        // Через край — обрыв круга, а не бесконечность.
+        assert!(advance_round(10, 1, true, 10).is_err());
+
+        // Пустая порция без `last` — это и есть «отвечаю вечно»: закрыть поток
+        // ею нельзя, а груза в ней нет. Пустая закрывающая — законна: так
+        // выглядит «отдавать больше нечего».
+        assert!(advance_round(0, 0, false, 10).is_err());
+        assert_eq!(advance_round(0, 0, true, 10).unwrap(), 0);
     }
 
     #[test]

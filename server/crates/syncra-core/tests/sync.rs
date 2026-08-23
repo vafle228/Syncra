@@ -10,9 +10,14 @@
 
 mod common;
 
+use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use common::{draft, settings, trust_each_other, wait_until, Device2, MASTER_PASSWORD};
+use syncra_core::net::handshake;
+use syncra_core::net::wire::Msg;
 use syncra_core::{Core, RecordMeta, SyncPhase};
 
 /// Пароль второго устройства. Не тот же самый — в этом весь смысл (см. шапку).
@@ -485,6 +490,100 @@ fn a_schema_2_vault_migrates_without_losing_anything() {
     assert_eq!(core.sync_manifest().unwrap().entries.len(), 1);
     assert!(core.pending_records().unwrap().is_empty());
     assert!(core.last_sync_at().unwrap().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Недоброжелательный собеседник
+// ---------------------------------------------------------------------------
+
+/// Сосед, который отвечает порциями до скончания века.
+///
+/// Ключи у него настоящие — это те же ключи, которыми подписан живой сосед,
+/// потому что «доверенное устройство» это ноутбук, который могли украсть. Врёт
+/// он не в рукопожатии, а в разговоре: поток порций у него никогда не
+/// закрывается.
+///
+/// Возвращает адрес и то, сколько порций подряд у него успели попросить за одно
+/// соединение.
+fn endless_batch_peer(identity: syncra_core::net::NetIdentity) -> (SocketAddr, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("сокет чужака");
+    let addr = listener.local_addr().expect("адрес чужака");
+    let longest = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&longest);
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { break };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+            let Ok(mut session) =
+                handshake::accept(stream, &identity.keypair, |_| handshake::ephemeral_secret())
+            else {
+                continue;
+            };
+
+            let mut handed = 0usize;
+            while let Ok(message) = session.channel.recv() {
+                let reply = match message {
+                    Msg::Ping => Msg::Pong,
+                    Msg::SyncManifest { last: false, .. } => Msg::SyncAck,
+                    Msg::SyncManifest { .. } => Msg::SyncNeed {
+                        wanted: Vec::new(),
+                        complete: true,
+                    },
+                    Msg::SyncFetch => {
+                        handed += 1;
+                        counter.fetch_max(handed, Ordering::SeqCst);
+                        Msg::SyncBatch {
+                            records: Vec::new(),
+                            last: false,
+                        }
+                    }
+                    _ => break,
+                };
+                if session.channel.send(&reply).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    (addr, longest)
+}
+
+#[test]
+fn an_endless_batch_stream_breaks_the_round_and_not_the_walker() {
+    let a = Device2::new("Ноутбук", MASTER_PASSWORD);
+    let b = Device2::new("Телефон", OTHER_PASSWORD);
+    trust_each_other(&a, &b);
+
+    // Чужак говорит ключами B — то есть проходит рукопожатие как доверенный.
+    let identity = b.with_core(|core| core.net_identity().unwrap());
+    let (addr, longest) = endless_batch_peer(identity);
+    a.node.seed_peer(addr);
+
+    wait_until(
+        "обходчик дошёл до чужака и попросил порцию",
+        || longest.load(Ordering::SeqCst) > 0,
+    );
+
+    // Главное: обходчик от этого разговора не умер. Запись от НАСТОЯЩЕГО соседа
+    // доезжает — значит круги идут, пробы идут, индикатор живой.
+    let created = b.with_core(|core| {
+        core.create_record(&draft("GitHub", "octocat", "тайна"))
+            .unwrap()
+    });
+    wait_until(
+        "запись от живого соседа всё равно доехала",
+        || find(&a, &created.record_id).is_some(),
+    );
+
+    // И круг с чужаком обрывается на первой же пустой порции, а не на тысячной.
+    assert!(
+        longest.load(Ordering::SeqCst) <= 2,
+        "у чужака попросили {} порций подряд — потолок круга не сработал",
+        longest.load(Ordering::SeqCst)
+    );
 }
 
 #[test]
