@@ -185,6 +185,38 @@ const ANNOUNCE_ATTEMPTS: u32 = 6;
 /// Пауза между попытками доставки.
 const ANNOUNCE_PAUSE: Duration = Duration::from_secs(2);
 
+/// Сколько адресов узел готов помнить.
+///
+/// Список адресов набивается из мультикаста, который никто не аутентифицирует:
+/// один хост в сети, анонсирующий сотни экземпляров `_syncra._tcp`, наполнял бы
+/// его до бесконечности. Сотня — это уже много: соседей у человека единицы, а
+/// адресов у соседа — по числу его интерфейсов.
+const MAX_ADDRESSES: usize = 128;
+
+/// Сколько адрес живёт без единого подтверждения.
+///
+/// Подтверждением считается и новый анонс, и удачная проба, поэтому живой сосед
+/// не протухает никогда. А вот адрес, который назвали один раз и больше не
+/// вспоминали, занимать место в списке не должен.
+const ADDRESS_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// Общий бюджет времени на один обход адресов.
+///
+/// Обход последовательный, и на каждый мёртвый адрес уходит `connect_timeout`.
+/// Без бюджета сотня таких адресов превращает круг в многоминутный, а живой
+/// сосед всё это время ждёт своей очереди. Круг режется по бюджету и в
+/// следующий раз продолжается с того места, где остановился (`Peers::cursor`),
+/// поэтому хвост списка не голодает.
+const PROBE_BUDGET: Duration = Duration::from_secs(5);
+
+/// Бюджет времени на поиск соседа при сопряжении — и потолок числа адресов.
+///
+/// Здесь ждёт человек: `fetch_pairing_payload` зовётся прямо из потока команды
+/// «ввести код». Ответ «рядом такого нет» лучше отдать быстро и неверно, чем
+/// верно и через минуту, — он всё равно нажмёт ещё раз.
+const PAIRING_BUDGET: Duration = Duration::from_secs(2);
+const PAIRING_ADDRESS_LIMIT: usize = 8;
+
 /// Как часто обходчик переспрашивает ядро про «ждут отправки» и «последний
 /// обмен».
 ///
@@ -211,14 +243,99 @@ fn held<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Адрес, увиденный в сети. Кто по нему живёт — ещё неизвестно.
+struct Address {
+    addr: SocketAddr,
+    /// Экземпляр mDNS, который его назвал. `None` — адрес подсказали руками
+    /// (`seed_peer`), и уйти ему по `ServiceRemoved` не от кого.
+    instance: Option<String>,
+    /// Когда его последний раз называли живым — анонсом или удачной пробой.
+    seen: Instant,
+}
+
 #[derive(Default)]
 struct Peers {
     /// Что видно в сети. Кто это — ещё неизвестно.
-    addrs: Vec<SocketAddr>,
+    addrs: Vec<Address>,
     /// Адрес → до какого момента в него не звонить (там не Syncra или не наш).
     strangers: HashMap<SocketAddr, Instant>,
     /// `device_id` → когда доверенное устройство последний раз отозвалось.
     online: HashMap<String, Instant>,
+    /// С какого места продолжать обход. Круг режется по бюджету времени, и без
+    /// этого хвост списка не дождался бы пробы никогда.
+    cursor: usize,
+}
+
+impl Peers {
+    /// Запомнить адрес или подтвердить уже известный.
+    ///
+    /// Сверх потолка вытесняется самый давний: список ведёт мультикаст, а его
+    /// пишет кто угодно в сети.
+    fn remember(&mut self, addr: SocketAddr, instance: Option<String>, now: Instant) {
+        if let Some(known) = self.addrs.iter_mut().find(|known| known.addr == addr) {
+            known.seen = now;
+            // Адрес, названный анонсом, перестаёт быть «подсказанным руками»:
+            // теперь у него есть экземпляр, вместе с которым он и уйдёт.
+            if instance.is_some() {
+                known.instance = instance;
+            }
+            return;
+        }
+        if self.addrs.len() >= MAX_ADDRESSES {
+            let Some(oldest) = self
+                .addrs
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, known)| known.seen)
+                .map(|(index, _)| index)
+            else {
+                return;
+            };
+            self.addrs.remove(oldest);
+        }
+        self.addrs.push(Address {
+            addr,
+            instance,
+            seen: now,
+        });
+    }
+
+    /// Экземпляр назвал себя ушедшим — держать его адреса незачем.
+    fn forget_instance(&mut self, instance: &str) {
+        self.addrs
+            .retain(|known| known.instance.as_deref() != Some(instance));
+    }
+
+    /// Адрес отозвался: он жив, что бы там ни говорил мультикаст.
+    fn touch(&mut self, addr: SocketAddr, now: Instant) {
+        if let Some(known) = self.addrs.iter_mut().find(|known| known.addr == addr) {
+            known.seen = now;
+        }
+    }
+
+    fn expire(&mut self, now: Instant) {
+        self.addrs
+            .retain(|known| now.duration_since(known.seen) < ADDRESS_TTL);
+        self.strangers.retain(|_, until| *until > now);
+    }
+
+    /// Все известные адреса, в порядке появления.
+    fn all(&self) -> Vec<SocketAddr> {
+        self.addrs.iter().map(|known| known.addr).collect()
+    }
+
+    /// Те, по которым сейчас имеет смысл звонить: без признанных чужими.
+    fn callable(&self, now: Instant) -> Vec<SocketAddr> {
+        self.addrs
+            .iter()
+            .filter(|known| {
+                self.strangers
+                    .get(&known.addr)
+                    .map_or(true, |until| now >= *until)
+            })
+            .map(|known| known.addr)
+            .collect()
+    }
 }
 
 /// Почему последняя попытка не удалась.
@@ -479,9 +596,7 @@ impl Node {
     /// нет решает рукопожатие (§2.1).
     pub fn seed_peer(&self, addr: SocketAddr) {
         let mut peers = held(&self.shared.peers);
-        if !peers.addrs.contains(&addr) {
-            peers.addrs.push(addr);
-        }
+        peers.remember(addr, None, Instant::now());
         peers.strangers.remove(&addr);
     }
 
@@ -677,12 +792,10 @@ impl Node {
         // ровно тот, с кем мы и собираемся сопрягаться. Откат придуман для
         // пробы доверенных, чтобы не звонить соседскому принтеру каждые
         // пятнадцать секунд; сопряжение — действие человека и разовое.
-        let addrs = held(&context.shared.peers).addrs.clone();
-
-        for addr in addrs {
-            if let Some(payload) = ask_for_payload(&context, addr, code) {
-                return Ok(payload);
-            }
+        if let Some(payload) =
+            walk_addresses(&context, |addr| ask_for_payload(&context, addr, code))
+        {
+            return Ok(payload);
         }
 
         // Формулировка та же, что была до появления сети: она и писалась так,
@@ -1077,47 +1190,57 @@ fn walk_loop(context: &Context, discovery: Discovery) {
 }
 
 fn absorb(context: &Context, sightings: Vec<Sighting>) {
+    let now = Instant::now();
     let mut peers = held(&context.shared.peers);
     for sighting in sightings {
         match sighting {
-            Sighting::Seen { addrs, .. } => {
+            Sighting::Seen { instance, addrs } => {
                 for addr in discovery::dedup(addrs) {
-                    if !peers.addrs.contains(&addr) {
-                        peers.addrs.push(addr);
-                    }
+                    peers.remember(addr, Some(instance.clone()), now);
                 }
             }
-            // Ушедший экземпляр не даёт адреса напрямую — он просто перестанет
-            // отвечать, и его устройство сойдёт с онлайна по сроку.
-            Sighting::Gone { .. } => {}
+            // Экземпляр назвал себя ушедшим. Его устройство и так сошло бы с
+            // онлайна по сроку, но адрес без этого остался бы в списке
+            // навсегда — и каждый круг обмена начинался бы с таймаута по нему.
+            Sighting::Gone { instance } => peers.forget_instance(&instance),
         }
     }
+    peers.expire(now);
 }
 
 fn probe_round(context: &Context, exchange: bool) {
-    let now = Instant::now();
-    let addrs = {
-        let peers = held(&context.shared.peers);
-        peers
-            .addrs
-            .iter()
-            .filter(|addr| {
-                peers
-                    .strangers
-                    .get(addr)
-                    .map_or(true, |until| now >= *until)
-            })
-            .copied()
-            .collect::<Vec<_>>()
+    let started = Instant::now();
+    let (addrs, start) = {
+        let mut peers = held(&context.shared.peers);
+        peers.expire(started);
+        (peers.callable(started), peers.cursor)
     };
+    if addrs.is_empty() {
+        return;
+    }
 
-    for addr in addrs {
+    let mut probed = 0;
+    for offset in 0..addrs.len() {
         if context.stale() {
             return;
         }
+        // Бюджет считается ПОСЛЕ первой пробы: круг, в котором не позвонили
+        // никому, — это не круг.
+        if probed > 0 && started.elapsed() >= PROBE_BUDGET {
+            break;
+        }
+
+        // Продолжаем с того места, где остановились в прошлый раз: иначе один
+        // медленный адрес в начале списка навсегда закрывает собой хвост.
+        let addr = addrs[(start + offset) % addrs.len()];
+        probed += 1;
+
         match visit(context, addr, exchange) {
             Some(device_id) => {
-                held(&context.shared.peers).strangers.remove(&addr);
+                let mut peers = held(&context.shared.peers);
+                peers.strangers.remove(&addr);
+                peers.touch(addr, Instant::now());
+                drop(peers);
                 mark_online(context, &device_id);
             }
             None => {
@@ -1127,6 +1250,34 @@ fn probe_round(context: &Context, exchange: bool) {
             }
         }
     }
+    held(&context.shared.peers).cursor = start.wrapping_add(probed);
+}
+
+/// Обойти известные адреса в поисках того, кто ответит, — но не дольше бюджета.
+///
+/// Оба места, где это нужно, — поиск устройства по коду и доставка «я тебя
+/// записал», — зовутся из потока команды или из отсоединённого потока и
+/// обходят адреса последовательно, каждый с `connect_timeout`. Вместе с
+/// разросшимся списком это кнопка, которая думает минутами.
+///
+/// Список «чужих» здесь НЕ учитывается, и это не упущение: чужой — это ровно
+/// тот, с кем мы и собираемся сопрягаться (см. `fetch_pairing_payload`).
+fn walk_addresses<T>(
+    context: &Context,
+    mut attempt: impl FnMut(SocketAddr) -> Option<T>,
+) -> Option<T> {
+    let started = Instant::now();
+    let addrs = held(&context.shared.peers).all();
+
+    for (index, addr) in addrs.into_iter().take(PAIRING_ADDRESS_LIMIT).enumerate() {
+        if index > 0 && started.elapsed() >= PAIRING_BUDGET {
+            break;
+        }
+        if let Some(found) = attempt(addr) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Позвонить по адресу, выяснить, свой ли там, и — если назрело — обменяться.
@@ -1249,7 +1400,10 @@ fn ask_for_payload(context: &Context, addr: SocketAddr, code: &str) -> Option<St
 fn announce_pairing(context: &Context, announcement: &PairingAnnouncement) {
     for _ in 1..ANNOUNCE_ATTEMPTS {
         std::thread::sleep(ANNOUNCE_PAUSE);
-        if pairing::is_expired(&announcement.expires_at, chrono::Utc::now()) {
+        // Правило «сеть не переживает замок» действует и здесь: этот поток
+        // отсоединён, и без проверки поколения он продолжал бы звонить соседям
+        // после запирания хранилища.
+        if context.stale() || pairing::is_expired(&announcement.expires_at, chrono::Utc::now()) {
             return;
         }
         if let Some(addr) = deliver_once(context, announcement) {
@@ -1264,11 +1418,9 @@ fn announce_pairing(context: &Context, announcement: &PairingAnnouncement) {
 
 /// Один проход по известным адресам. Возвращает тот, по которому дошло.
 fn deliver_once(context: &Context, announcement: &PairingAnnouncement) -> Option<SocketAddr> {
-    let addrs = held(&context.shared.peers).addrs.clone();
-
-    addrs
-        .into_iter()
-        .find(|addr| deliver_pairing(context, *addr, announcement).is_some())
+    walk_addresses(context, |addr| {
+        deliver_pairing(context, addr, announcement).map(|()| addr)
+    })
 }
 
 fn deliver_pairing(
@@ -1342,6 +1494,76 @@ mod tests {
             handlers: AtomicUsize::new(0),
         });
         (shared, inbox)
+    }
+
+    #[test]
+    fn the_address_list_does_not_grow_without_end() {
+        let mut peers = Peers::default();
+        let now = Instant::now();
+        let at = |octet: usize| {
+            SocketAddr::from((Ipv4Addr::new(10, 0, (octet / 256) as u8, octet as u8), 4000))
+        };
+
+        // Хост, анонсирующий сотни экземпляров, наполняет список за минуту.
+        for index in 0..MAX_ADDRESSES * 2 {
+            peers.remember(at(index), Some(format!("шум-{index}")), now);
+        }
+        assert_eq!(peers.addrs.len(), MAX_ADDRESSES);
+
+        // Вытесняются самые давние, а не первые попавшиеся: последний адрес на
+        // месте, самый первый — нет.
+        let known = peers.all();
+        assert!(known.contains(&at(MAX_ADDRESSES * 2 - 1)));
+        assert!(!known.contains(&at(0)));
+    }
+
+    #[test]
+    fn an_instance_that_said_goodbye_takes_its_addresses_with_it() {
+        let mut peers = Peers::default();
+        let now = Instant::now();
+        let theirs = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 7), 4000));
+        let seeded = SocketAddr::from((Ipv4Addr::LOCALHOST, 4100));
+
+        peers.remember(theirs, Some("сосед".to_owned()), now);
+        peers.remember(seeded, None, now);
+
+        peers.forget_instance("сосед");
+
+        // Ушедший экземпляр забран целиком, а подсказанный руками адрес не
+        // трогается: уйти ему по `ServiceRemoved` не от кого.
+        assert_eq!(peers.all(), vec![seeded]);
+    }
+
+    #[test]
+    fn an_address_nobody_confirms_expires_and_a_live_one_does_not() {
+        let mut peers = Peers::default();
+        let stale = Instant::now() - ADDRESS_TTL * 2;
+        let forgotten = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 7), 4000));
+        let alive = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 8), 4000));
+
+        peers.remember(forgotten, Some("тишина".to_owned()), stale);
+        peers.remember(alive, Some("сосед".to_owned()), stale);
+        // Проба удалась — адрес жив, что бы там ни говорил мультикаст.
+        peers.touch(alive, Instant::now());
+
+        peers.expire(Instant::now());
+        assert_eq!(peers.all(), vec![alive]);
+    }
+
+    #[test]
+    fn a_stranger_is_not_called_until_its_backoff_runs_out() {
+        let mut peers = Peers::default();
+        let now = Instant::now();
+        let printer = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 9), 4000));
+
+        peers.remember(printer, Some("принтер".to_owned()), now);
+        peers
+            .strangers
+            .insert(printer, now + Duration::from_secs(60));
+        assert!(peers.callable(now).is_empty());
+
+        // Откат кончился — адрес снова в обходе, а не забыт навсегда.
+        assert_eq!(peers.callable(now + Duration::from_secs(61)), vec![printer]);
     }
 
     #[test]

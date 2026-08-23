@@ -175,11 +175,16 @@ fn finish(
     };
     let transcript = transcript(hello_i, hello_r);
 
-    let shared = Zeroizing::new(
-        ecdh_secret
-            .diffie_hellman(&PublicKey::from(peer.ecdh_public))
-            .to_bytes(),
-    );
+    let agreed = ecdh_secret.diffie_hellman(&PublicKey::from(peer.ecdh_public));
+    // Точка малого порядка от собеседника даёт нулевой общий секрет, а с ним и
+    // предсказуемые ключи канала. Подпись над транскриптом (ниже) выдать себя
+    // за доверенного всё равно не даст, но полагаться на то, что вторая
+    // проверка прикроет отсутствие первой, — это ровно та связанность, которую
+    // вся остальная крипта здесь избегает.
+    if !agreed.was_contributory() {
+        return Err(not_authenticated());
+    }
+    let shared = Zeroizing::new(agreed.to_bytes());
     let (send_label, recv_label) = match role {
         Role::Initiator => (LABEL_I2R, LABEL_R2I),
         Role::Responder => (LABEL_R2I, LABEL_I2R),

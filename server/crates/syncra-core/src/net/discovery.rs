@@ -172,13 +172,41 @@ fn instance_token() -> CoreResult<String> {
 /// Годится ли адрес, чтобы в него звонить.
 ///
 /// Синхронизация живёт в пределах одной локальной сети (§5.1), и адреса вне её
-/// отсеиваются здесь — не ради безопасности (доверие решает ключ), а чтобы не
-/// тратить таймауты на заведомо чужое.
+/// отсеиваются здесь. Это не про доверие — доверие решает ключ, — а про то,
+/// куда узел вообще звонит: mDNS-ответчик в сети никто не аутентифицирует, и
+/// без этой проверки любой сосед по Wi-Fi мог бы анонсировать `_syncra._tcp` с
+/// адресом произвольного хоста в интернете и с задаваемой им частотой. Данных
+/// бы не утекло (рукопожатие не пройдёт), но менеджер паролей звонил бы по
+/// чужому указанию куда попало.
+///
+/// Пускаем поэтому только то, что бывает своей сетью: частные диапазоны,
+/// link-local (автоконфигурация), ULA и loopback. Loopback нужен и тестам, и
+/// двум экземплярам на одной машине.
 pub fn is_worth_calling(addr: &SocketAddr) -> bool {
     match addr.ip() {
-        IpAddr::V4(v4) => !v4.is_unspecified() && !v4.is_multicast() && !v4.is_broadcast(),
-        IpAddr::V6(v6) => !v6.is_unspecified() && !v6.is_multicast(),
+        IpAddr::V4(v4) => is_local_v4(v4),
+        // Тот же адрес, записанный как `::ffff:192.168.1.7`, — это он же:
+        // решать его судьбу вторым набором правил незачем.
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => is_local_v4(v4),
+            None => is_local_v6(v6),
+        },
     }
+}
+
+/// 10/8, 172.16/12, 192.168/16, 169.254/16 и 127/8. Всё остальное — не «рядом».
+fn is_local_v4(addr: std::net::Ipv4Addr) -> bool {
+    addr.is_loopback() || addr.is_private() || addr.is_link_local()
+}
+
+/// ULA (`fc00::/7`) и link-local (`fe80::/10`) плюс `::1`.
+///
+/// Маски написаны руками, потому что именованных проверок для этих двух
+/// диапазонов в стабильном `std` пока нет (`is_unique_local` и
+/// `is_unicast_link_local` — nightly).
+fn is_local_v6(addr: std::net::Ipv6Addr) -> bool {
+    let first = addr.segments()[0];
+    addr.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
 }
 
 /// Отсеять повторы, сохранив порядок: один хост часто отвечает с нескольких
@@ -206,30 +234,68 @@ mod tests {
         assert_ne!(first, instance_token().unwrap());
     }
 
+    fn at(ip: IpAddr) -> SocketAddr {
+        SocketAddr::new(ip, 4000)
+    }
+
     #[test]
     fn junk_addresses_are_not_worth_a_timeout() {
-        let port = 4000;
-        assert!(!is_worth_calling(&SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            port
-        )));
-        assert!(!is_worth_calling(&SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(224, 0, 0, 251)),
-            port
-        )));
-        assert!(!is_worth_calling(&SocketAddr::new(
-            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-            port
-        )));
-        assert!(is_worth_calling(&SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 7)),
-            port
-        )));
+        assert!(!is_worth_calling(&at(IpAddr::V4(Ipv4Addr::UNSPECIFIED))));
+        assert!(!is_worth_calling(&at(IpAddr::V4(Ipv4Addr::new(
+            224, 0, 0, 251
+        )))));
+        assert!(!is_worth_calling(&at(IpAddr::V4(Ipv4Addr::BROADCAST))));
+        assert!(!is_worth_calling(&at(IpAddr::V6(Ipv6Addr::UNSPECIFIED))));
+
+        assert!(is_worth_calling(&at(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 7
+        )))));
         // Loopback годится: на нём стоят тесты и два экземпляра на одной машине.
-        assert!(is_worth_calling(&SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            port
-        )));
+        assert!(is_worth_calling(&at(IpAddr::V4(Ipv4Addr::LOCALHOST))));
+    }
+
+    #[test]
+    fn an_address_outside_the_local_network_is_never_called() {
+        // Ровно тот случай, ради которого проверка и написана: mDNS-ответчик,
+        // которого никто не аутентифицировал, называет адрес в интернете.
+        assert!(!is_worth_calling(&at(IpAddr::V4(Ipv4Addr::new(
+            8, 8, 8, 8
+        )))));
+        assert!(!is_worth_calling(&at(IpAddr::V4(Ipv4Addr::new(
+            93, 184, 216, 34
+        )))));
+        // 172.32 — уже вне 172.16/12, а 100.64 (CGNAT) своей сетью не является.
+        assert!(!is_worth_calling(&at(IpAddr::V4(Ipv4Addr::new(
+            172, 32, 0, 1
+        )))));
+        assert!(!is_worth_calling(&at(IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0x4860, 0, 0, 0, 0, 0, 0x8888
+        )))));
+        // ...и он же, записанный как IPv4-mapped: правило одно на оба вида.
+        assert!(!is_worth_calling(&at(IpAddr::V6(
+            Ipv4Addr::new(8, 8, 8, 8).to_ipv6_mapped()
+        ))));
+        assert!(is_worth_calling(&at(IpAddr::V6(
+            Ipv4Addr::new(10, 0, 0, 7).to_ipv6_mapped()
+        ))));
+    }
+
+    #[test]
+    fn the_local_network_in_all_its_shapes_is_called() {
+        for ip in [
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7)),
+            IpAddr::V4(Ipv4Addr::new(172, 16, 3, 4)),
+            IpAddr::V4(Ipv4Addr::new(172, 31, 255, 254)),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 0, 1)),
+            // Автоконфигурация: сеть без DHCP — тоже одна сеть.
+            IpAddr::V4(Ipv4Addr::new(169, 254, 12, 34)),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            // ULA и link-local — то, чем IPv6 отвечает на mDNS в домашней сети.
+            IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 7)),
+        ] {
+            assert!(is_worth_calling(&at(ip)), "{ip} — это своя сеть");
+        }
     }
 
     #[test]
