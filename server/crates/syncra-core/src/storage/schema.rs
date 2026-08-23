@@ -188,14 +188,35 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
         ));
     }
 
-    for step in MIGRATIONS.iter().skip(from as usize) {
-        conn.execute_batch(step)?;
+    apply(conn, &MIGRATIONS[from as usize..], SCHEMA_VERSION)
+}
+
+/// Цепочка шагов и номер версии — ОДНОЙ транзакцией.
+///
+/// Сегодня все шаги это `CREATE TABLE IF NOT EXISTS`, и повторный проход
+/// безвреден. Но первая же `ALTER TABLE` или переливка данных делает падение на
+/// середине неисправимым: часть схемы новая, номер версии старый, и следующий
+/// запуск погонит цепочку заново по уже изменённым данным. Найдётся это на
+/// хранилище человека, а не на стенде, — поэтому транзакция появляется сейчас,
+/// пока она стоит три строки.
+///
+/// `unchecked_transaction`, а не `Connection::transaction`: у миграций на руках
+/// `&Connection` (владеет им `Storage`), и брать ради `BEGIN` изменяемую ссылку
+/// значило бы протащить `&mut` через полдюжины вызовов. Вложенной транзакции
+/// здесь не бывает — `migrate` зовётся ровно один раз, при открытии.
+fn apply(conn: &Connection, steps: &[&str], version: i64) -> CoreResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    for step in steps {
+        tx.execute_batch(step)?;
     }
-    conn.execute(
+    tx.execute(
         "INSERT INTO meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        rusqlite::params![META_SCHEMA_VERSION, SCHEMA_VERSION.to_string().into_bytes()],
+        rusqlite::params![META_SCHEMA_VERSION, version.to_string().into_bytes()],
     )?;
+    // Не докатившаяся транзакция откатывается в `Drop`: оборванная миграция не
+    // оставляет ни половины схемы, ни номера, который ей не соответствует.
+    tx.commit()?;
     Ok(())
 }
 
@@ -221,5 +242,65 @@ fn stored_version(conn: &Connection) -> CoreResult<Option<i64>> {
             .parse::<i64>()
             .map(Some)
             .map_err(|_| CoreError::internal("Хранилище повреждено.")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opened() -> Connection {
+        let conn = Connection::open_in_memory().expect("хранилище в памяти");
+        conn.execute_batch(BOOTSTRAP).expect("meta");
+        conn
+    }
+
+    fn table_exists(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [name],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("sqlite_master")
+            > 0
+    }
+
+    #[test]
+    fn an_empty_file_goes_all_the_way_to_the_current_schema() {
+        let conn = opened();
+        migrate(&conn).expect("миграции");
+
+        assert_eq!(stored_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+        assert!(table_exists(&conn, "records"));
+        // Повторный проход по готовому хранилищу ничего не ломает.
+        migrate(&conn).expect("миграции второй раз");
+        assert_eq!(stored_version(&conn).unwrap(), Some(SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn a_migration_that_falls_over_halfway_leaves_nothing_behind() {
+        let conn = opened();
+
+        // Первый шаг проходит, второй — нет. Ровно то, что случится с первой же
+        // `ALTER TABLE` на чужом хранилище.
+        let broken = apply(
+            &conn,
+            &[
+                "CREATE TABLE half_done (id TEXT PRIMARY KEY);",
+                "ALTER TABLE nothing_like_this ADD COLUMN oops TEXT;",
+            ],
+            7,
+        );
+
+        assert!(broken.is_err(), "оборванная миграция обязана быть ошибкой");
+        assert!(
+            !table_exists(&conn, "half_done"),
+            "половина схемы пережила откат"
+        );
+        assert_eq!(
+            stored_version(&conn).unwrap(),
+            None,
+            "номер версии уехал вперёд схемы"
+        );
     }
 }

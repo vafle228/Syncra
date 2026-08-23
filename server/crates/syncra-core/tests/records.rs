@@ -62,6 +62,114 @@ fn required_fields_are_validated() {
     );
 }
 
+/// Запись, которая не влезает в кадр обмена, отвергается ПРИ СОЗДАНИИ.
+///
+/// Без потолка она спокойно ложилась в БД, а потом рвала круг обмена каждую
+/// минуту до конца времён: `write_frame` отвергает кадр больше мегабайта, круг
+/// повторяется, запись не уезжает никогда, и человеку никто не объясняет,
+/// из-за чего (§5.4 — худшая из поломок).
+#[test]
+fn a_record_too_big_for_a_frame_is_refused_when_it_is_created() {
+    let core = unlocked();
+
+    let huge_secret = "я".repeat(syncra_core::model::SECRET_FIELD_MAX_BYTES);
+    let huge_meta = "я".repeat(syncra_core::model::META_FIELD_MAX_BYTES);
+
+    // Пароль, заметка и секрет TOTP — каждый под своим потолком.
+    assert_code(
+        core.create_record(&draft("Google", "me@example.com", &huge_secret)),
+        CoreErrorCode::Validation,
+    );
+    let mut with_notes = draft("Google", "me@example.com", "пароль");
+    with_notes.notes = Some(huge_secret.clone());
+    assert_code(core.create_record(&with_notes), CoreErrorCode::Validation);
+
+    let mut with_totp = draft("Google", "me@example.com", "пароль");
+    with_totp.totp_secret = Some(huge_secret);
+    assert_code(core.create_record(&with_totp), CoreErrorCode::Validation);
+
+    // Метаданные — своим, он на два порядка ниже.
+    assert_code(
+        core.create_record(&draft(&huge_meta, "me@example.com", "пароль")),
+        CoreErrorCode::Validation,
+    );
+    assert_code(
+        core.create_record(&draft("Google", &huge_meta, "пароль")),
+        CoreErrorCode::Validation,
+    );
+    let mut with_label = draft("Google", "me@example.com", "пароль");
+    with_label.account_label = Some(huge_meta.clone());
+    assert_code(core.create_record(&with_label), CoreErrorCode::Validation);
+
+    // Адреса: и длина каждого, и их число.
+    let mut with_urls = draft("Google", "me@example.com", "пароль");
+    with_urls.urls = vec![huge_meta];
+    assert_code(core.create_record(&with_urls), CoreErrorCode::Validation);
+
+    let mut many_urls = draft("Google", "me@example.com", "пароль");
+    many_urls.urls = (0..=syncra_core::model::RECORD_URLS_MAX)
+        .map(|index| format!("site{index}.com"))
+        .collect();
+    assert_code(core.create_record(&many_urls), CoreErrorCode::Validation);
+
+    // Ни одна из них не легла в хранилище.
+    assert!(core.list_records(None, false).unwrap().is_empty());
+}
+
+/// Тот же потолок — и на правке: иначе запись переезжала бы через край
+/// вторым действием.
+#[test]
+fn the_same_ceilings_hold_when_a_record_is_edited() {
+    let core = unlocked();
+    let created = core
+        .create_record(&draft("Google", "me@example.com", "пароль"))
+        .unwrap();
+
+    let huge_secret = "я".repeat(syncra_core::model::SECRET_FIELD_MAX_BYTES);
+    assert_code(
+        core.update_record(
+            &created.record_id,
+            &RecordPatch {
+                notes: Some(Some(huge_secret)),
+                ..RecordPatch::default()
+            },
+        ),
+        CoreErrorCode::Validation,
+    );
+    assert_code(
+        core.update_record(
+            &created.record_id,
+            &RecordPatch {
+                service_name: Some("я".repeat(syncra_core::model::META_FIELD_MAX_BYTES)),
+                ..RecordPatch::default()
+            },
+        ),
+        CoreErrorCode::Validation,
+    );
+
+    // Запись цела и версия не двинулась: отказ случился до записи.
+    let after = core.list_records(None, false).unwrap();
+    assert_eq!(after[0].version, created.version);
+    assert!(!after[0].has_notes);
+}
+
+/// Все потолки сразу — и всё равно втрое меньше кадра.
+///
+/// Арифметика, а не поведение: она держит потолки согласованными с
+/// `net::wire::MAX_FRAME`, если кто-то поднимет один из них не глядя.
+#[test]
+fn all_the_ceilings_together_still_fit_into_a_frame() {
+    let secrets = 3 * syncra_core::model::SECRET_FIELD_MAX_BYTES;
+    let meta = 3 * syncra_core::model::META_FIELD_MAX_BYTES
+        + syncra_core::model::RECORD_URLS_MAX * syncra_core::model::META_FIELD_MAX_BYTES;
+
+    // Половина кадра — запас на кодирование, шифрование и метаданные секции.
+    assert!(
+        secrets + meta < syncra_core::net::wire::MAX_FRAME / 2,
+        "запись на всех потолках сразу перестала влезать в кадр"
+    );
+}
+
 #[test]
 fn metadata_is_trimmed_but_password_is_kept_byte_for_byte() {
     let core = unlocked();

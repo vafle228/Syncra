@@ -18,7 +18,7 @@ use std::time::Duration;
 use common::{draft, settings, trust_each_other, wait_until, Device2, MASTER_PASSWORD};
 use syncra_core::net::handshake;
 use syncra_core::net::wire::Msg;
-use syncra_core::{Core, RecordMeta, SyncPhase};
+use syncra_core::{Core, NodeSettings, RecordMeta, SyncPhase};
 
 /// Пароль второго устройства. Не тот же самый — в этом весь смысл (см. шапку).
 const OTHER_PASSWORD: &str = "мастер-пароль-2";
@@ -367,7 +367,20 @@ fn a_revoked_device_is_nobody_to_wait_for() {
 #[test]
 fn confirming_the_pairing_carries_the_vault_over() {
     let a = Device2::new("Ноутбук", MASTER_PASSWORD);
-    let b = Device2::new("Телефон", OTHER_PASSWORD);
+    // Фоновый обходчик B здесь заглушен по срокам НАМЕРЕННО. Право вести круг
+    // одно на узел, и обходчик, успевший затеять свой круг первым, перенёс бы
+    // записи ВМЕСТО команды — тест бы прошёл, ничего не проверив, а под
+    // нагрузкой (и на медленной машине CI) начал бы мигать. Проверяем мы здесь
+    // именно команду: перенос — часть ответа на кнопку, а не новость через
+    // минуту.
+    let b = Device2::with_settings(
+        "Телефон",
+        OTHER_PASSWORD,
+        NodeSettings {
+            sync_interval: Duration::from_secs(60),
+            ..settings()
+        },
+    );
 
     let expected = 3;
     for index in 0..expected {

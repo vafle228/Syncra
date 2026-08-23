@@ -9,8 +9,9 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use crate::crypto::{self, VaultKey};
 use crate::error::{CoreError, CoreResult};
 use crate::model::{
-    normalize_optional_secret, now_iso, require_non_empty, require_present, IsoDateTime,
-    RecordDraft, RecordId, RecordMeta, RecordPatch, RecordSecrets, SecretField,
+    normalize_optional_secret, now_iso, optional_meta, require_non_empty, require_present,
+    valid_urls, IsoDateTime, RecordDraft, RecordId, RecordMeta, RecordPatch, RecordSecrets,
+    SecretField,
 };
 
 /// Запись как она лежит в БД: метаданные плюс нераспечатанные секреты.
@@ -124,6 +125,8 @@ pub fn create(
     let service_name = require_non_empty(&draft.service_name, "Сервис")?;
     let login = require_non_empty(&draft.login, "Логин")?;
     let password = require_present(&draft.password, "Пароль")?;
+    let account_label = optional_meta(draft.account_label.as_deref(), "Подпись аккаунта")?;
+    let urls = valid_urls(&draft.urls)?;
 
     // ID генерирует ядро, а не UI (§4.1): это ключ синхронизации и разрешения
     // конфликтов, и приходить снаружи он не может.
@@ -135,13 +138,13 @@ pub fn create(
         key,
         &record_id,
         SecretField::Notes,
-        normalize_optional_secret(draft.notes.as_deref()).as_deref(),
+        normalize_optional_secret(draft.notes.as_deref(), "Заметки")?.as_deref(),
     )?;
     let totp_ct = seal_field(
         key,
         &record_id,
         SecretField::TotpSecret,
-        normalize_optional_secret(draft.totp_secret.as_deref()).as_deref(),
+        normalize_optional_secret(draft.totp_secret.as_deref(), "Секрет TOTP")?.as_deref(),
     )?;
 
     conn.execute(
@@ -153,9 +156,9 @@ pub fn create(
             record_id,
             vault_id,
             service_name,
-            serde_json::to_string(&draft.urls)?,
+            serde_json::to_string(&urls)?,
             login,
-            draft.account_label.as_deref(),
+            account_label,
             password_ct,
             notes_ct,
             totp_ct,
@@ -202,7 +205,7 @@ pub fn update(
             key,
             record_id,
             SecretField::Notes,
-            normalize_optional_secret(value.as_deref()).as_deref(),
+            normalize_optional_secret(value.as_deref(), "Заметки")?.as_deref(),
         )?,
     };
     let totp_ct = match patch.totp_secret.as_ref() {
@@ -211,7 +214,7 @@ pub fn update(
             key,
             record_id,
             SecretField::TotpSecret,
-            normalize_optional_secret(value.as_deref()).as_deref(),
+            normalize_optional_secret(value.as_deref(), "Секрет TOTP")?.as_deref(),
         )?,
     };
 
@@ -223,12 +226,12 @@ pub fn update(
         Some(value) => require_non_empty(value, "Логин")?,
         None => current.meta.login.clone(),
     };
-    let urls = patch
-        .urls
-        .clone()
-        .unwrap_or_else(|| current.meta.urls.clone());
+    let urls = match patch.urls.as_deref() {
+        Some(value) => valid_urls(value)?,
+        None => current.meta.urls.clone(),
+    };
     let account_label = match patch.account_label.as_ref() {
-        Some(value) => value.clone(),
+        Some(value) => optional_meta(value.as_deref(), "Подпись аккаунта")?,
         None => current.meta.account_label.clone(),
     };
     let vault_id = patch

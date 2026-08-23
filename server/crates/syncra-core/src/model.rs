@@ -29,6 +29,35 @@ pub const VAULT_NAME_MAX_LENGTH: usize = 40;
 /// `VAULT_COLORS` (`contract.ts:361`) — порядок как в палитре макета.
 pub const VAULT_COLORS: [&str; 5] = ["indigo", "amber", "magenta", "mint", "coral"];
 
+// ---------------------------------------------------------------------------
+// Потолки длины полей записи
+// ---------------------------------------------------------------------------
+//
+// Это не про красоту формы, а про то, доедет ли запись. Кадр обмена ограничен
+// мегабайтом (`net::wire::MAX_FRAME`), длину кадра называет отправитель, и
+// опустить этот потолок нельзя. Запись, которая в кадр не влезает, не уезжает
+// НИКОГДА: `net::sync::split` кладёт её в отдельную порцию, `write_frame`
+// порцию отвергает, круг рвётся — и рвётся каждую минуту до конца времён.
+// Человеку при этом никто не говорит, из-за чего; §5.4 называет тихо не
+// доехавшую запись худшей из поломок.
+//
+// Поэтому потолок стоит ЗДЕСЬ, при создании, где о нём можно сказать словами.
+// Суммарно запись на всех потолках сразу — около четырёхсот килобайт: втрое
+// меньше кадра, и с запасом на кодирование, шифрование и метаданные секции.
+
+/// Потолок секретного поля: пароль, заметка, секрет TOTP.
+///
+/// Сто двадцать восемь килобайт текста — это примерно полсотни страниц; заметка
+/// в записи менеджера паролей столько не бывает, а кадр от трёх таких полей
+/// ещё не лопается.
+pub const SECRET_FIELD_MAX_BYTES: usize = 128 * 1024;
+
+/// Потолок метаданного поля: имя сервиса, логин, подпись аккаунта, один адрес.
+pub const META_FIELD_MAX_BYTES: usize = 4 * 1024;
+
+/// Сколько адресов может быть у одной записи.
+pub const RECORD_URLS_MAX: usize = 16;
+
 /// Текущее время в том же виде, в каком его отдаёт `new Date().toISOString()`.
 pub fn now_iso() -> IsoDateTime {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -584,7 +613,45 @@ pub fn require_non_empty(value: &str, field: &str) -> CoreResult<String> {
             "Поле «{field}» обязательно."
         )));
     }
+    within(trimmed, META_FIELD_MAX_BYTES, field)?;
     Ok(trimmed.to_owned())
+}
+
+/// Влезает ли поле в свой потолок. Считаем в БАЙТАХ, а не в символах: в кадр
+/// едут байты, и кириллическая заметка весит вдвое против латинской.
+pub fn within(value: &str, limit: usize, field: &str) -> CoreResult<()> {
+    if value.len() > limit {
+        return Err(CoreError::validation(format!(
+            "Поле «{field}» длиннее {} КБ — такая запись не уедет на другое \
+             устройство. Сократите его.",
+            limit / 1024
+        )));
+    }
+    Ok(())
+}
+
+/// Необязательное метаданное поле: потолок тот же, пустота законна.
+pub fn optional_meta(value: Option<&str>, field: &str) -> CoreResult<Option<String>> {
+    match value {
+        Some(text) => {
+            within(text, META_FIELD_MAX_BYTES, field)?;
+            Ok(Some(text.to_owned()))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Адреса записи: и число, и длина каждого.
+pub fn valid_urls(urls: &[String]) -> CoreResult<Vec<String>> {
+    if urls.len() > RECORD_URLS_MAX {
+        return Err(CoreError::validation(format!(
+            "У записи не может быть больше {RECORD_URLS_MAX} адресов."
+        )));
+    }
+    for url in urls {
+        within(url, META_FIELD_MAX_BYTES, "Адрес")?;
+    }
+    Ok(urls.to_vec())
 }
 
 /// Секретное поле: проверяем, но НЕ трогаем. Пробел по краям — легитимный символ
@@ -595,15 +662,19 @@ pub fn require_present(value: &str, field: &str) -> CoreResult<String> {
             "Поле «{field}» обязательно."
         )));
     }
+    within(value, SECRET_FIELD_MAX_BYTES, field)?;
     Ok(value.to_owned())
 }
 
 /// Пустая-после-trim заметка — это «заметки нет», а не «заметка из пробелов»
 /// (`mock/seed.ts:22`). Такое значение до шифрования не доходит вовсе.
-pub fn normalize_optional_secret(value: Option<&str>) -> Option<String> {
+pub fn normalize_optional_secret(value: Option<&str>, field: &str) -> CoreResult<Option<String>> {
     match value {
-        Some(text) if !text.trim().is_empty() => Some(text.to_owned()),
-        _ => None,
+        Some(text) if !text.trim().is_empty() => {
+            within(text, SECRET_FIELD_MAX_BYTES, field)?;
+            Ok(Some(text.to_owned()))
+        }
+        _ => Ok(None),
     }
 }
 
